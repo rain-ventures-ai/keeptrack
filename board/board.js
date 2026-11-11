@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 121;
+  const PAGE_KIT = 122;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -5944,7 +5944,7 @@ if (typeof window !== 'undefined') (() => {
   // names of the old tabs and of single sections, and opens or scrolls to the right one.
   const SET_TABS = [['prefs', 'Preferences'], ['board', 'Board'], ['conn', 'Connection'], ['agents', 'Agents & integrations', 'Agents']];
   const SET_LINKS = { general: ['prefs'], preferences: ['prefs'], appearance: ['prefs', 'secLook'], widgets: ['prefs', 'secWidgets'], alerts: ['prefs', 'secAlerts'], notifications: ['prefs', 'secAlerts'],
-    modes: ['board', 'secModes'], members: ['board', 'memSec'], people: ['board', 'memSec'], team: ['board', 'memSec'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], archive: ['board', 'secArchive'],
+    modes: ['board', 'secModes'], members: ['board', 'memSec'], people: ['board', 'memSec'], team: ['board', 'memSec'], columns: ['board', 'colSet'], labels: ['board', 'labelSec'], inbound: ['board', 'secInbound'], archive: ['board', 'secArchive'],
     connect: ['conn'], conn: ['conn', 'bThis'], boards: ['conn', 'secBoards'], checks: ['conn', 'secHealth'], health: ['conn', 'secHealth'], move: ['conn', 'secMove'], advanced: ['conn', 'secAdv'],
     claude: ['agents', 'agClaude'], codex: ['agents', 'agLocal'], chat: ['agents', 'agLocal'], email: ['agents', 'agEmail'] };
   // Every concrete settings section is a destination, including plugin/routine subsections.
@@ -9351,27 +9351,186 @@ if (typeof window !== 'undefined') (() => {
       : ro === 'kit' ? RO_TEXT.kit[0]
       : newerSchema ? 'Read-only: the board file is newer than this page. Reload to update.' : '';
     if (why) { const b = ui.banner({ tone: 'warn', icon: 'lock', text: why }); b.setAttribute('role', 'status'); box.append(b); }
-    syncModeSettings(); renderMembersBox(); renderColumnsBox(); renderLabelBox(); renderArchiveBox();
+    syncModeSettings(); renderMembersBox(); renderColumnsBox(); renderLabelBox(); renderInboundBox(); renderArchiveBox();
     const info = $('bInfo'); info.textContent = '';
     info.append(ui.props([{ label: 'Repository', value: c.repo || '—' }, { label: 'Branch', value: c.repo ? c.branch : '—' }, { label: 'File', value: c.repo ? c.path : '—' },
       { label: 'Format', value: !c.repo ? '—' : `${isSplit(state) ? 'Split: one file per card and person' : 'One file'} · this page reads up to schema v${KNOWN_SCHEMA}` }]));
   }
-  // kit v112: outside items (board/inbound/) that failed, or waited longer than settings.inbound_alert_minutes (default 120).
-  // Names come from the tree listing the page reads anyway; failures from tasks.json "inbound".failed. Nothing is fetched.
+  // kit v112: outside items (board/inbound/) that failed, or waited too long. Names come from the tree listing the page reads anyway;
+  // failures and the last drain run from tasks.json "inbound". Nothing is fetched.
+  // kit v122: with settings.inbound_schedule {days, times, tz, grace_minutes} an item is late only when it came in before a run that was
+  // expected and is now past its grace time, and a drain that did not record a run since the first expected run of the latest scheduled
+  // day shows as stopped. Without a schedule: waited longer than settings.inbound_alert_minutes (default 120). These rules are the same
+  // as keeptrack.py's inbound_schedule / inbound_expected_run / inbound_stopped.
+  const INBOUND_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const inboundZoneOk = z => { if (typeof z !== 'string' || !(z === 'UTC' || /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)+$/.test(z))) return false; try { new Intl.DateTimeFormat('en', { timeZone: z }); return true; } catch { return false; } };   // a zone name, never an offset like +05:30
+  const zoneParts = (ms, tz) => { const o = {}; new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(new Date(ms)).forEach(x => { o[x.type] = +x.value; }); return o; };
+  const zoneOffset = (ms, tz) => { const x = zoneParts(ms, tz); return Date.UTC(x.year, x.month - 1, x.day, x.hour, x.minute, x.second) - Math.floor(ms / 1000) * 1000; };
+  const zonedMs = (y, m, d, hh, mm, tz) => {   // wall-clock time in tz -> UTC ms, as Python's datetime with fold=0: an ambiguous time is its first occurrence, a missing one uses the offset before the change
+    const guess = Date.UTC(y, m - 1, d, hh, mm), before = zoneOffset(guess - 86400000, tz), after = zoneOffset(guess + 86400000, tz);
+    const fits = [before, after].map(o => guess - o).filter(t => zoneOffset(t, tz) === guess - t);
+    return fits.length ? Math.min(...fits) : guess - before;
+  };
+  function inboundSchedule(settings) {   // the checked schedule, or null (none, or an invalid one: the alert time rule applies)
+    const s = settings && settings.inbound_schedule;
+    if (!s || typeof s !== 'object' || !Array.isArray(s.days) || !s.days.length || s.days.some(d => !INBOUND_DAYS.includes(d))) return null;
+    if (!Array.isArray(s.times) || !s.times.length || s.times.length > 24 || s.times.some(t => typeof t !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(t))) return null;
+    if (s.tz !== undefined && s.tz !== null && !(typeof s.tz === 'string' && s.tz.length > 0 && s.tz.length <= 64 && inboundZoneOk(s.tz))) return null;
+    const g = s.grace_minutes === undefined ? 30 : s.grace_minutes;
+    if (!Number.isInteger(g) || g < 1 || g > 720) return null;
+    return { days: s.days, times: [...new Set(s.times)].sort(), tz: s.tz || 'UTC', grace: g * 60000 };   // no tz: UTC for every reader, as keeptrack.py
+  }
+  function inboundExpectedRun(s, at, firstOnly, grace = s.grace) {   // the latest expected run (UTC ms) whose time plus grace has passed; firstOnly: the first run of that day
+    const x = zoneParts(at, s.tz);
+    for (let back = 0; back < 10; back++) {
+      const d = new Date(Date.UTC(x.year, x.month - 1, x.day - back));
+      if (!s.days.includes(INBOUND_DAYS[(d.getUTCDay() + 6) % 7])) continue;
+      const runs = s.times.map(t => zonedMs(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), +t.slice(0, 2), +t.slice(3), s.tz)).sort((p, q) => p - q);
+      for (const r of firstOnly ? runs.slice(0, 1) : runs.reverse()) if (r + grace <= at) return r;
+    }
+    return null;
+  }
+  function inboundLocal(ms, tz, full) {   // 'Mon 09:07', or 'Mon 2 Nov 09:07' with full
+    const o = {}; new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'short', ...(full ? { day: 'numeric', month: 'short' } : {}), hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(ms)).forEach(x => { o[x.type] = x.value; });
+    return full ? `${o.weekday} ${o.day} ${o.month} ${o.hour}:${o.minute}` : `${o.weekday} ${o.hour}:${o.minute}`;
+  }
   function inboundAlert(names, rec, settings, at = Date.now()) {
     const lim = Number.isInteger(settings && settings.inbound_alert_minutes) && settings.inbound_alert_minutes >= 1 && settings.inbound_alert_minutes <= 10080 ? settings.inbound_alert_minutes : 120;
     const failed = rec && typeof rec.failed === 'object' && rec.failed ? rec.failed : {}, stamp = n => { const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-/.exec(n); return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null; };
     const held = rec && typeof rec.held === 'object' && rec.held ? rec.held : {}, holding = n => { const h = Object.prototype.hasOwnProperty.call(held, n) && held[n]; return !!(h && typeof h.until === 'string' && Date.parse(h.until) > at); };   // kit v113: waiting on purpose for the card it attaches to
-    const bad = (names || []).filter(n => Object.prototype.hasOwnProperty.call(failed, n)), late = (names || []).filter(n => !bad.includes(n) && !holding(n) && (stamp(n) === null || at - stamp(n) >= lim * 60000));
-    return { failed: bad.length, waiting: late.length, oldest: late.reduce((m, n) => Math.max(m, stamp(n) === null ? 0 : Math.floor((at - stamp(n)) / 60000)), 0) };
+    const sched = inboundSchedule(settings), missed = sched ? inboundExpectedRun(sched, at) : null, tz = sched ? sched.tz : 'UTC';
+    const bad = (names || []).filter(n => Object.prototype.hasOwnProperty.call(failed, n));
+    const late = (names || []).filter(n => !bad.includes(n) && !holding(n) && (stamp(n) === null || (sched ? missed !== null && stamp(n) <= missed : at - stamp(n) >= lim * 60000)));
+    const lr = rec && rec.last_run && typeof rec.last_run === 'object' && typeof rec.last_run.at === 'string' && /(Z|[+-]\d{2}:\d{2})$/.test(rec.last_run.at) ? Date.parse(rec.last_run.at) : NaN, last = Number.isNaN(lr) ? null : lr;   // kit v122
+    const ref = sched ? inboundExpectedRun(sched, at, true) : null, future = !!sched && last !== null && last > at + 300000, stopped = sched && last !== null && (future || (ref !== null && last < ref));   // a last run in the future must not hide a dead drain
+    return { failed: bad.length, waiting: late.length, oldest: late.reduce((m, n) => Math.max(m, stamp(n) === null ? 0 : Math.floor((at - stamp(n)) / 60000)), 0),
+      scheduled: !!sched, missed: sched && missed !== null ? inboundLocal(missed, tz) : '', last: last === null ? '' : inboundLocal(last, tz), lastFull: last === null ? '' : `${inboundLocal(last, tz, true)} (${tz})`,
+      stopped: stopped ? { since: inboundLocal(last, tz), expected: ref === null ? '' : inboundLocal(ref, tz), future, key: future ? 'future ' + last : 'ref ' + ref } : null };
   }
   function inboundBar() {
-    const a = inboundAlert(splitMeta && splitMeta.inbound, state && state.inbound, state && state.settings), key = (splitMeta && splitMeta.inbound || []).join('|').slice(0, 2000);   // dismissed for these items only
-    if (DEMO || (!a.failed && !a.waiting) || LS.get('kb_inboundbar_off') === key) { showBar('inboundBar', null); return; }
+    const a = inboundAlert(splitMeta && splitMeta.inbound, state && state.inbound, state && state.settings, Date.now()), key = ((splitMeta && splitMeta.inbound || []).join('|') + (a.stopped ? '|stopped ' + a.stopped.key : '')).slice(0, 2000);   // dismissed for these items only
+    if (DEMO || (!a.failed && !a.waiting && !a.stopped) || LS.get('kb_inboundbar_off') === key) { showBar('inboundBar', null); return; }
     const age = a.oldest >= 2880 ? Math.floor(a.oldest / 1440) + ' days' : a.oldest >= 120 ? Math.floor(a.oldest / 60) + ' hours' : a.oldest + ' minutes';
-    const parts = [a.failed ? `${a.failed} could not be handled` : '', a.waiting ? `${a.waiting} ${a.waiting === 1 ? 'has' : 'have'} waited ${age}` : ''].filter(Boolean);
-    showBar('inboundBar', { tone: a.failed ? 'warn' : 'neutral', icon: 'inbox', text: `Outside items (board/inbound/, from forms and other sources): ${parts.join(', ')}. The scheduled inbound run handles them; to see why, run keeptrack.py inbound --status.`,
-      onDismiss: () => LS.set('kb_inboundbar_off', key) });
+    const waits = !a.waiting ? '' : a.scheduled && a.missed ? `${a.waiting} missed the ${a.missed} run` : `${a.waiting} ${a.waiting === 1 ? 'has' : 'have'} waited ${age}`;
+    const parts = [a.failed ? `${a.failed} could not be handled` : '', waits, a.stopped ? (a.stopped.future ? 'the recorded last drain run is in the future: check the runner’s clock' : `the drain has not run since ${a.stopped.since} (expected ${a.stopped.expected})`) : ''].filter(Boolean);
+    showBar('inboundBar', { tone: a.failed || a.stopped ? 'warn' : 'neutral', icon: 'inbox', text: `Outside items (board/inbound/, from forms and other sources): ${parts.join(', ')}.${a.last ? ` Last drain run: ${a.last}.` : ''} The scheduled inbound run handles them; to see why, run keeptrack.py inbound --status.`,
+      action: { label: 'Inbound settings', onClick: () => { $('btnSettings').click(); settingsTab('inbound'); } }, onDismiss: () => LS.set('kb_inboundbar_off', key) });
+  }
+  // ---- Settings → Board → Inbound (kit v122): the sources' settings and the drain's schedule, with the waiting and failed items.
+  // A person edits here, with the rules of `keeptrack.py inbound-source` and `inbound-schedule`: card mode (items skip review) and a handler
+  // (a Python script the drain runs) each ask for a confirmation. Item names and errors come from outside input: shown as text only.
+  const INBOUND_SRC = /^[a-z0-9][a-z0-9-]{0,39}$/, INBOUND_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/, INBOUND_HANDLER = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*\.py$/;
+  const inboundSources = () => { const v = state.settings.inbound; return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; };
+  const inboundList = text => String(text || '').split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
+  function inboundCheckSource(f) {   // the form's text -> the source's settings, as keeptrack.py inbound-source would store them; throws a sentence
+    const out = { mode: f.mode === 'card' ? 'card' : 'review' }, cols = (state.columns || []).map(c => c.id);
+    const handler = String(f.handler || '').trim();
+    if (handler) {
+      const dir = String(cfg().path || 'board/tasks.json').replace(/[^/]*$/, '').replace(/\/+$/, '') + '/inbound';
+      if (!INBOUND_HANDLER.test(handler) || handler.split('/').some(x => x === '.' || x === '..')) throw Error('The handler must be a relative path to a .py file in the board repo (letters, digits, . _ - and /).');
+      if (handler === dir.replace(/^\/+/, '') || handler.startsWith(dir.replace(/^\/+/, '') + '/')) throw Error(`The handler may not be in ${dir}/, which outside sources write.`);
+      out.handler = handler;
+    }
+    if (f.column) { if (!cols.includes(f.column)) throw Error(`No column “${f.column}”.`); out.column = f.column; }
+    const client = String(f.client || '').trim(); if (client) { if (client.length > 200 || /[\r\n]/.test(client)) throw Error('The client must be one line of at most 200 characters.'); out.client = client; }
+    if (f.project) { if (!(state.projects || []).some(x => x.id === f.project)) throw Error('That project is not on this board.'); out.project = f.project; }
+    if (f.stage) { if (!stages().includes(f.stage)) throw Error(`“${f.stage}” is not one of the stages: ${stages().join(', ')}.`); out.stage = f.stage; }
+    if (f.priority) { if (!['high', 'medium', 'low'].includes(f.priority)) throw Error('The priority is high, medium or low.'); out.priority = f.priority; }
+    const logins = inboundList(String(f.assign || '').replace(/\s+/g, ',')).map(x => x.replace(/^@/, '')); logins.forEach(x => { if (!INBOUND_LOGIN.test(x)) throw Error(`“${x}” is not a GitHub login.`); });
+    if (logins.length) out.assign = logins;
+    const labels = inboundList(f.labels); labels.forEach(x => { if (x.length > 40) throw Error('A label name is 1 to 40 characters with no comma or line break.'); });
+    if (labels.length) out.labels = [...new Set(labels)];
+    const todos = String(f.todos || '').split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean); if (todos.length) out.todos = todos;
+    if (String(f.attach_days || '').trim() !== '') { const n = Number(f.attach_days); if (!Number.isInteger(n) || n < 0 || n > 30) throw Error('Attach days is a whole number from 0 to 30.'); out.attach_days = n; }
+    return Object.fromEntries(Object.keys(out).sort().map(k => [k, out[k]]));
+  }
+  async function inboundSaveSource(name, cfg, was) {
+    if (cfg.mode === 'card' && (was || {}).mode !== 'card' && !(await ask('Trust this source?', [`Items from “${name}” will become cards and CRM people without a person accepting them first.`, 'Anyone who can write to board/inbound/ (the form’s token) can then add cards. Keep the source in review mode unless you trust it.'], 'Set card mode'))) return false;
+    if (cfg.handler && cfg.handler !== (was || {}).handler && !(await ask('Use this handler?', [`The inbound run will execute ${cfg.handler}, a Python script in this repo, for every item of “${name}”.`, 'Only point it at a script you have reviewed.'], 'Use handler'))) return false;
+    return mutate(d => { d.settings = Object.assign({}, d.settings); d.settings.inbound = Object.assign({}, d.settings.inbound, { [name]: cfg }); }, `Inbound source settings: ${name}`);
+  }
+  async function inboundRemoveSource(name) {
+    if (!(await askRemoval(`the settings of “${name}” (its items become Review Inbox proposals)`, 'Remove source?'))) return false;
+    return mutate(d => { d.settings = Object.assign({}, d.settings); const all = Object.assign({}, d.settings.inbound); delete all[name]; if (Object.keys(all).length) d.settings.inbound = all; else delete d.settings.inbound; }, `Inbound source settings: ${name}`);
+  }
+  function inboundCheckSchedule(f) {   // the form -> a settings.inbound_schedule value, or a sentence
+    const days = INBOUND_DAYS.filter(d => f.days.includes(d)), times = [...new Set(String(f.times || '').split(/[\s,]+/).filter(Boolean).map(t => /^\d:\d{2}$/.test(t) ? '0' + t : t))].sort();
+    if (!days.length) throw Error('Choose at least one day.');
+    if (!times.length || times.length > 24 || times.some(t => !/^([01]\d|2[0-3]):[0-5]\d$/.test(t))) throw Error('Give the run times as HH:MM (24 hours), separated by commas.');
+    const out = { days, times }, tz = String(f.tz || '').trim();
+    const known = zoneList().find(z => z.toLowerCase() === tz.toLowerCase()), name = known || tz;   // Python's zoneinfo is case-sensitive: use the list's spelling when there is one, never ICU's renamed one (Asia/Kolkata must not become Asia/Calcutta)
+    if (!tz) out.tz = f.defaultTz || 'UTC';   // a zone is always stored: yours, else UTC (never left to each reader)
+    else { if (name.length > 64 || !inboundZoneOk(name) || (!known && name !== 'UTC' && name.split('/').some(x => !/^[A-Z]/.test(x)))) throw Error(`“${tz}” is not a time zone. Use a name like Europe/London.`); out.tz = name; }
+    const grace = Number(f.grace === '' ? 30 : f.grace); if (!Number.isInteger(grace) || grace < 1 || grace > 720) throw Error('The grace time is a whole number of minutes from 1 to 720.');
+    out.grace_minutes = grace; return out;
+  }
+  function renderInboundBox() {
+    const box = $('inboundBox'); if (!box) return; box.textContent = '';
+    const locked = !!ro || !!newerSchema || busy;
+    if (HOSTED) { box.append(el('p', 'hint', 'A hosted board has no board/inbound/ folder, so outside items are not used here.')); return; }
+    const redraw = () => { renderInboundBox(); };
+    const field = (label, input, hint) => { const l = el('label', 'inbfield'); l.append(el('span', null, label), input); if (hint) l.append(el('span', 'hint', hint)); return l; };
+    const input = (value, attrs = {}) => { const i = el('input'); i.type = 'text'; i.value = value == null ? '' : value; i.disabled = locked; Object.entries(attrs).forEach(([k, v]) => i.setAttribute(k, v)); return i; };
+    const select = (value, options) => { const x = el('select'); options.forEach(([v, t]) => { const o = el('option', null, t); o.value = v; x.append(o); }); x.value = value || ''; x.disabled = locked; return x; };
+    const failed = state.inbound && typeof state.inbound.failed === 'object' && state.inbound.failed ? state.inbound.failed : {}, held = state.inbound && typeof state.inbound.held === 'object' && state.inbound.held ? state.inbound.held : {};
+    const names = splitMeta && splitMeta.inbound ? splitMeta.inbound : null, now = Date.now(), zone = boardZone();
+    // schedule and the last run
+    const sched = inboundSchedule(state.settings), raw = state.settings.inbound_schedule && typeof state.settings.inbound_schedule === 'object' ? state.settings.inbound_schedule : {};
+    const a = inboundAlert(names || [], state.inbound, state.settings, now);
+    const sbox = el('div', 'inbblock'); sbox.append(el('h4', null, 'When the drain should run'));
+    const dayBoxes = INBOUND_DAYS.map(d => { const c = el('input'); c.type = 'checkbox'; c.value = d; c.checked = Array.isArray(raw.days) ? raw.days.includes(d) : false; c.disabled = locked; const l = el('label', 'schk'); l.append(c, ' ' + d[0].toUpperCase() + d.slice(1)); return [c, l]; });
+    const daysRow = el('div', 'inbdays'); dayBoxes.forEach(([, l]) => daysRow.append(l));
+    const times = input(Array.isArray(raw.times) ? raw.times.join(', ') : '', { placeholder: '09:07, 11:07, 14:07, 16:07', 'aria-label': 'Run times' }), tz = input(raw.tz || '', { placeholder: zone || 'Europe/London', 'aria-label': 'Time zone' });
+    const grace = input(Number.isInteger(raw.grace_minutes) ? raw.grace_minutes : '', { placeholder: '30', inputmode: 'numeric', 'aria-label': 'Grace minutes' });
+    sbox.append(el('p', 'hint', 'Only the alert reads this; it starts nothing. With a schedule, an item is late only when a run that was expected has passed, so an overnight or weekend wait is not an alert. Without one, an item is late after ' + (Number.isInteger((state.settings || {}).inbound_alert_minutes) ? state.settings.inbound_alert_minutes : 120) + ' minutes.'),
+      field('Days', daysRow), field('Run times (24 hours)', times), field('Time zone', tz, 'Empty: ' + (zone || 'UTC') + '. A runner on GitHub Actions cron runs in UTC.'), field('Grace (minutes)', grace, 'How long after a run time before it counts as missed. Default 30.'));
+    const sbtn = el('div', 'sbtns'), save = el('button', null, 'Save schedule'), clear = el('button', null, 'Clear schedule'); save.type = clear.type = 'button'; save.disabled = clear.disabled = locked; clear.disabled = locked || !state.settings.inbound_schedule;
+    save.onclick = async () => { let v; try { v = inboundCheckSchedule({ days: dayBoxes.filter(([c]) => c.checked).map(([c]) => c.value), times: times.value, tz: tz.value, grace: grace.value.trim(), defaultTz: zone || 'UTC' }); } catch (e) { toast(e.message, true); return; }
+      await mutate(d => { d.settings = Object.assign({}, d.settings, { inbound_schedule: v }); }, 'Inbound schedule'); redraw(); };
+    clear.onclick = async () => { await mutate(d => { d.settings = Object.assign({}, d.settings); delete d.settings.inbound_schedule; }, 'Inbound schedule'); redraw(); };
+    sbtn.append(save, clear); sbox.append(sbtn);
+    const last = a.lastFull || 'none recorded yet';
+    sbox.append(el('p', a.stopped ? 'warntext' : 'hint', `Last drain run: ${last}.` + (a.stopped ? (a.stopped.future ? ' That time is in the future: check the runner’s clock.' : ` It has not run since ${a.stopped.since}; it was expected ${a.stopped.expected}.`) : sched ? '' : ' With no schedule the page cannot tell a stopped drain.')));
+    box.append(sbox);
+    // the sources
+    const src = el('div', 'inbblock'); src.append(el('h4', null, 'Sources'));
+    const all = inboundSources(), keys = Object.keys(all).sort();
+    if (!keys.length) src.append(el('p', 'hint', 'No source has settings: the items of every source become Review Inbox proposals that a person accepts. Add a source below to change that.'));
+    const cols = (state.columns || []).map(c => [c.id, c.name || c.id]), projs = sortedProjects().map(x => [x.id, x.name || x.id]);
+    keys.forEach(name => {
+      const given = all[name] && typeof all[name] === 'object' ? all[name] : {}, arr = v => Array.isArray(v) ? v.filter(x => typeof x === 'string') : [], str = v => typeof v === 'string' ? v : '';
+      const was = { ...given, mode: given.mode === 'card' ? 'card' : 'review', handler: str(given.handler), column: str(given.column), client: str(given.client), project: str(given.project), stage: str(given.stage), priority: str(given.priority), assign: arr(given.assign), labels: arr(given.labels), todos: arr(given.todos) };   // a hand-edited value of the wrong type must not break the tab
+      const d = el('details', 'sfold inbsrc'), sum = el('summary', null, '');
+      sum.append(el('strong', null, name), el('span', 'muted', ` · ${was.mode === 'card' ? 'card' : 'review'}${was.handler ? ' · handler ' + was.handler : ''}${was.assign.length ? ' · for ' + was.assign.join(', ') : ''}`)); d.append(sum);
+      const f = { mode: select(was.mode === 'card' ? 'card' : 'review', [['review', 'review: a person accepts proposals'], ['card', 'card: make the card now']]), handler: input(was.handler, { placeholder: 'board-intake/plan.py' }),
+        column: select(was.column, [['', 'Default column'], ...cols]), assign: input(was.assign.join(', '), { placeholder: 'github-login, other-login' }), labels: input(was.labels.join(', ')),
+        todos: el('textarea'), client: input(was.client), project: select(was.project, [['', 'No project'], ...projs]), stage: select(was.stage, [['', 'First stage'], ...stages().map(x => [x, x])]),
+        priority: select(was.priority, [['', 'Default'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']]), attach_days: input(Number.isInteger(was.attach_days) ? was.attach_days : '', { inputmode: 'numeric', placeholder: '3' }) };
+      f.todos.value = was.todos.join('\n'); f.todos.rows = 3; f.todos.disabled = locked;
+      d.append(field('Mode', f.mode, 'review is the safe default. card skips review, so only trust a source you control.'), field('Handler', f.handler, 'A Python script in this repo that turns an item into a plan. Empty: the default card.'),
+        field('Column', f.column), field('Assign to', f.assign), field('Labels', f.labels), field('Checklist (one item per line)', f.todos), field('Client', f.client), field('Project', f.project),
+        field('New person’s stage', f.stage), field('Priority', f.priority), field('Attach days', f.attach_days, 'How long an item that attaches to an earlier card waits for it (0 to 30, default 3).'));
+      const b = el('div', 'sbtns'), sv = el('button', 'primary', 'Save source'), rm = el('button', 'danger', 'Remove source'); sv.type = rm.type = 'button'; sv.disabled = rm.disabled = locked;
+      sv.onclick = async () => { let cfg; try { cfg = inboundCheckSource(Object.fromEntries(Object.entries(f).map(([k, x]) => [k, x.value]))); } catch (e) { toast(e.message, true); return; } if (await inboundSaveSource(name, cfg, was)) redraw(); };
+      rm.onclick = async () => { if (await inboundRemoveSource(name)) redraw(); };
+      b.append(sv, rm); d.append(b); src.append(d);
+    });
+    const add = el('div', 'inbadd'), nn = input('', { placeholder: 'New source name, e.g. rainshift-contact', maxlength: '40', 'aria-label': 'New source name' }), ab = elI('button', 'small', 'plus', 'Add source'); ab.type = 'button'; ab.disabled = locked;
+    ab.onclick = async () => { const n = nn.value.trim(); if (!INBOUND_SRC.test(n)) { toast('A source name is lower-case letters, digits and -, at most 40, as the producer writes it in “source”.', true); return; } if (all[n]) { toast(`“${n}” already has settings.`, true); return; }
+      if (await inboundSaveSource(n, { mode: 'review' }, null)) redraw(); };
+    nn.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); ab.click(); } }; add.append(nn, ab); src.append(add); box.append(src);
+    // the items
+    const its = el('div', 'inbblock'); its.append(el('h4', null, 'Waiting and failed items'));
+    if (names === null) its.append(el('p', 'hint', 'This board is one file, so the page cannot list board/inbound/. Run keeptrack.py inbound --status to see the items.'));
+    else if (!names.length) its.append(el('p', 'hint', 'Nothing is waiting.'));
+    else {
+      const ul = el('ul', 'inblist'), stampOf = n => { const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-/.exec(n); return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null; };
+      names.slice(0, 50).forEach(n => { const own = k => Object.prototype.hasOwnProperty.call(k, n) && k[n] && typeof k[n] === 'object' ? k[n] : null, f = own(failed), h = own(held), at = stampOf(n), mins = at === null ? null : Math.floor((now - at) / 60000);
+        const age = mins === null ? 'no time in the name' : mins >= 2880 ? Math.floor(mins / 1440) + ' days' : mins >= 120 ? Math.floor(mins / 60) + ' hours' : Math.max(0, mins) + ' minutes';
+        const li = el('li', f ? 'warntext' : null); li.append(el('code', null, ((m => m.length > 120 ? m.slice(0, 117) + '…' : m)(n.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '')))), el('span', 'muted', ` · ${age} · `), el('span', null, f ? 'failed: ' + String(f.error || '').slice(0, 300) : h ? 'held for the card it attaches to' : 'waiting for the next run')); ul.append(li); });
+      its.append(ul); if (names.length > 50) its.append(el('p', 'hint', `And ${names.length - 50} more.`));
+    }
+    box.append(its); uiBtns(box);
   }
   function sizeBar() {   // a quiet nudge once the board file gets large
     inboundBar();

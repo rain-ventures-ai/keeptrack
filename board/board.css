@@ -1677,3 +1677,12 @@ header .cpillgo, header .cpillproj { min-width: 0 !important; min-height: 0; pad
 .mdimg { max-width: 100%; max-height: 420px; height: auto; display: block; }
 .mdimgalt { color: var(--muted); font-style: italic; }
 #cmImage { margin-left: var(--sp-2); }
+
+/* kit v122: Settings → Board → Inbound */
+.inbbox { display: flex; flex-direction: column; gap: var(--sp-5); }
+.inbblock { display: flex; flex-direction: column; gap: var(--sp-3); } .inbblock h4 { margin: 0; }
+.inbfield { display: flex; flex-direction: column; gap: var(--sp-1); } .inbfield input:not([type=checkbox]), .inbfield select, .inbfield textarea { width: 100%; box-sizing: border-box; }
+.inbdays { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+.inbsrc { padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md); } .inbsrc[open] { display: flex; flex-direction: column; gap: var(--sp-3); }
+.inbadd { display: flex; gap: var(--sp-3); flex-wrap: wrap; } .inbadd input { flex: 1 1 200px; min-width: 0; }
+.inblist { margin: 0; padding-left: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-2); overflow-wrap: anywhere; }

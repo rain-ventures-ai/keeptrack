@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 121  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 122  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -7054,7 +7054,7 @@ HELP_TOPICS = {
                         "column-move", "column-rm", "members", "me", "member-add", "member-set", "member-rm",
                         "agents", "agent-add", "agent-rm", "settings", "settings-set"],
     "archive": ["archive", "archived", "archived-history", "unarchive"],
-    "review-inbox": ["inbound", "inbound-source", "propose", "proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
+    "review-inbox": ["inbound", "inbound-source", "inbound-schedule", "propose", "proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
                      "proposal-ignore", "proposal-reopen", "proposal-undo", "proposal-answer", "proposal-result", "proposal-done"],
     "setup": ["use", "where", "here", "boards", "board-head", "resolve", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
               "migrate", "verify", "doctor"],
@@ -10570,6 +10570,9 @@ INBOUND_CARD_FIELDS = {"title", "details", "column", "client", "project", "prior
 INBOUND_PERSON_FIELDS = {"name", "company", "role", "email", "phone", "linkedin", "stage", "source", "notes", "next", "next_due"}
 INBOUND_SETTING_FIELDS = {"mode", "handler", "column", "assign", "labels", "todos", "client", "project", "stage", "priority",
                           "attach_days"}
+INBOUND_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")   # kit v122: settings.inbound_schedule {days, times, tz, grace_minutes}
+INBOUND_TIME = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+INBOUND_GRACE_DEFAULT = 30         # minutes after an expected run before a missed run counts
 INBOUND_ATTACH_DAYS = 3            # kit v113: how long an item that attaches to an earlier item's card waits for that card
 INBOUND_ATTACH_TEXT = 20000
 INBOUND_FIRST = ("name", "email", "company", "linkedin", "phone", "topic", "page", "submitted_at")
@@ -11095,6 +11098,101 @@ def _inbound_prune(done, today):
         del done[k]
 
 
+def inbound_schedule_check(raw):
+    """(schedule, error) for a settings.inbound_schedule value: days (mon..sun), times (HH:MM, 24 hours, in tz), tz (an IANA
+    zone name; UTC when left out, for every reader alike) and grace_minutes (1-720, default 30). The schedule says when the
+    drain should run; it starts nothing, and only the alert reads it."""
+    if not isinstance(raw, dict):
+        return None, "the schedule must be an object with days and times"
+    days, times = raw.get("days"), raw.get("times")
+    if not isinstance(days, list) or not days or any(d not in INBOUND_DAYS for d in days):
+        return None, "days must be a list of mon, tue, wed, thu, fri, sat, sun"
+    if not isinstance(times, list) or not times or len(times) > 24 or any(not isinstance(t, str) or not INBOUND_TIME.fullmatch(t) for t in times):
+        return None, "times must be a list of HH:MM (24 hours), at most 24"
+    tz = raw.get("tz")
+    if tz is not None and not valid_timezone(tz):
+        return None, "tz must be a time zone name such as Europe/London"
+    grace = raw.get("grace_minutes", INBOUND_GRACE_DEFAULT)
+    if isinstance(grace, bool) or not isinstance(grace, int) or not 1 <= grace <= 720:
+        return None, "grace_minutes must be a whole number from 1 to 720"
+    out = {"days": [d for d in INBOUND_DAYS if d in days], "times": sorted(set(times))}
+    if tz:
+        out["tz"] = tz
+    out["grace_minutes"] = grace
+    return out, None
+
+
+def inbound_schedule_problem(data):
+    """Why a stored settings.inbound_schedule is not used (None when none is set, or it is fine)."""
+    raw = (data.get("settings") or {}).get("inbound_schedule")
+    return None if raw is None else inbound_schedule_check(raw)[1]
+
+
+def inbound_schedule(data):
+    """The board's checked schedule with its zone object, or None (none set, or an invalid one: the old alert time rule
+    applies, and inbound_schedule_problem says why). A schedule with no tz is in UTC for everyone: the reader's own zone is
+    never used, so two members never get different answers."""
+    sched, _err = inbound_schedule_check((data.get("settings") or {}).get("inbound_schedule"))
+    if not sched:
+        return None
+    import zoneinfo
+    zone = zoneinfo.ZoneInfo(sched["tz"]) if sched.get("tz") else dt.timezone.utc
+    return dict(sched, zone=zone, grace=dt.timedelta(minutes=sched["grace_minutes"]))
+
+
+def inbound_expected_run(sched, at, first_only=False, grace=None):
+    """The latest expected drain run (UTC) whose time plus grace has passed at `at`; first_only: the first run of that
+    scheduled day (the one that records a quiet day). None when none in the last ten days."""
+    grace = sched["grace"] if grace is None else grace
+    day = at.astimezone(sched["zone"]).date()
+    for back in range(10):
+        d = day - dt.timedelta(days=back)
+        if INBOUND_DAYS[d.weekday()] not in sched["days"]:
+            continue
+        runs = sorted(dt.datetime.combine(d, dt.time(int(t[:2]), int(t[3:])), tzinfo=sched["zone"]).astimezone(dt.timezone.utc)
+                      for t in sched["times"])
+        for r in (runs[:1] if first_only else reversed(runs)):
+            if r + grace <= at:
+                return r
+    return None
+
+
+def inbound_last_run(data):
+    """tasks.json inbound.last_run: {at, handled, failed} (kit v122), or None. `at` is a UTC time."""
+    v = data.get("inbound")
+    v = v.get("last_run") if isinstance(v, dict) else None
+    if not isinstance(v, dict):
+        return None
+    try:
+        at = dt.datetime.fromisoformat(str(v.get("at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if at.tzinfo is None:
+        return None
+    return {"at": at.astimezone(dt.timezone.utc), "handled": v.get("handled") if isinstance(v.get("handled"), int) else 0,
+            "failed": v.get("failed") if isinstance(v.get("failed"), int) else 0}
+
+
+def inbound_record_quiet_day(data, now_at):
+    """Should a run that handled nothing record its time? Only with a schedule (nothing reads the time without one), and once
+    a quiet day: when no run is recorded, none today (in the schedule's zone), or none since today's first expected run."""
+    sched = inbound_schedule(data)
+    if sched is None:
+        return False
+    last = inbound_last_run(data)
+    if last is None:
+        return True
+    zone = sched["zone"]
+    if last["at"].astimezone(zone).date() != now_at.astimezone(zone).date():
+        return True
+    first = inbound_expected_run(sched, now_at, True, dt.timedelta(0))
+    return bool(first and last["at"] < first)
+
+
+def _inbound_local(at, sched):
+    return at.astimezone(sched["zone"]).strftime("%a %H:%M")
+
+
 def inbound_waiting(data, now_at=None):
     """[(file name, minutes waiting, failure or None)] for the items in board/inbound/, oldest first."""
     now_at = now_at or dt.datetime.now(dt.timezone.utc)
@@ -11107,9 +11205,12 @@ def inbound_waiting(data, now_at=None):
 
 
 def inbound_attention(data, now_at=None):
-    """The inbound lines list --attention prints: failed items, and items waiting longer than the alert time."""
+    """The inbound lines list --attention prints: failed items; items that missed an expected run (with settings.inbound_schedule,
+    kit v122) or waited longer than the alert time (without); and a drain that has not run when it should have."""
     limit, out = inbound_alert_minutes(data), []
     held, now_at = inbound_record(data)["held"], now_at or dt.datetime.now(dt.timezone.utc)
+    sched = inbound_schedule(data)
+    missed = inbound_expected_run(sched, now_at) if sched else None
     for name, waited, fail in inbound_waiting(data, now_at):
         h = held.get(name) if isinstance(held.get(name), dict) else None
         if h and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(h.get("until") or "")) \
@@ -11117,10 +11218,37 @@ def inbound_attention(data, now_at=None):
             continue   # kit v113: waiting on purpose for the card it attaches to
         if isinstance(fail, dict):
             out.append(f"inbound failed {_flat(name)}: {_flat(clean(fail.get('error', ''), 200))}")
-        elif waited is None or waited >= limit:
+            continue
+        at = inbound_stamp(name)
+        if sched:   # kit v122: late only when it came in before a run that was expected and is now past its grace time
+            late = at is None or (missed is not None and at <= missed)
+            why = f"missed the {_inbound_local(missed, sched)} run" if at is not None and missed is not None else None
+        else:
+            late, why = waited is None or waited >= limit, None
+        if late:
             out.append(f"inbound waiting {_flat(name)}" + (f" ({_age(waited)})" if waited is not None else " (no time in the name)")
-                       + ": run keeptrack.py inbound")
+                       + (f", {why}" if why else "") + ": run keeptrack.py inbound")
+    problem = inbound_schedule_problem(data)
+    if problem:
+        out.append(_line_guard(f"inbound schedule is set but not used ({_flat(clean(problem, 160))}): the {limit}-minute alert time applies"))
+    stopped = inbound_stopped(data, now_at)
+    if stopped:
+        out.append(stopped)
     return out
+
+
+def inbound_stopped(data, now_at=None):
+    """A line when the drain has not run since the first expected run of the latest scheduled day (past its grace time),
+    else None. Needs a schedule and one recorded run (a board that never recorded one is not alarmed)."""
+    now_at, sched, last = now_at or dt.datetime.now(dt.timezone.utc), inbound_schedule(data), inbound_last_run(data)
+    ref = inbound_expected_run(sched, now_at, True) if sched else None
+    if sched and last and last["at"] > now_at + dt.timedelta(minutes=5):   # a fast clock, or a hand edit, must not hide a dead drain
+        return (f"inbound drain's recorded last run is in the future ({last['at'].strftime('%Y-%m-%d %H:%M')} UTC): "
+                "check the clock of the runner of keeptrack.py inbound")
+    if not (sched and last and ref) or last["at"] >= ref:
+        return None
+    return (f"inbound drain has not run since {last['at'].strftime('%Y-%m-%d %H:%M')} UTC "
+            f"(expected {_inbound_local(ref, sched)}): check the runner of keeptrack.py inbound")
 
 
 def cmd_inbound(a):
@@ -11143,6 +11271,20 @@ def cmd_inbound(a):
             print(_line_guard(f"{_flat(name)}  {_age(waited) if waited is not None else '?'}  {state}"))
         print(f"{len(waiting)} item{'s' if len(waiting) != 1 else ''} in {INBOUND_DIR}/; "
               f"{len(inbound_record(data)['done'])} handled in the last {INBOUND_KEEP_DAYS} days")
+        sched, last = inbound_schedule(data), inbound_last_run(data)
+        if sched:   # kit v122
+            print(_line_guard("schedule: " + ",".join(sched["days"]) + " at " + ", ".join(sched["times"]) + f" ({sched['zone']}), "
+                              f"{sched['grace_minutes']} minutes grace"))
+        elif inbound_schedule_problem(data):
+            print(_line_guard(f"schedule is set but not used ({_flat(clean(inbound_schedule_problem(data), 160))}): an item is late after "
+                              f"{inbound_alert_minutes(data)} minutes"))
+        else:
+            print(f"no schedule set: an item is late after {inbound_alert_minutes(data)} minutes (inbound-schedule sets one)")
+        print("last run: " + (f"{last['at'].strftime('%Y-%m-%d %H:%M')} UTC, {last['handled']} handled, {last['failed']} failed"
+                              if last else "none recorded"))
+        stopped = inbound_stopped(data)
+        if stopped:
+            print(_line_guard(stopped))
         return
     report = {}
 
@@ -11153,7 +11295,15 @@ def cmd_inbound(a):
         held_before = inbound_record(data)["held"]
         files = sorted(files, key=lambda f: (f[1] in held_before, f[1]))   # kit v113: waiting items after the rest
         if not files and not inbound_record(data)["failed"] and not held_before:
-            print("inbound: nothing waiting")
+            run_at = dt.datetime.now(dt.timezone.utc)
+            if inbound_record_quiet_day(data, run_at):   # kit v122: a quiet day is recorded once, so a stopped drain shows
+                inb = dict(data["inbound"]) if isinstance(data.get("inbound"), dict) else {}
+                inb["last_run"] = {"at": now(), "handled": 0, "failed": 0}
+                data["inbound"] = inb
+                _MUT["recheck"] = True   # two quiet drains at once: the loser runs again on the newer board and finds today's record
+                print("inbound: nothing waiting; the run time is recorded (once a day)")
+            else:
+                print("inbound: nothing waiting")
             return
         rec = {"done": dict(inbound_record(data)["done"]), "failed": {}, "held": {}}
         old_failed, old_held = inbound_record(data)["failed"], inbound_record(data)["held"]
@@ -11242,7 +11392,14 @@ def cmd_inbound(a):
         _inbound_prune(rec["done"], today)
         if not rec["held"]:
             rec.pop("held")
-        if rec["done"] or rec["failed"] or rec.get("held"):
+        old_last = data.get("inbound", {}).get("last_run") if isinstance(data.get("inbound"), dict) else None
+        if any(v in ("done", "duplicate", "failed") for v in report.values()) or inbound_record_quiet_day(data, dt.datetime.now(dt.timezone.utc)):
+            rec["last_run"] = {"at": now(), "handled": sum(1 for v in report.values() if v in ("done", "duplicate")),
+                               "failed": sum(1 for v in report.values() if v in ("failed", "failed again"))}   # kit v122
+            _MUT["recheck"] = True
+        elif isinstance(old_last, dict):
+            rec["last_run"] = old_last   # nothing new this run: no extra commit just for the time
+        if rec["done"] or rec["failed"] or rec.get("held") or rec.get("last_run"):
             data["inbound"] = rec
         else:
             data.pop("inbound", None)
@@ -11263,6 +11420,60 @@ def cmd_inbound(a):
     mutate(fn, "Inbound: handle outside items")
     if any(v == "failed" for v in report.values()):
         sys.exit(1)   # a new failure (or a new error): a person should look. One that failed the same way before exits 0.
+
+
+def _inbound_days(tokens):
+    """--days: mon-fri, mon,tue, weekdays, daily, weekend."""
+    out = []
+    for tok in [x.strip().lower() for t in tokens for x in t.split(",") if x.strip()]:
+        if tok in ("weekdays", "weekday"): out += list(INBOUND_DAYS[:5])
+        elif tok in ("weekend", "weekends"): out += list(INBOUND_DAYS[5:])
+        elif tok in ("daily", "every", "all"): out += list(INBOUND_DAYS)
+        elif "-" in tok and all(x in INBOUND_DAYS for x in tok.split("-", 1)):
+            a, b = (INBOUND_DAYS.index(x) for x in tok.split("-", 1))
+            out += [INBOUND_DAYS[(a + i) % 7] for i in range((b - a) % 7 + 1)]
+        elif tok in INBOUND_DAYS: out.append(tok)
+        else: sys.exit(f"'{tok}' is not a day: use mon..sun, mon-fri, weekdays, weekend or daily")
+    return list(dict.fromkeys(out))
+
+
+def cmd_inbound_schedule(a):
+    """kit v122: when the drain should run (for the alert only; this starts nothing). Only a person sets it: an agent may
+    clear it, which brings back the older rule (an item is late after settings.inbound_alert_minutes)."""
+    if not (a.clear or a.days is not None or a.time or a.tz or a.grace is not None):
+        data, _ = load()
+        sched, problem = inbound_schedule(data), inbound_schedule_problem(data)
+        print(_line_guard(("schedule: " + ",".join(sched["days"]) + " at " + ", ".join(sched["times"]) + f" ({sched['zone']}), "
+                           f"{sched['grace_minutes']} minutes grace") if sched else
+                          f"schedule is set but not used ({_flat(clean(problem, 160))})" if problem else
+                          f"no schedule set: an item is late after {inbound_alert_minutes(data)} minutes"))
+        return
+    if agent_unattended(a) and not a.clear:
+        sys.exit("refused: an unattended agent may only clear the inbound schedule (--clear); the board owner sets it, or --attended in a session they drive")
+
+    def fn(data):
+        st = data.setdefault("settings", {})
+        if a.clear:
+            if "inbound_schedule" not in st:
+                print("no inbound schedule set; nothing changed"); return
+            del st["inbound_schedule"]
+            print(f"inbound schedule cleared: an item is late after {inbound_alert_minutes(data)} minutes")
+            return
+        cur = dict(st["inbound_schedule"]) if isinstance(st.get("inbound_schedule"), dict) else {}
+        if a.days is not None: cur["days"] = _inbound_days(a.days)
+        if a.time: cur["times"] = list(a.time)
+        if a.tz: cur["tz"] = a.tz
+        if a.grace is not None: cur["grace_minutes"] = a.grace
+        if "tz" not in cur:   # a zone is always stored: the setter's, else the kit owner's, else UTC (never left to each reader)
+            zone = board_timezone(data)
+            cur["tz"] = getattr(zone, "key", None) or "UTC"
+        sched, err = inbound_schedule_check(cur)
+        if err:
+            sys.exit(err + " (set --days and --time together the first time)")
+        st["inbound_schedule"] = sched
+        print(_line_guard("inbound schedule: " + ",".join(sched["days"]) + " at " + ", ".join(sched["times"]) +
+                          f" ({sched['tz']})" + f", {sched['grace_minutes']} minutes grace"))
+    mutate(fn, "Inbound schedule")
 
 
 def cmd_inbound_source(a):
@@ -14123,6 +14334,15 @@ def main():
     s = sub.add_parser("inbound", help="handle the items outside sources put in board/inbound/: Review Inbox proposals, or cards for a trusted source")
     s.add_argument("--status", action="store_true", help="list the sources' settings and the items waiting or failed; change nothing")
     s.add_argument("--dry-run", action="store_true", help="say what would happen; save nothing"); s.set_defaults(f=cmd_inbound)
+    s = sub.add_parser("inbound-schedule", help="say when the inbound drain should run, so the alert knows a normal wait from a missed run (no value: show it)")
+    s.add_argument("--days", nargs="*", metavar="DAY", help="mon-fri, weekdays, weekend, daily, or a list such as mon,wed")
+    s.add_argument("--time", action="append", metavar="HH:MM", help="a run time (24 hours, in --tz); repeat it for each run")
+    s.add_argument("--tz", help="the zone the times are in, such as Europe/London (default: your zone, else the kit owner's, else UTC). "
+                   "A runner that uses GitHub Actions cron runs in UTC: give --tz UTC")
+    s.add_argument("--grace", type=int, help="minutes after a run time before it counts as missed (1-720, default 30)")
+    s.add_argument("--clear", action="store_true", help="remove the schedule (an item is late after settings.inbound_alert_minutes)")
+    s.add_argument("--attended", action="store_true", help="an agent: a person drives this session and asked for this (kit v77)")
+    s.set_defaults(f=cmd_inbound_schedule)
     s = sub.add_parser("inbound-source", help="set how one outside source's items are handled: --mode review (default) or card")
     s.add_argument("source", help="the source name the producer writes, e.g. rainshift-contact")
     s.add_argument("--mode", choices=INBOUND_MODES, help="review: Review Inbox proposals a person accepts; card: make the card and person now")
