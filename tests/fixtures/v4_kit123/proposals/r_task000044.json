@@ -1,0 +1,33 @@
+{
+  "id": "r_task000044",
+  "version": 1,
+  "kind": "task.create",
+  "status": "pending",
+  "title": "Book the workshop room",
+  "source": {
+    "kind": "other",
+    "id": "agent-run-7",
+    "revision": "1",
+    "title": "Design review",
+    "date": "2026-10-12",
+    "url": ""
+  },
+  "action_key": "ak-r_task000044",
+  "work_key": "wk-r_task000044",
+  "reason": "Needs a decision.",
+  "target": null,
+  "change": {
+    "title": "Book the workshop room"
+  },
+  "likely_duplicates": [],
+  "decision": null,
+  "history": [
+    {
+      "at": "2026-10-12T09:00:00Z",
+      "by": "claude@alex",
+      "text": "proposed"
+    }
+  ],
+  "created": "2026-10-12T09:00:00Z",
+  "createdBy": "claude@alex"
+}

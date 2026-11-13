@@ -1,0 +1,45 @@
+{
+  "id": "r_askrec0071",
+  "version": 1,
+  "kind": "ask.choose",
+  "status": "pending",
+  "title": "Which supplier?",
+  "source": {
+    "kind": "other",
+    "id": "agent-run-7",
+    "revision": "1",
+    "title": "Design review",
+    "date": "2026-10-12",
+    "url": ""
+  },
+  "action_key": "ak-r_askrec0071",
+  "work_key": "wk-r_askrec0071",
+  "reason": "Needs a decision.",
+  "target": null,
+  "change": {
+    "question": "Which supplier?",
+    "task": "t_first",
+    "options": [
+      {
+        "key": "acme",
+        "label": "Acme Supplies"
+      },
+      {
+        "key": "bolt",
+        "label": "Bolt Ltd"
+      }
+    ],
+    "recommended": "bolt"
+  },
+  "likely_duplicates": [],
+  "decision": null,
+  "history": [
+    {
+      "at": "2026-09-01T09:00:00Z",
+      "by": "claude@alex",
+      "text": "proposed"
+    }
+  ],
+  "created": "2026-09-01T09:00:00Z",
+  "createdBy": "claude@alex"
+}

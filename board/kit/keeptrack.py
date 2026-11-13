@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 122  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 123  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3173,6 +3173,8 @@ def searchable(t):
     """A card as text search sees it: without the claim's and the run record's session ids (a query could otherwise
     extend a redacted prefix one character at a time)."""
     out = {k: v for k, v in t.items() if k not in ("claim", "last_run")}
+    if "coordination" in out:
+        out["coordination"] = work_module().public(out["coordination"])
     for k in ("claim", "last_run"):
         if isinstance(t.get(k), dict):
             out[k] = {x: y for x, y in t[k].items() if x != "session_id"}
@@ -3272,7 +3274,13 @@ def cmd_list(a):
     for t in ordered:
         if not matches(t, today): continue
         if getattr(a, "json", False):
-            json_items.append(t); continue
+            item = copy.deepcopy(t)
+            if "coordination" in item:
+                item["coordination"] = work_module().public(item["coordination"])
+            for key in ("claim", "last_run"):
+                if isinstance(item.get(key), dict) and item[key].get("session_id"):
+                    item[key]["session_id"] = redact_session(item[key]["session_id"])
+            json_items.append(item); continue
         cleared = f"  [agent cleared: {len(unchecked_cleared(t))}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
@@ -3308,6 +3316,8 @@ def cmd_show(a):
         archived = archived_tasks(data, base) if any(i not in live for i in after_ids(t)) else None
         links = after_links(data, t, archived)
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
+    if "coordination" in t:
+        t["coordination"] = work_module().public(t["coordination"])
     hs = t.pop("history", []); cms = t.pop("comments", [])
     for k in ("claim", "last_run"):   # a session id is a claim's proof of ownership (and a session may hold other cards): shown only in part
         if t.get(k) and t[k].get("session_id"):
@@ -3418,6 +3428,9 @@ def do_claim(a, tid, data):
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
     sid = session_id(a)
+    if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+        from types import SimpleNamespace
+        work_module().claim_gate(SimpleNamespace(**globals()), data, t, sid, getattr(a, "executor", None), attended(a))
     assign_to_me = getattr(a, "assign_to_me", False)
     startable_column = t["column"] in ("backlog", "todo")
     unassigned = not (t.get("assignees") or [])
@@ -7059,6 +7072,8 @@ HELP_TOPICS = {
     "setup": ["use", "where", "here", "boards", "board-head", "resolve", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
               "migrate", "verify", "doctor"],
 }
+if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+    HELP_TOPICS["durable-work"] = ["request-work", "work-status", "work-start", "work-event", "work-finish", "work-release-owned", "work-resolve"]
 
 
 def cmd_help(a):
@@ -13981,9 +13996,23 @@ def _automation_parser(sub):
 def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
-    reads = {"list", "show", "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
+    reads = {"list", "show", "work-status", "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
+
+
+def work_module():
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")
+    spec = importlib.util.spec_from_file_location("keeptrack_work", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def cmd_work(a):
+    from types import SimpleNamespace
+    return work_module().command(SimpleNamespace(**globals()), a)
 
 
 def main():
@@ -13991,6 +14020,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--file", help="use a local tasks.json instead of GitHub (testing)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+        work_module().parser(sub, cmd_work)
     s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report")
     s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish"])
     s.add_argument("--run-id"); s.add_argument("--status", choices=["success", "partial", "failed", "blocked"])
@@ -14068,6 +14099,7 @@ def main():
     s = sub.add_parser("approve", help="hosted boards only (BOARD_BACKEND=hosted): approve an assigned card (on a GitHub board, move it to To do)")
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s)
+    s.add_argument("--executor", choices=("relay-local",), help="selected host route for durable coordinated work; grants no approval")
     s.add_argument("--assign-to-me", action="store_true",
                    help="with --attended on a GitHub board, assign an unassigned Backlog or To do card to you in the claim")
     s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
@@ -14440,6 +14472,8 @@ def main():
         sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
     if BACKEND == "github" and not FILE:
         github_api_base()   # kit v81: a hosted board's variables on a GitHub board stop every transport, `gh` too
+    if a.f is cmd_work:
+        return a.f(a) or 0
     if not FILE and BACKEND != "github":
         return hosted_dispatch(a) or 0
     return a.f(a) or 0
