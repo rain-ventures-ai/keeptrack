@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 123;
+  const PAGE_KIT = 124;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -8694,10 +8694,24 @@ if (typeof window !== 'undefined') (() => {
     return before.tasks.find(t => !remaining.has(t.id) && unresolvedWork(t));
   }
   function unresolvedProjectHold(board, task) {
-    return board.tasks.some(other => other !== task && task.project && (other.coordination?.runs || []).some(run => {
-      const projects = [other.project, run.project_id, !run.project_id && String(other.coordination?.owner || '').replace(/^rook:/, '')];
-      return projects.includes(task.project) && (!run.terminal || (run.needs_reconciliation && !run.resolution));
+    const cache = new Map(), wanted = projectScopeKeys(board, task.project, cache), ids = new Set((board.projects || []).filter(p => p && typeof p.id === 'string').map(p => p.id));
+    return board.tasks.some(other => other !== task && (other.coordination?.runs || []).some(run => {
+      if (run.terminal && !(run.needs_reconciliation && !run.resolution)) return false;
+      const retained = run.project_id || String(other.coordination?.owner || '').replace(/^rook:/, '');
+      if (retained && !ids.has(retained)) return true;
+      return [other.project, retained].some(ref => [...projectScopeKeys(board, ref, cache)].some(id => wanted.has(id)));
     }));
+  }
+  function projectScopeKeys(board, ref, cache) {
+    if (ref == null || ref === '') return new Set();
+    if (typeof ref !== 'string' || !ref.trim()) throw new Error('Project reference cannot resolve safely; repair it before unattended work.');
+    if (cache.has(ref)) return cache.get(ref);
+    const value = ref.trim(), lower = value.toLowerCase(), ps = (board.projects || []).filter(p => p && typeof p.id === 'string');
+    let matches = ps.filter(p => p.id === value);
+    if (!matches.length) matches = ps.filter(p => p.id.startsWith(value));
+    if (!matches.length) matches = ps.filter(p => String(p.name || '').toLowerCase() === lower);
+    if (!matches.length) matches = ps.filter(p => (String(p.name || '') + ' ' + String(p.client || '')).toLowerCase().includes(lower));
+    const keys = new Set([ref, lower, ...matches.map(p => p.id)]); cache.set(ref, keys); return keys;
   }
   function archivePlan(d, rules) {   // takes what can be archived out of d; returns { year: { tasks, contacts, history: { id: [entries] } } }
     if (rules.taskId) {

@@ -93,7 +93,7 @@ def coordinate(task):
 def require_current_kit(data):
     settings = data.setdefault("settings", {})
     minimum = settings.get("min_kit")
-    settings["min_kit"] = max(123, minimum) if type(minimum) is int else 123
+    settings["min_kit"] = max(124, minimum) if type(minimum) is int else 124
 
 
 def strict_archives(kt, data, base):
@@ -295,19 +295,55 @@ def unresolved(run):
     return not run.get("terminal") or (run.get("needs_reconciliation") and not run.get("resolution"))
 
 
-def run_projects(task, run):
+def project_keys(data, ref, cache=None):
+    """Keep raw identity and every canonical match; ambiguous legacy refs hold all matches."""
+    if ref is None or ref == "":
+        return set()
+    if not isinstance(ref, str) or not ref.strip():
+        fail("project reference cannot resolve safely; repair it before unattended work")
+    if cache is not None and ref in cache:
+        return cache[ref]
+    value = ref.strip()
+    projects = [p for p in data.get("projects", []) if isinstance(p, dict) and isinstance(p.get("id"), str)]
+    matches = [p for p in projects if p["id"] == value] or [p for p in projects if p["id"].startswith(value)]
+    if not matches:
+        lower = value.lower()
+        matches = [p for p in projects if str(p.get("name") or "").lower() == lower] or [
+            p for p in projects if lower in (str(p.get("name") or "") + " " + str(p.get("client") or "")).lower()]
+    keys = {ref, value.lower()} | {p["id"] for p in matches}
+    if cache is not None:
+        cache[ref] = keys
+    return keys
+
+
+def run_projects(task, run, data=None, cache=None):
     """Retargeting a card cannot move an already running attempt's hold."""
-    projects = {task.get("project"), run.get("project_id")}
+    retained = [run.get("project_id")]
     if not run.get("project_id"):
         owner = str((task.get("coordination") or {}).get("owner") or "")
         if owner.startswith("rook:"):
-            projects.add(owner[5:])  # conservative scope for historical receipts
-    return projects - {None, ""}
+            retained.append(owner[5:])  # conservative scope for historical receipts
+    projects = [task.get("project"), *retained]
+    if data is None:
+        return set(projects) - {None, ""}
+    ids = cache.get(None) if cache is not None else None
+    if ids is None:
+        ids = {p["id"] for p in data.get("projects", []) if isinstance(p, dict) and isinstance(p.get("id"), str)}
+        if cache is not None:
+            cache[None] = ids
+    for ref in retained:
+        if ref:
+            project_keys(data, ref, cache)  # validate the retained reference before membership checks
+        if ref and ref not in ids:
+            fail("unresolved attempt's retained project cannot resolve safely; owner must reconcile it before unattended work")
+    return set().union(*(project_keys(data, ref, cache) for ref in projects))
 
 
 def claim_gate(kt, data, task, sid, executor, attended):
     if attended:
         return
+    cache = {}
+    scopes = project_keys(data, task.get("project"), cache)
     co = task.get("coordination")
     mine = None
     claim = task.get("claim") or {}
@@ -327,25 +363,29 @@ def claim_gate(kt, data, task, sid, executor, attended):
             fail("unattended coordinated claims require an approved To do card; no claim written")
     for other in data.get("tasks", []):
         for run in (other.get("coordination") or {}).get("runs", []):
-            if other is not task and (not task.get("project") or task["project"] not in run_projects(other, run)):
+            if run is mine or not unresolved(run):
                 continue
-            if run is not mine and unresolved(run):
-                fail("this project has an unresolved coordinated attempt; no claim written")
+            if other is not task and not scopes.intersection(run_projects(other, run, data, cache)):
+                continue
+            fail("this project has an unresolved coordinated attempt; no claim written")
 
 
 def renewal_gate(kt, data, task, claim):
     """A heartbeat or unwait cannot revive a different attempt through a project hold."""
     if claim.get("attended"):
         return
+    cache = {}
+    scopes = project_keys(data, task.get("project"), cache)
     identity = claim_hash(kt, claim)
     for other in data.get("tasks", []):
         for run in (other.get("coordination") or {}).get("runs", []):
+            if not unresolved(run):
+                continue
             if other is task and run.get("_claim") == identity and not run.get("terminal"):
                 continue  # the exact owning attempt may keep its own lease alive
-            if other is not task and (not task.get("project") or task["project"] not in run_projects(other, run)):
+            if other is not task and not scopes.intersection(run_projects(other, run, data, cache)):
                 continue
-            if unresolved(run):
-                fail("this project has an unresolved coordinated attempt; claim renewal refused")
+            fail("this project has an unresolved coordinated attempt; claim renewal refused")
 
 
 def own_running_claim(kt, data, task):
@@ -370,10 +410,27 @@ def process_identity(pid):
         return None
 
 
+def sync_receipt_directories(path):
+    """Persist the proof name and any freshly created parent links before a remote run exists."""
+    parent = os.path.realpath(os.path.dirname(path))
+    while True:
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        ancestor = os.path.dirname(parent)
+        if ancestor == parent:
+            return
+        parent = ancestor
+
+
 def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
     """Private host-only proof. Never returned by status, branch names or stdout."""
     path = os.path.abspath(path)
     if create:
+        if os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
+            fail("runner receipt directory must not contain symlinks; use its physical path")
         body = {"v": 1, "run_id": run_id, "proof": secrets.token_hex(32), "task_id": task_id,
                 "host_pid": host_pid or os.getppid(), "host_start": process_identity(host_pid or os.getppid()), "phase": "prepared",
                 "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
@@ -385,8 +442,13 @@ def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
             try:
                 os.link(temporary, path)  # publish complete bytes without replacing any existing proof
             except FileExistsError:
-                return receipt(path, run_id)
-            return {**body, "_created": True}
+                published = receipt(path, run_id)
+            else:
+                published = {**body, "_created": True}
+            # A retry may find the complete proof left after a previous failed sync.
+            # It needs the same barrier; existence alone is not crash durability.
+            sync_receipt_directories(path)
+            return published
         finally:
             os.unlink(temporary)
     try:
@@ -437,6 +499,16 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             attempt(kt, data, task, run_id, proof, retiring=True)
             result.update(created=False, run_id=run_id, state="already_started", launch=False)
             return
+        cache = {}
+        scopes = project_keys(data, task.get("project"), cache)
+        if not scopes:
+            fail("project reference must resolve uniquely before unattended work")
+        project_id = None
+        if scopes:
+            try:
+                project_id = kt.find_project(data, task["project"].strip())["id"]
+            except SystemExit:
+                fail("project reference must resolve uniquely before unattended work")
         claim = own_running_claim(kt, data, task)
         claim.setdefault("generation", secrets.token_hex(12))
         charged = [r for r in co["runs"] if (r.get("terminal") or {}).get("launch_state") != "not_launched"
@@ -446,14 +518,14 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         if any(unresolved(r) for r in co["runs"]):
             fail("an unresolved attempt needs reconciliation before another start")
         for other in data.get("tasks", []):
-            if other is task or not task.get("project"):
+            if other is task or not scopes:
                 continue
             other_co = other.get("coordination") or {}
-            if other.get("project") == task["project"] and other.get("claim") and other["claim"].get("status") != "done":
+            if scopes.intersection(project_keys(data, other.get("project"), cache)) and other.get("claim") and other["claim"].get("status") != "done":
                 fail("this project's other implementation is still claimed or unresolved")
-            if any(unresolved(r) and task["project"] in run_projects(other, r) for r in other_co.get("runs", [])):
+            if any(unresolved(r) and scopes.intersection(run_projects(other, r, data, cache)) for r in other_co.get("runs", [])):
                 fail("this project's other coordinated attempt needs completion or reconciliation")
-        record = {"id": run_id, "started_at": kt.now(), "agent": claim.get("agent"), "project_id": task.get("project"),
+        record = {"id": run_id, "started_at": kt.now(), "agent": claim.get("agent"), "project_id": project_id,
                   "unattended": True, "admission": "approved-todo", "events": [],
                   "_claim": claim_hash(kt, claim), "_proof": digest(proof["proof"])}
         co["runs"].append(record)

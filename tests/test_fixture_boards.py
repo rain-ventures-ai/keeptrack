@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -93,7 +94,12 @@ class FixtureBoards(unittest.TestCase):
         before = read_json(os.path.join(folder, "cards", "t_first.json"))["coordination"]
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        minimum = subprocess.run([sys.executable, os.path.join(KIT, "keeptrack.py"), "--file", os.path.join(folder, "tasks.json"),
+                                  "settings-set", "--min-kit", "124"], capture_output=True, text=True,
+                                 env=dict(os.environ, BOARD_USER="alex", BOARD_AGENT="codex"))
+        self.assertEqual(minimum.returncode, 0, minimum.stderr)
         data = kt.load_board()
+        self.assertGreaterEqual(kt.board_min_kit(data), 124)
         task = next(t for t in data["tasks"] if t["id"] == "t_first")
         self.assertEqual(task["coordination"], before)
         task["title"] = "Ordinary edit after upgrade"
