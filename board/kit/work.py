@@ -246,11 +246,11 @@ def claim_gate(kt, data, task, sid, executor, attended):
         co = coordinate(task)
         claim = task.get("claim") or {}
         runs = co["runs"]
-        if runs and claim.get("session_id") == sid and runs[-1].get("_claim") == claim_hash(kt, claim) and not runs[-1].get("terminal"):
+        renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
+        if renewing and runs and runs[-1].get("_claim") == claim_hash(kt, claim) and not runs[-1].get("terminal"):
             mine = runs[-1]
         if co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
             fail("this coordinated task requires its selected relay-local host; no claim written")
-        renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
         if task.get("column") != "todo" and not renewing:
             fail("unattended coordinated claims require an approved To do card; no claim written")
     for other in data.get("tasks", []):

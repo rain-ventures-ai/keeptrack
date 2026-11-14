@@ -3478,7 +3478,7 @@ def do_claim(a, tid, data):
         hist(t, f"assigned to @{user}: attended claim", f"{agent}@{user}")
         print(f"#{t['num']} assignees: {user}")
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
-                  "generation": (old.get("generation") if old.get("session_id") == sid else None) or secrets.token_hex(12),
+                  "generation": (old.get("generation") if old.get("session_id") == sid and old.get("status") != "done" else None) or secrets.token_hex(12),
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
     if attended(a):
@@ -5626,13 +5626,22 @@ def cmd_merge_card(a):
     data, _ = load()
     src, dst = find(data, a.src), find(data, a.into)
     if src["id"] == dst["id"]: sys.exit("a card cannot be merged into itself")
+    if unresolved_work(src):
+        sys.exit("refused: source card has an unresolved coordinated attempt; resolve it before merging")
     if src.get("claim") and src["claim"].get("status") != "done":
         sys.exit(f"refused: an agent is working on #{src.get('num')}; finish or release its claim first")
     if open_waiting(src):
         sys.exit(f"refused: #{src.get('num')} is waiting on {waiting_text(open_waiting(src))}; unwait it first")
     sid, did = src["id"], dst["id"]
     def fn(data):
+        _MUT["recheck"] = True
         s, d = find(data, sid), find(data, did)
+        if unresolved_work(s):
+            sys.exit("refused: source card has an unresolved coordinated attempt; resolve it before merging")
+        if s.get("claim") and s["claim"].get("status") != "done":
+            sys.exit(f"refused: an agent is working on #{s.get('num')}; finish or release its claim first")
+        if open_waiting(s):
+            sys.exit(f"refused: #{s.get('num')} is waiting on {waiting_text(open_waiting(s))}; unwait it first")
         if relation(d, sid) and relation(d, sid).get("status") == "merged":
             return   # a retry after the merge saved: only the archive is left
         merge_card_into(s, d)
@@ -8634,7 +8643,10 @@ def cmd_task_rm(a):
     """Delete a task that was created by mistake (the only other way out is done -> archive). Needs --yes.
     Nothing else points at a task, so only the card goes; its number is not reused."""
     def fn(data):
+        _MUT["recheck"] = True
         t = find(data, a.id)
+        if unresolved_work(t):
+            sys.exit("refused: card has an unresolved coordinated attempt; resolve it before deleting")
         c = t.get("claim") or {}
         if c and c.get("status") not in (None, "done"):
             sys.exit(f"#{t['num']} has an active claim ({c.get('agent') or c.get('on_behalf_of') or 'someone'}); release it first")
