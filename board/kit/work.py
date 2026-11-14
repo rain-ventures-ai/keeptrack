@@ -352,10 +352,11 @@ def claim_gate(kt, data, task, sid, executor, attended):
             fail("unattended coordinated claims require an approved To do card; no claim written")
     for other in data.get("tasks", []):
         for run in (other.get("coordination") or {}).get("runs", []):
+            if run is mine or not unresolved(run):
+                continue
             if other is not task and not scopes.intersection(run_projects(other, run, data, cache)):
                 continue
-            if run is not mine and unresolved(run):
-                fail("this project has an unresolved coordinated attempt; no claim written")
+            fail("this project has an unresolved coordinated attempt; no claim written")
 
 
 def renewal_gate(kt, data, task, claim):
@@ -367,12 +368,13 @@ def renewal_gate(kt, data, task, claim):
     identity = claim_hash(kt, claim)
     for other in data.get("tasks", []):
         for run in (other.get("coordination") or {}).get("runs", []):
+            if not unresolved(run):
+                continue
             if other is task and run.get("_claim") == identity and not run.get("terminal"):
                 continue  # the exact owning attempt may keep its own lease alive
             if other is not task and not scopes.intersection(run_projects(other, run, data, cache)):
                 continue
-            if unresolved(run):
-                fail("this project has an unresolved coordinated attempt; claim renewal refused")
+            fail("this project has an unresolved coordinated attempt; claim renewal refused")
 
 
 def own_running_claim(kt, data, task):
@@ -466,6 +468,8 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             return
         cache = {}
         scopes = project_keys(data, task.get("project"), cache)
+        if not scopes:
+            fail("project reference must resolve uniquely before unattended work")
         project_id = None
         if scopes:
             try:

@@ -103,6 +103,15 @@ class ProjectReferenceTests(unittest.TestCase):
         self.assertEqual(self.cli("--version").stdout.strip(), "keeptrack kit 124")
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_empty_scope_refuses_start_without_mutation_or_receipt(self):
+        self.legacy("todo"); data = self.read(); data["tasks"][0]["project"] = ""; self.write(data)
+        self.cli("claim", self.tid, "--executor", "relay-local", "--json")
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(SystemExit, "project.*resolve"):
+            self.invoke("start")
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse(Path(self.proof).exists())
+
 
 if __name__ == "__main__":
     unittest.main()
