@@ -2313,7 +2313,8 @@ def min_kit_needed(data):
     if (data.get("settings") or {}).get("card_contact_details") is False and CONTACT_DETAILS_KIT > needed:
         # older writers would still copy email and phone into cards
         needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
-    if any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
+    if data.get("rook_request_index") is not None or (data.get("settings") or {}).get("rook_request_index") is not None or \
+            any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
         needed, what = max(123, needed), "Cards carry Rook coordination and execution holds"
     return needed, what
 
@@ -3560,10 +3561,19 @@ def must_claim(t):
     return t["claim"]
 
 
+def coordinated_renewal_gate(data, task, claim):
+    if not claim.get("attended") and any(t.get("coordination") is not None for t in data.get("tasks", [])):
+        from types import SimpleNamespace
+        work_module().renewal_gate(SimpleNamespace(**globals()), data, task, claim)
+
+
 def cmd_heartbeat(a):
     def fn(data):
+        _MUT["recheck"] = True
         t = find(data, a.id); c = must_claim(t)
         claim_owner_check(data, t, a, "heartbeat")
+        if (a.status or c.get("status")) == "running":
+            coordinated_renewal_gate(data, t, c)
         if a.status == "running" and waiting_of(t):
             sys.exit(f"refused: {t['id']} is waiting on {waiting_text(waiting_of(t))}; its claim can't run until the wait ends "
                      "(unwait: whoever set it in that session, or a person)")
@@ -3938,6 +3948,8 @@ def cmd_unwait(a):
                 c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
                 msg += "; its claim is stuck again (it was stuck before the wait)"
             else:
+                _MUT["recheck"] = True
+                coordinated_renewal_gate(data, t, c)
                 busy = [] if c.get("attended") else busy_over_limit(data, t)   # reviving counts like a new claim
                 if busy:
                     msg += f"; its claim stays blocked: {limit_message(data, busy)}"   # keeps blocked_by_wait: no stale, no release
@@ -5302,22 +5314,31 @@ def cmd_auto_heartbeat(a):
                  and not (isinstance(v.get("beat_at"), (int, float)) and v["beat_at"] > due)}
         if not cards:
             return  # a person drives this session, no card is active, or this session's cards had their beat
-        gone, beaten, full = [], [], []
+        gone, beaten, full, held = [], [], [], []
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
-            gone.clear(); beaten.clear(); full.clear()
+            gone.clear(); beaten.clear(); full.clear(); held.clear()
             for tid, v in cards.items():   # every card this session (or the clone's, or BOARD_SESSION's) claimed and still holds
                 t = next((x for x in data.get("tasks", []) if x.get("id") == tid), None); c = (t or {}).get("claim")
                 if not c or c.get("status") == "done" or c.get("session_id") != v.get("session"):
                     gone.append(tid); continue  # released, finished, taken over or deleted: forget the card, keep the clone's session
+                if c.get("status") == "running":
+                    try:
+                        coordinated_renewal_gate(data, t, c)
+                    except SystemExit:
+                        held.append(tid); continue
                 if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
                     full.append(tid); continue   # said once, after the save: a lost race re-runs fn
                 c["heartbeat_at"] = now(); t["updated"] = now(); beaten.append(tid)
+            if held and not beaten:
+                sys.exit("claim renewal refused by an unresolved project hold; no board write")
         mutate(fn, "Agent heartbeat: " + ", ".join(cards))
         for tid in full:
             print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
                   "(another session may take the card)", file=sys.stderr)
+        for tid in held:
+            print(f"keeptrack: claim {tid} cannot renew through an unresolved project hold; inspect the coordinated attempt", file=sys.stderr)
         at = int(time.time())
 
         def change(entries):   # the record as it is now: only the entries this beat saw, and only while they are the same claim

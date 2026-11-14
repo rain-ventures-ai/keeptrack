@@ -108,6 +108,62 @@ def strict_archives(kt, data, base):
     return found
 
 
+MAX_REQUEST_RECEIPTS = 4096
+MAX_BOOTSTRAP_PARTS = 16
+MAX_BOOTSTRAP_CARDS = 10000
+
+
+def request_index(kt, data, base, lookup):
+    """Append-only absence evidence; archives never prune registered identities."""
+    index = data.get("rook_request_index")
+    marker = (data.get("settings") or {}).get("rook_request_index")
+    if index is not None or marker is not None:
+        ids = index.get("ids") if isinstance(index, dict) else None
+        if (type(marker) is not int or marker != 1 or not isinstance(index, dict) or set(index) != {"v", "ids", "digest"}
+                or type(index.get("v")) is not int or index["v"] != 1 or not isinstance(ids, list)
+                or len(ids) > MAX_REQUEST_RECEIPTS or any(not isinstance(i, str) or not re.fullmatch(r"t_[a-f0-9]{20}", i) for i in ids)
+                or len(set(ids)) != len(ids) or ids != sorted(ids) or index.get("digest") != digest(ids)):
+            fail("request index is missing or damaged; restore its complete committed version before intake")
+        return set(ids), None
+    # Only pre-index boards bootstrap. Do not silently rebuild a damaged index
+    # from surviving cards: deliberate deletion may have removed its only card.
+    parts = kt.archive_years(data)
+    if len(parts) > MAX_BOOTSTRAP_PARTS:
+        fail("request index bootstrap archive limit reached; controlled index migration is required before intake")
+    ids, found, seen = set(), None, 0
+    def collect(tasks, archived=False):
+        nonlocal found, seen
+        for task in tasks:
+            seen += 1
+            if seen > MAX_BOOTSTRAP_CARDS:
+                fail("request index bootstrap card limit reached; controlled index migration is required before intake")
+            if not isinstance(task, dict):
+                fail("request index bootstrap found an invalid card; repair its source before intake")
+            receipt = (task.get("coordination") or {}).get("request")
+            if not receipt:
+                continue
+            key = receipt.get("key") if isinstance(receipt, dict) else None
+            expected = "t_" + digest(["rook-work", key])[:20] if isinstance(key, str) and KEY.fullmatch(key) else None
+            if task.get("id") != expected or expected is None:
+                fail("request index bootstrap found an inconsistent request identity; repair its source before intake")
+            ids.add(expected)
+            if len(ids) > MAX_REQUEST_RECEIPTS:
+                fail("request receipt limit reached during bootstrap; no partial index was saved")
+            if archived and expected == lookup:
+                found = task
+    collect(data.get("tasks", []))
+    for part in parts:
+        archive, _ = kt.read_archive(part, base)
+        if not isinstance(archive, dict) or not isinstance(archive.get("tasks"), list):
+            fail("cannot establish request identity: an archive is missing or unreadable")
+        collect(archive["tasks"], archived=True)
+    ordered = sorted(ids)
+    data["rook_request_index"] = {"v": 1, "ids": ordered, "digest": digest(ordered)}
+    data.setdefault("settings", {})["rook_request_index"] = 1
+    require_current_kit(data)
+    return ids, found
+
+
 def view(kt, task, *, data=None, archived=False):
     co = public(task.get("coordination") or {})
     claim = task.get("claim") or {}
@@ -132,7 +188,7 @@ def view(kt, task, *, data=None, archived=False):
     elif claim and claim.get("status") != "done":
         state = "running" if kt.claim_state(data or {}, claim) == "running" else "reconciliation_required"
         next_step = "follow the current claim; a recorded claim is not proof of process liveness"
-    elif co.get("runs") and co["runs"][-1].get("result"):
+    elif co.get("runs") and co["runs"][-1].get("result") and (co["runs"][-1].get("resolution") or {}).get("disposition") != "retry-safe":
         state, next_step = "result_ready", "reconcile this run's host-attested evidence through the existing result/review path"
     elif task.get("column") == "todo":
         state, next_step = "awaiting_runner", "subject to can-start, opt-in and limits; runner availability has not been observed"
@@ -152,11 +208,14 @@ def request(kt, value):
     def change(data):
         kt._MUT["recheck"] = kt._MUT["rerun"] = True
         answer.clear()
+        ids, bootstrap_match = request_index(kt, data, kt._MUT["base"], tid)
         existing = next((t for t in data.get("tasks", []) if t.get("id") == tid), None)
         archived = False
-        if existing is None:
-            existing = strict_archives(kt, data, kt._MUT["base"]).get(tid)
+        if existing is None and tid in ids:
+            existing = bootstrap_match or strict_archives(kt, data, kt._MUT["base"]).get(tid)
             archived = existing is not None
+            if existing is None:
+                fail("indexed request card is missing; restore or locate its committed outcome, never recreate its identity")
         if existing is not None:
             receipt = (existing.get("coordination") or {}).get("request") or {}
             original = receipt.get("digest")
@@ -176,6 +235,8 @@ def request(kt, value):
                 fail("request_id already exists with a different original payload; show it instead of adding another card")
             answer.update(view(kt, existing, data=data, archived=archived), created=False)
             return
+        if len(ids) >= MAX_REQUEST_RECEIPTS:
+            fail("request receipt limit reached; retain replay identities and migrate the index before new intake")
         pr = kt.find_project(data, value["project"])
         original = digest({**value, "project": pr["id"]})
         if not any(c.get("id") == "backlog" for c in data.get("columns", [])):
@@ -191,6 +252,8 @@ def request(kt, value):
         require_current_kit(data)
         co["request"] = {"key": value["request_id"], "digest": original, "project_id": pr["id"],
                          "source_project": value["project"], "submitted_by": kt.who_am_i(), "received_at": ts}
+        data["rook_request_index"]["ids"] = sorted(ids | {tid})
+        data["rook_request_index"]["digest"] = digest(data["rook_request_index"]["ids"])
         task["rank"] = kt.append_rank([t.get("rank") for t in data.get("tasks", [])
                                        if t.get("column") == "backlog" and kt.valid_rank(t.get("rank"))])
         kt.append_priority_rank(data, task)
@@ -268,6 +331,21 @@ def claim_gate(kt, data, task, sid, executor, attended):
                 continue
             if run is not mine and unresolved(run):
                 fail("this project has an unresolved coordinated attempt; no claim written")
+
+
+def renewal_gate(kt, data, task, claim):
+    """A heartbeat or unwait cannot revive a different attempt through a project hold."""
+    if claim.get("attended"):
+        return
+    identity = claim_hash(kt, claim)
+    for other in data.get("tasks", []):
+        for run in (other.get("coordination") or {}).get("runs", []):
+            if other is task and run.get("_claim") == identity and not run.get("terminal"):
+                continue  # the exact owning attempt may keep its own lease alive
+            if other is not task and (not task.get("project") or task["project"] not in run_projects(other, run)):
+                continue
+            if unresolved(run):
+                fail("this project has an unresolved coordinated attempt; claim renewal refused")
 
 
 def own_running_claim(kt, data, task):
@@ -371,7 +449,7 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             if other is task or not task.get("project"):
                 continue
             other_co = other.get("coordination") or {}
-            if other.get("project") == task["project"] and other.get("claim") and kt.claim_state(data, other["claim"]) == "running":
+            if other.get("project") == task["project"] and other.get("claim") and other["claim"].get("status") != "done":
                 fail("this project's other implementation is still claimed or unresolved")
             if any(unresolved(r) and task["project"] in run_projects(other, r) for r in other_co.get("runs", [])):
                 fail("this project's other coordinated attempt needs completion or reconciliation")

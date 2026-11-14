@@ -1,5 +1,8 @@
 """Adversarial lifecycle traces. All boards and receipts are temporary."""
 import copy
+import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -140,6 +143,75 @@ class AdversarialTests(unittest.TestCase):
                 result = self.invoke("status")
                 self.assertEqual("reconciliation_required", result["state"])
                 self.assertEqual(column, result["column"])
+
+    def stale_legacy_with_hold(self, *, fresh=False):
+        self.held(); self.target(); data = self.read(); legacy = data["tasks"][1]
+        stamp = kt.now() if fresh else "2020-01-01T00:00:00Z"
+        legacy.update(column="in-progress", assignees=["owner"], claim={"agent": "codex", "on_behalf_of": "owner",
+                      "session_id": "private-session", "status": "running", "claimed_at": stamp, "heartbeat_at": stamp})
+        self.write(data)
+
+    def test_heartbeat_cannot_revive_a_claim_in_a_held_project(self):
+        self.stale_legacy_with_hold(); before = self.path.read_bytes()
+        result = self.cli("heartbeat", "t_target", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unresolved", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_auto_heartbeat_does_not_revive_a_held_project(self):
+        self.stale_legacy_with_hold(); before = self.path.read_bytes()
+        record = Path(kt.CLAIM_FILE)
+        record.write_text(json.dumps({"id": "t_target", "session": "private-session", "agent": "codex"}))
+        os.utime(record, (0, 0))
+        kt.cmd_auto_heartbeat(SimpleNamespace())
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_auto_heartbeat_still_services_an_unrelated_project(self):
+        self.stale_legacy_with_hold(); data = self.read(); other = copy.deepcopy(data["tasks"][1])
+        other.update(id="t_unrelated", project="pr_else", num=3); data["tasks"].append(other); self.write(data)
+        old = other["claim"]["heartbeat_at"]
+        record = Path(kt.CLAIM_FILE)
+        record.write_text(json.dumps({"cards": {tid: {"session": "private-session", "agent": "codex"}
+                                                for tid in ("t_target", "t_unrelated")}}))
+        os.utime(record, (0, 0))
+        kt.cmd_auto_heartbeat(SimpleNamespace())
+        after = self.read()
+        self.assertEqual(after["tasks"][1]["claim"]["heartbeat_at"], old)
+        self.assertNotEqual(after["tasks"][2]["claim"]["heartbeat_at"], old)
+
+    def test_unwait_cannot_revive_a_held_project(self):
+        self.stale_legacy_with_hold(fresh=True)
+        data = self.read(); task = data["tasks"][1]
+        task["waiting"] = {"on": "temporary pause", "who": "", "since": kt.now(), "by": "codex@owner",
+                           "by_session": kt.session_hash("private-session")}
+        task["claim"].update(status="blocked", blocked_by_wait=True); self.write(data)
+        before = self.path.read_bytes()
+        result = self.cli("unwait", "t_target", "--note", "pause ended", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unresolved", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_own_coordinated_attempt_can_renew_its_exact_claim(self):
+        self.create(); self.claim(); self.invoke("start")
+        self.cli("heartbeat", self.tid)
+        self.assertEqual("running", self.invoke("status")["state"])
+
+    def test_start_does_not_assume_a_stale_legacy_process_has_stopped(self):
+        self.create(); self.claim(); self.target()
+        data = self.read(); legacy = data["tasks"][1]
+        legacy.update(column="in-progress", claim={"agent": "claude", "session_id": "other-session", "status": "running",
+                      "claimed_at": "2020-01-01T00:00:00Z", "heartbeat_at": "2020-01-01T00:00:00Z"})
+        self.write(data); before = self.path.read_bytes()
+        with self.assertRaisesRegex(SystemExit, "claimed or unresolved"):
+            self.invoke("start")
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_retry_safe_result_has_next_action_to_retry(self):
+        self.create(); self.claim(); self.invoke("start")
+        self.invoke("event", {"id": "result", "kind": "result_ready", "links": ["https://example.com/result"]})
+        self.finish()
+        self.invoke("resolve", confirmed=True, disposition="retry-safe", note="Result is superseded; retry approved")
+        self.assertEqual("awaiting_runner", self.invoke("status")["state"])
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ const source = fs.readFileSync(path.join(__dirname, '../../board/board.js'), 'ut
 const clone = x => JSON.parse(JSON.stringify(x));
 const task = id => ({ id, num: 1, title: id, column: 'done', updated: '2020-01-01', details: 'Source details',
   todos: [], links: [], labels: [], assignees: [], contacts: [], comments: [], history: [],
-  coordination: { runs: [{ id: 'wr_example', terminal: { kind: 'finished' }, needs_reconciliation: true }] } });
+  project: 'pr_one', coordination: { runs: [{ id: 'wr_example', terminal: { kind: 'finished' }, needs_reconciliation: true }] } });
 const board = () => ({ columns: [{ id: 'todo' }, { id: 'done' }], tasks: [task('source')], contacts: [] });
 module.exports = async function run() {
   let current = board(), closed;
@@ -14,6 +14,8 @@ module.exports = async function run() {
     jcanon: JSON.stringify, waitingOf: () => null, editing: 'source', titleOf: () => 'source', editingDesc: false, backPending: null,
     KINDS: ['tasks', 'contacts'], sameJson: (a, b) => JSON.stringify(a) === JSON.stringify(b),
     byId: (d, k) => new Map((d[k] || []).map(t => [t.id, t])), writeBlocked: () => false, ask: async () => true,
+    claimState: () => 'running', agentLimitFull: () => '', nowIso: () => '2026-11-14T12:00:00Z', toast: () => {},
+    edit: async (id, fn) => { fn(current.tasks.find(t => t.id === id), current); return true; },
     el: () => ({ append() {} }), ui: { button: () => ({}), confirm: async () => true },
     $: () => ({ addEventListener: (event, fn) => { closed = fn; }, close: () => closed() }),
     mutate: (fn, message, ids, base, options) => { assert.equal(options?.recheck, true, 'destructive operation rechecks each save'); return fn(current); } });
@@ -23,8 +25,9 @@ module.exports = async function run() {
     source.slice(source.indexOf('  function mergeCardInto('), source.indexOf('  async function mergeCards(')) +
     source.slice(source.indexOf('  async function mergeCards('), source.indexOf('  async function finishMerge(')) +
     source.slice(source.indexOf('  function applyInverse('), source.indexOf('  async function undoLast(')) +
+    source.slice(source.indexOf('  async function clearWait('), source.indexOf('  function openPeopleMenu(')) +
     source.slice(source.indexOf('  async function deleteTask('), source.indexOf('  // Settings → Connection → Advanced → Move settings:')) +
-    '\nthis.api = { archivePlan, mergeCardInto, mergeCards, deleteTask, applyInverse, unresolvedRemoval };', context);
+    '\nthis.api = { archivePlan, mergeCardInto, mergeCards, deleteTask, applyInverse, unresolvedRemoval, clearWait };', context);
   const failures = [];
   const check = async (name, fn) => { try { await fn(); } catch (e) { failures.push(name + ': ' + e.message); } };
   await check('explicit archive retains unresolved attempt', () => {
@@ -57,6 +60,13 @@ module.exports = async function run() {
     const d = board(), before = clone(d), saved = clone(d); saved.tasks[0].coordination = null;
     assert.throws(() => context.api.applyInverse(d, { before: { tasks: [], contacts: [] }, after: saved }), /unresolved/i);
     assert.deepEqual(d, before);
+  });
+  await check('unwait does not revive another claim through a project hold', async () => {
+    current = board(); const legacy = task('target'); legacy.coordination = null;
+    legacy.waiting = { on: 'pause' }; legacy.claim = { status: 'blocked', blocked_by_wait: true };
+    current.tasks.push(legacy); context.state = clone(current);
+    await context.api.clearWait('target');
+    assert.equal(current.tasks[1].claim.status, 'blocked');
   });
   assert.deepEqual(failures, [], failures.join('\n'));
   assert.equal(context.api.unresolvedRemoval(board(), { tasks: [] }).id, 'source', 'fresh-save guard protects removal after a conflict choice');

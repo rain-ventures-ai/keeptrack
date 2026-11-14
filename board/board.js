@@ -4421,6 +4421,7 @@ if (typeof window !== 'undefined') (() => {
           }
         }
         else if (c.before_wait === 'stuck') { delete c.blocked_by_wait; delete c.before_wait; c.status = 'stuck'; }   // it still needs help: the wait did not fix that
+        else if (!c.attended && unresolvedProjectHold(n, t)) full = 'this project has an unresolved coordinated attempt';
         else if (c.attended || !agentLimitFull(id, n)) { delete c.blocked_by_wait; c.status = 'running'; c.heartbeat_at = nowIso(); }
         else full = agentLimitFull(id, n);   // keeps blocked_by_wait: still live, as `unwait` does
       }
@@ -8691,6 +8692,12 @@ if (typeof window !== 'undefined') (() => {
   function unresolvedRemoval(before, after) {
     const remaining = new Set(after.tasks.map(t => t.id));
     return before.tasks.find(t => !remaining.has(t.id) && unresolvedWork(t));
+  }
+  function unresolvedProjectHold(board, task) {
+    return board.tasks.some(other => other !== task && task.project && (other.coordination?.runs || []).some(run => {
+      const projects = [other.project, run.project_id, !run.project_id && String(other.coordination?.owner || '').replace(/^rook:/, '')];
+      return projects.includes(task.project) && (!run.terminal || (run.needs_reconciliation && !run.resolution));
+    }));
   }
   function archivePlan(d, rules) {   // takes what can be archived out of d; returns { year: { tasks, contacts, history: { id: [entries] } } }
     if (rules.taskId) {
