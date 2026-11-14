@@ -399,6 +399,21 @@ def process_identity(pid):
         return None
 
 
+def sync_receipt_directories(path):
+    """Persist the proof name and any freshly created parent links before a remote run exists."""
+    parent = os.path.realpath(os.path.dirname(path))
+    while True:
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        ancestor = os.path.dirname(parent)
+        if ancestor == parent:
+            return
+        parent = ancestor
+
+
 def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
     """Private host-only proof. Never returned by status, branch names or stdout."""
     path = os.path.abspath(path)
@@ -414,8 +429,13 @@ def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
             try:
                 os.link(temporary, path)  # publish complete bytes without replacing any existing proof
             except FileExistsError:
-                return receipt(path, run_id)
-            return {**body, "_created": True}
+                published = receipt(path, run_id)
+            else:
+                published = {**body, "_created": True}
+            # A retry may find the complete proof left after a previous failed sync.
+            # It needs the same barrier; existence alone is not crash durability.
+            sync_receipt_directories(path)
+            return published
         finally:
             os.unlink(temporary)
     try:
