@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import stat
+import tempfile
 import urllib.parse
 
 SCHEMA = 1
@@ -23,10 +24,20 @@ PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|sk-ant-|sk-proj-|xox[baprs]-)[A
                      r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
                      r"|(?<!\w)(?:\+\d{1,3}[ -]?)?\(?0\d{2,4}\)?[ -]\d{3,4}[ -]\d{3,4}(?!\w)"
                      r"|[$£€]\s*\d|\b\d+(?:\.\d+)?\s*(?:USD|GBP|EUR)\b")
+PRIVATE = re.compile(PRIVATE.pattern +
+    r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\b(?:sk_live_|rk_live_|glpat-)[A-Za-z0-9_-]{10,}"
+    r"|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"
+    r"|\(\d{3}\)\s*\d{3}[- ]\d{4}|\b(?:USD|GBP|EUR)\s+\d"
+    r"|\b\d[\d,]*(?:\.\d+)?\s+(?:dollars|pounds|euros)\b"
+    r"|[?&](?:token|access_token|api_key|apikey|secret|password|auth|authorization)=[^\s\"&]+", re.I)
+
+
+class Refused(SystemExit):
+    """A validation refusal, distinct from an uncertain transport/save failure."""
 
 
 def fail(message):
-    raise SystemExit("work: " + message)
+    raise Refused("work: " + message)
 
 
 def digest(value):
@@ -97,6 +108,8 @@ def view(kt, task, *, data=None, archived=False):
     wait = kt.open_waiting(task)
     if archived:
         state, next_step = "archived", "inspect archived outcome; no new task was created"
+    elif any(r.get("needs_reconciliation") and not r.get("resolution") for r in co.get("runs", [])):
+        state, next_step = "reconciliation_required", "inspect this run's effects; an old card outcome or link does not resolve them"
     elif task.get("column") == "done":
         state, next_step = ("cancelled" if task.get("outcome") == "cancelled" else "complete"), "no execution is requested"
     elif wait:
@@ -106,10 +119,10 @@ def view(kt, task, *, data=None, archived=False):
     elif claim and claim.get("status") != "done":
         state = "running" if kt.claim_state(data or {}, claim) == "running" else "reconciliation_required"
         next_step = "follow the current claim; a recorded claim is not proof of process liveness"
-    elif any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict)):
-        state, next_step = "result_ready", "reconcile the linked PR through the existing review and merge path"
     elif any(unresolved(r) for r in co.get("runs", [])):
         state, next_step = "reconciliation_required", "the runner must reconcile its unresolved attempt before another launch"
+    elif co.get("runs") and co["runs"][-1].get("result"):
+        state, next_step = "result_ready", "reconcile this run's host-attested evidence through the existing result/review path"
     elif task.get("column") == "todo":
         state, next_step = "awaiting_runner", "subject to can-start, opt-in and limits; runner availability has not been observed"
     else:
@@ -123,11 +136,11 @@ def request(kt, value):
     value = payload(value)
     safe_content(kt, value)
     tid = "t_" + digest(["rook-work", value["request_id"]])[:20]
-    original = digest(value)
     answer = {}
 
     def change(data):
         kt._MUT["recheck"] = kt._MUT["rerun"] = True
+        answer.clear()
         existing = next((t for t in data.get("tasks", []) if t.get("id") == tid), None)
         archived = False
         if existing is None:
@@ -135,11 +148,14 @@ def request(kt, value):
             archived = existing is not None
         if existing is not None:
             receipt = (existing.get("coordination") or {}).get("request") or {}
-            if receipt.get("digest") != original:
+            project = existing.get("project") if value["project"] in {receipt.get("source_project"), existing.get("project")} else kt.find_project(data, value["project"])["id"]
+            original = digest({**value, "project": project})
+            if receipt.get("digest") != original and not (not receipt.get("source_project") and receipt.get("digest") == digest(value)):
                 fail("request_id already exists with a different original payload; show it instead of adding another card")
             answer.update(view(kt, existing, data=data, archived=archived), created=False)
             return
         pr = kt.find_project(data, value["project"])
+        original = digest({**value, "project": pr["id"]})
         if not any(c.get("id") == "backlog" for c in data.get("columns", [])):
             fail("this board has no Backlog column")
         ts = kt.now()
@@ -150,7 +166,7 @@ def request(kt, value):
                 "history": [], "comments": [], "claim": None, "created": ts, "updated": ts,
                 "createdBy": kt.who_am_i()}
         co = coordinate(task)
-        co["request"] = {"key": value["request_id"], "digest": original, "submitted_by": kt.who_am_i(), "received_at": ts}
+        co["request"] = {"key": value["request_id"], "digest": original, "source_project": value["project"], "submitted_by": kt.who_am_i(), "received_at": ts}
         task["rank"] = kt.append_rank([t.get("rank") for t in data.get("tasks", [])
                                        if t.get("column") == "backlog" and kt.valid_rank(t.get("rank"))])
         kt.append_priority_rank(data, task)
@@ -185,7 +201,7 @@ def session(kt):
 
 
 def claim_hash(kt, claim):
-    return digest([claim.get("agent"), claim.get("session_id")])
+    return digest([claim.get("agent"), claim.get("session_id"), claim.get("generation") or claim.get("claimed_at")])
 
 
 def unresolved(run):
@@ -238,14 +254,18 @@ def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
         body = {"v": 1, "run_id": run_id, "proof": secrets.token_hex(32), "task_id": task_id,
                 "host_pid": host_pid or os.getppid(), "host_start": process_identity(host_pid or os.getppid()), "phase": "prepared",
                 "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+        fd, temporary = tempfile.mkstemp(prefix=".receipt-", dir=os.path.dirname(path))
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:
-            return receipt(path, run_id)
-        with os.fdopen(fd, "w") as stream:
-            json.dump(body, stream)
-            stream.flush(); os.fsync(stream.fileno())
-        return body
+            with os.fdopen(fd, "w") as stream:
+                json.dump(body, stream)
+                stream.flush(); os.fsync(stream.fileno())
+            try:
+                os.link(temporary, path)  # publish complete bytes without replacing any existing proof
+            except FileExistsError:
+                return receipt(path, run_id)
+            return {**body, "_created": True}
+        finally:
+            os.unlink(temporary)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd) as stream:
@@ -288,11 +308,14 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             fail("this executor is not supported by the local runner")
         old = next((r for r in co["runs"] if r.get("id") == run_id), None)
         if old:
-            attempt(kt, data, task, run_id, proof)
+            attempt(kt, data, task, run_id, proof, retiring=True)
             result.update(created=False, run_id=run_id, state="already_started", launch=False)
             return
         claim = own_running_claim(kt, data, task)
-        if len(co["runs"]) >= MAX_RUNS:
+        claim.setdefault("generation", secrets.token_hex(12))
+        charged = [r for r in co["runs"] if (r.get("terminal") or {}).get("launch_state") != "not_launched"
+                   and (r.get("resolution") or {}).get("disposition") != "retry-safe"]
+        if len(charged) >= MAX_RUNS:
             fail("attempt limit reached; retain the receipts and reconcile the task")
         if any(unresolved(r) for r in co["runs"]):
             fail("an unresolved attempt needs reconciliation before another start")
@@ -309,7 +332,21 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         co["runs"].append(record)
         kt.hist(task, "Rook attempt started " + run_id)
         result.update(created=True, run_id=run_id, state="recorded", launch=True)
-    kt.mutate(change, "Rook: record attempt")
+    try:
+        kt.mutate(change, "Rook: record attempt")
+    except Refused:
+        # Only definite validation refusal is cleaned up. A lost response/transport
+        # failure retains its proof, since the remote mutation may have succeeded.
+        if proof.get("_created"):
+            try:
+                saved, _ = kt.load()
+                recorded = any(r.get("id") == run_id and r.get("_proof") == digest(proof["proof"])
+                               for t in saved.get("tasks", []) for r in (t.get("coordination") or {}).get("runs", []))
+                if not recorded:
+                    os.unlink(proof_path)
+            except (Exception, SystemExit):
+                pass  # cannot establish absence: retain proof and report the original refusal
+        raise
     print(json.dumps(result))
 
 
@@ -325,7 +362,8 @@ def release_owned(kt, ref):
             answer.update(released=False, reason="no matching claim; task unchanged")
             return
         task["claim"] = None
-        preserve = task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
+        preserve = any(unresolved(r) for r in (task.get("coordination") or {}).get("runs", [])) or \
+            task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
             any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
         if not preserve:
             kt.move_task_to_column(data, task, "todo")
@@ -371,7 +409,7 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
     def change(data):
         kt._MUT["recheck"] = kt._MUT["rerun"] = True
         task = kt.find(data, ref)
-        run = attempt(kt, data, task, run_id, proof, retiring=final)
+        run = attempt(kt, data, task, run_id, proof, retiring=True)
         prior = ([run["terminal"]] if run.get("terminal") else []) + run["events"]
         existing = next((e for e in prior if e["id"] == clean["id"]), None)
         if existing:
@@ -379,6 +417,8 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
                 fail("event id already has a different payload")
             result.update(created=False, task=view(kt, task, data=data))
             return
+        if not final:
+            attempt(kt, data, task, run_id, proof)
         if run.get("terminal"):
             fail("this attempt is already sealed")
         if not final:
@@ -388,17 +428,21 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             if len(run["events"]) >= MAX_EVENTS:
                 fail("progress limit reached; the terminal receipt remains available")
         entry = {**clean, "digest": digest(clean), "at": kt.now()}
+        if clean["links"] and (final or clean["kind"] == "result_ready"):
+            # Only the host holding this attempt's receipt can attest these links.
+            # No inference from task column, old waits or arbitrary task PR links.
+            run["result"] = {"links": clean["links"], "at": entry["at"], "event_id": clean["id"]}
         if final:
             run["terminal"] = entry
             claim = task.get("claim") or {}
             pending = task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
                 any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
-            run["needs_reconciliation"] = bool(not pending and clean["launch_state"] != "not_launched")
+            run["needs_reconciliation"] = bool(not run.get("result") and clean["launch_state"] != "not_launched")
             # Only remove this run's exact claim; never invoke ordinary release's stale/no-claim exceptions.
             if claim and claim_hash(kt, claim) == run["_claim"] and coordinate(task)["runs"][-1] is run:
                 task["claim"] = None
                 if not pending:
-                    kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] else "todo")
+                    kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] or run.get("result") else "todo")
                 kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
         else:
             run["events"].append(entry)
@@ -429,13 +473,24 @@ def resolve(kt, args):
             result.update(created=False, task=view(kt, task, data=data)); return
         if not run.get("terminal"):
             fail("seal the historical attempt before resolving its effects")
-        if not run.get("needs_reconciliation"):
+        if not run.get("needs_reconciliation") and args.disposition != "retry-safe":
             fail("this attempt has no unresolved effects")
         pending = task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
             any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
-        if args.disposition == "recorded-result" and not pending:
-            fail("record the verified outcome or existing artifact on the task first")
+        if args.disposition == "recorded-result":
+            link = getattr(args, "result_link", None)
+            known = [x.get("url") for x in task.get("links", []) if isinstance(x, dict)]
+            attested = (run.get("result") or {}).get("links", [])
+            if link:
+                safe_content(kt, link)
+                if link not in known or not link.startswith("https://") or urllib.parse.urlsplit(link).username or urllib.parse.urlsplit(link).password:
+                    fail("record the verified result link on the task first")
+                run["result"] = {"links": [link], "at": kt.now(), "attestation": "owner-confirmed resolution"}
+            elif not any(url in known for url in attested):
+                fail("record the verified run result first; select its task link with --result-link")
         run["resolution"] = {**resolution, "at": kt.now(), "by": kt.who_am_i()}
+        if args.disposition == "recorded-result" and task.get("column") == "todo" and not task.get("claim"):
+            kt.move_task_to_column(data, task, "in-progress")
         if args.disposition == "retry-safe" and not pending and not task.get("claim"):
             kt.move_task_to_column(data, task, "todo")
         kt.hist(task, "Rook attempt resolved: " + note)
@@ -451,6 +506,7 @@ def parser(sub, callback):
     resolution.add_argument("id"); resolution.add_argument("--run-id", required=True); resolution.add_argument("--receipt", required=True)
     resolution.add_argument("--disposition", required=True, choices=("retry-safe", "recorded-result"))
     resolution.add_argument("--note", required=True); resolution.add_argument("--confirmed", action="store_true")
+    resolution.add_argument("--result-link", help="owner-verified link already on this task, explicitly bound to this run")
     resolution.set_defaults(f=callback, work_action="resolve")
     release = sub.add_parser("work-release-owned", help="atomic runner cleanup: releases only this exact claim and preserves waits/results")
     release.add_argument("id")

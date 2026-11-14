@@ -3474,6 +3474,7 @@ def do_claim(a, tid, data):
         hist(t, f"assigned to @{user}: attended claim", f"{agent}@{user}")
         print(f"#{t['num']} assignees: {user}")
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
+                  "generation": (old.get("generation") if old.get("session_id") == sid else None) or secrets.token_hex(12),
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
     if attended(a):
