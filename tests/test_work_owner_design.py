@@ -195,6 +195,37 @@ class OwnerDesignTests(unittest.TestCase):
             with self.subTest(value=value):
                 work.safe_content(kt, {"summary": value})
 
+    def test_screen_accepts_admin_words_and_plain_numbers_after_sk(self):
+        for value in ("Fix the task-admin-permissions page", "Desk-Admin-Panel-overview", "risk-admin-review-for-q3",
+                      "TASK-1234567890123456", "disk-usage-report-2024111412000011", "task-svcacct-migration-plan-for-q3"):
+            with self.subTest(value=value):
+                work.safe_content(kt, {"summary": value})
+
+    def test_screen_refuses_prefixed_keys_in_every_position(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        for value in ("sk-svcacct-" + tail, "sk-admin-" + tail, "sk-ant-" + tail, "sk-proj-" + tail,
+                      "keysk-svcacct-" + tail, "keysk-admin-" + tail, "tokensk-ant-" + tail, "9sk-proj-" + tail,
+                      "x\nsk-admin-" + tail, "x\tsk-svcacct-" + tail, "x\rsk-ant-" + tail):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, {"summary": value})
+
+    def test_cli_unwait_of_an_expired_claim_in_todo_stays_in_todo_with_the_claim_released(self):
+        self.create()
+        data = self.read(); task = data["tasks"][0]
+        task["coordination"] = None; task["column"] = "todo"
+        task["waiting"] = {"on": "Existing wait", "since": "2026-01-01", "nudge": "2027-01-01"}
+        task["claim"] = {"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session", "status": "blocked",
+                         "blocked_by_wait": True, "unattended_approved": True, "claimed_at": "2026-01-01T00:00:00Z",
+                         "heartbeat_at": "2026-01-01T00:00:00Z"}
+        self.write(data)
+        with mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("BOARD_AGENT", None)
+            kt.cmd_unwait(SimpleNamespace(id=self.tid, note="wait is over", session="private-session"))
+        task = self.read()["tasks"][0]
+        self.assertIsNone(task["claim"])
+        self.assertEqual(task["column"], "todo")
+
     def test_each_decoded_string_is_screened_not_the_json_text(self):
         # A newline, then sk-, then a hyphenated tail: only a screen of the decoded string refuses it.
         with self.assertRaises(SystemExit):

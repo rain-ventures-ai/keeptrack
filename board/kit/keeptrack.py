@@ -3950,7 +3950,7 @@ def cmd_unwait(a):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
                 requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t) \
-                    and t.get("column") in ("todo", "in-progress")
+                    and t.get("column") == "in-progress"
                 t["claim"] = None
                 if requeue:
                     move_task_to_column(data, t, "todo")

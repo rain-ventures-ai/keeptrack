@@ -20,8 +20,9 @@ RUN = re.compile(r"wr_[a-f0-9]{24}\Z")
 PR_LINK = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+(?:[?#].*)?\Z")
 PROGRESS = {"progress", "waiting", "result_ready", "failed"}
 PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_.-]{10,}"
-                     r"|sk-(?:ant-|proj-|svcacct-|admin-)[A-Za-z0-9_.-]{10,}"
-                     r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|sk-(?:[A-Za-z0-9_]*-)*(?=[A-Za-z0-9_]*\d)[A-Za-z0-9_]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY"
+                     r"|(?<![A-Za-z0-9])sk-(?:ant-|proj-|svcacct-|admin-)[A-Za-z0-9_.-]{10,}"
+                     r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"
+                     r"|sk-(?:[A-Za-z0-9_]*-)*(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY"
                      r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
                      r"|(?<!\w)(?:\+\d{1,3}[ -]?)?\(?0\d{2,4}\)?[ -]\d{3,4}[ -]\d{3,4}(?!\w)"
                      r"|[$£€]\s*\d|\b\d+(?:\.\d+)?\s*(?:USD|GBP|EUR)\b")
