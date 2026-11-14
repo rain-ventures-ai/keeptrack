@@ -418,6 +418,8 @@ def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
     """Private host-only proof. Never returned by status, branch names or stdout."""
     path = os.path.abspath(path)
     if create:
+        if os.path.realpath(os.path.dirname(path)) != os.path.dirname(path):
+            fail("runner receipt directory must not contain symlinks; use its physical path")
         body = {"v": 1, "run_id": run_id, "proof": secrets.token_hex(32), "task_id": task_id,
                 "host_pid": host_pid or os.getppid(), "host_start": process_identity(host_pid or os.getppid()), "phase": "prepared",
                 "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}

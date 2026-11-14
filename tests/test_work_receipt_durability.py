@@ -42,6 +42,19 @@ class ReceiptDurabilityTests(unittest.TestCase):
                 self.invoke("start")
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_symlinked_receipt_parent_refuses_before_publication_or_mutation(self):
+        self.create(); self.claim()
+        directory = Path(self.tmp.name) / "physical"
+        directory.mkdir()
+        linked = Path(self.tmp.name) / "new-link"
+        linked.symlink_to(directory, target_is_directory=True)
+        self.proof = str(linked / "receipt.json")
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(SystemExit, "receipt directory.*symlink"):
+            self.invoke("start")
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse((directory / "receipt.json").exists())
+
     def test_new_directory_ancestry_is_durable_before_canonical_mutation(self):
         self.create(); self.claim()
         directory = Path(self.tmp.name) / "new-state" / "receipts"
