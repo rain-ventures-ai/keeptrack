@@ -2315,7 +2315,7 @@ def min_kit_needed(data):
         needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
     if data.get("rook_request_index") is not None or (data.get("settings") or {}).get("rook_request_index") is not None or \
             any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
-        needed, what = max(124, needed), "Cards carry Rook coordination and execution holds"
+        needed, what = max(125, needed), "Cards carry Rook coordination and execution holds"
     return needed, what
 
 
@@ -3624,6 +3624,8 @@ def move_task_to_column(data, task, column, a=None):
         return old
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
+    if old in ("todo", "in-progress") and column not in ("todo", "in-progress") and isinstance(task.get("claim"), dict):
+        task["claim"].pop("unattended_approved", None)   # leaving approved work ends the approval; coming back restores nothing
     if "done" in (old, column):
         drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data, a)
     if data.get("layout") == "split":

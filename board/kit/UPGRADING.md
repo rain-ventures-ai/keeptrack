@@ -26,13 +26,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 
 ## Versions
 ### v125 (schema 4)
-Follow-ups from the independent review of the durable Rook task owner. No data change and no migration; the board minimum stays at 124.
+Follow-ups from the independent review of the durable Rook task owner. No data change and no migration. New coordination writes raise `settings.min_kit` to 125, so a v124 runner or CLI becomes read-only on the board and cannot skip the new checks. When upgrading a board that already has coordination, explicitly run `keeptrack.py settings-set --min-kit 125` within the upgrade PR before unattended use. Doctor reports the missing minimum. Upgrade the runner's kit first, then the board.
 - `work-start` refuses unless the card is still In progress under its approved claim. Moving the card to Backlog after the claim withdraws approval. A refused start leaves no new receipt.
 - A claim renewal keeps `unattended_approved` only while the card is in To do or In progress.
 - `work-start` refuses a receipt made for another task and a run ID that any task on the board already holds.
 - A board-wide `watch` reports coordinated runs with a new event kind, `run`: run started, run finished, held for unknown effect, run resolved. The snapshot keeps a hash of each run ID and one state word. It never holds the claim hash, proof, receipt or host process.
 - The work content screen no longer refuses ordinary words that end in `sk-` (for example `risk-assessment-for-q3-roadmap`). Real key shapes still refuse.
-- Run `kit-update` only. Check: `kit-check` says v125, and `keeptrack.py watch --help` lists `run` among the kinds. An older watch cursor makes no false run events on its first poll.
+- A runner release (`work-release-owned`) or a not-launched final event returns a card to To do only when it is still In progress or To do. A card the owner moved elsewhere stays where they put it.
+- Moving a card out of To do or In progress with the CLI ends its unattended approval; moving it back restores nothing. The web board's move does not clear it yet. Until it does, a card the owner moves out and back in on the web board can still start. Prefer moving a withdrawn card to Backlog and releasing the claim.
+- `watch` shows a run as running until a terminal receipt lands. A run that never ends, or whose claim went stale, still shows as running.
+- Run `kit-update` only (then `settings-set --min-kit 125` on a coordinated board). Check: `kit-check` says v125, and `keeptrack.py watch --help` lists `run` among the kinds. An older watch cursor makes no false run events on its first poll.
 ### v124 (schema 4)
 Fixes historical project references bypassing durable Rook holds. Update both CLI/plugin and web clients. New coordination writes raise `settings.min_kit` to 124; when upgrading a board that already has coordination, explicitly run `keeptrack.py settings-set --min-kit 124` within the upgrade PR before unattended use. Doctor reports the missing minimum. The board data schema stays compatible; raw project references are preserved, new run scopes use canonical IDs, and unresolved/ambiguous starts refuse. No runner or timer is enabled.
 

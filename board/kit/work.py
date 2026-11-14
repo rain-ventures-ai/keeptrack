@@ -108,7 +108,7 @@ def coordinate(task):
 def require_current_kit(data):
     settings = data.setdefault("settings", {})
     minimum = settings.get("min_kit")
-    settings["min_kit"] = max(124, minimum) if type(minimum) is int else 124
+    settings["min_kit"] = max(125, minimum) if type(minimum) is int else 125
 
 
 def strict_archives(kt, data, base):
@@ -602,8 +602,8 @@ def release_owned(kt, ref, generation=None):
         preserve = any(unresolved(r) for r in (task.get("coordination") or {}).get("runs", [])) or \
             task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
             any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
-        if not preserve and claim.get("unattended_approved") is True:
-            kt.move_task_to_column(data, task, "todo")
+        if not preserve and claim.get("unattended_approved") is True and task.get("column") in ("in-progress", "todo"):
+            kt.move_task_to_column(data, task, "todo")   # a card the owner moved elsewhere stays where they put it
         kt.hist(task, "runner released its exact claim")
         kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
         answer.update(released=True, column=task.get("column"))
@@ -679,7 +679,7 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             # Only remove this run's exact claim; never invoke ordinary release's stale/no-claim exceptions.
             if claim and claim_hash(kt, claim) == run["_claim"] and coordinate(task)["runs"][-1] is run:
                 task["claim"] = None
-                if not pending:
+                if not pending and task.get("column") in ("in-progress", "todo"):
                     kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] or run.get("result")
                                            or not run.get("unattended") or run.get("admission") != "approved-todo"
                                            or claim.get("unattended_approved") is not True or claim.get("attended") else "todo")

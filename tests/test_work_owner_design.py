@@ -65,6 +65,70 @@ class OwnerDesignTests(unittest.TestCase):
                     kt.do_claim(self.claim_args(), self.tid, data)
                 self.assertIs(task["claim"].get("unattended_approved") is True, kept)
 
+    def test_renewal_through_the_claim_command_does_not_keep_approval_from_backlog(self):
+        self.create(); self.claim()
+        data = self.read(); task = data["tasks"][0]
+        task["coordination"] = None   # an ordinary card, so only the claim command's own rules apply
+        task["column"] = "backlog"
+        task["claim"].update(session_id="private-session", status="running", unattended_approved=True)
+        self.write(data)
+        args = SimpleNamespace(id=self.tid, for_user=None, agent=None, session=None, attended=False, assign_to_me=False,
+                               force=False, session_url=None, note=None, executor=None, on_behalf_of=None, json=False)
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(kt, "git_branch", return_value="fixture"):
+            kt.cmd_claim(args)
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "in-progress")
+        self.assertNotIn("unattended_approved", task["claim"])
+
+    # withdrawn approval must not put the card back in To do
+    def withdraw(self):
+        data = self.read(); data["tasks"][0]["column"] = "backlog"; self.write(data)
+
+    def test_release_owned_leaves_a_withdrawn_card_in_backlog(self):
+        self.create(); self.claim(); self.withdraw()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            work.release_owned(kt, self.tid, self.claim_generation)
+        answer = json.loads(out.getvalue())
+        self.assertTrue(answer["released"])
+        self.assertEqual(answer["column"], "backlog")
+        self.assertEqual(self.read()["tasks"][0]["column"], "backlog")
+
+    def test_release_owned_still_requeues_an_in_progress_card(self):
+        self.create(); self.claim()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            work.release_owned(kt, self.tid, self.claim_generation)
+        self.assertEqual(json.loads(out.getvalue())["column"], "todo")
+
+    def test_final_not_launched_event_leaves_a_withdrawn_card_in_backlog(self):
+        self.create(); self.claim(); self.invoke("start"); self.withdraw()
+        self.finish(launch_state="not_launched")
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "backlog")
+        self.assertIsNone(task["claim"])
+
+    def test_final_not_launched_event_still_requeues_an_in_progress_card(self):
+        self.create(); self.claim(); self.invoke("start")
+        self.finish(launch_state="not_launched")
+        self.assertEqual(self.read()["tasks"][0]["column"], "todo")
+
+    # leaving In progress or To do ends the approval, so coming back restores nothing
+    def test_leaving_and_returning_does_not_restore_approval(self):
+        self.create(); self.claim()
+        data = self.read(); task = data["tasks"][0]
+        kt.move_task_to_column(data, task, "backlog")
+        self.assertNotIn("unattended_approved", task["claim"])
+        kt.move_task_to_column(data, task, "in-progress")
+        self.write(data)
+        with self.assertRaisesRegex(SystemExit, "unattended|approval|approved"):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+
+    def test_moving_between_todo_and_in_progress_keeps_approval(self):
+        self.create(); self.claim()
+        data = self.read(); task = data["tasks"][0]
+        kt.move_task_to_column(data, task, "todo"); kt.move_task_to_column(data, task, "in-progress")
+        self.assertIs(task["claim"]["unattended_approved"], True)
+
     # 3. receipt bound to its task; run ID unique on the board
     def test_receipt_of_another_task_is_refused(self):
         self.create(); self.claim()
