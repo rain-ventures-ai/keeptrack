@@ -15,6 +15,7 @@ module.exports = async function run() {
     KINDS: ['tasks', 'contacts'], sameJson: (a, b) => JSON.stringify(a) === JSON.stringify(b),
     byId: (d, k) => new Map((d[k] || []).map(t => [t.id, t])), writeBlocked: () => false, ask: async () => true,
     claimState: () => 'running', agentLimitFull: () => '', nowIso: () => '2026-11-14T12:00:00Z', toast: () => {},
+    isSplit: () => false,
     edit: async (id, fn) => { fn(current.tasks.find(t => t.id === id), current); return true; },
     el: () => ({ append() {} }), ui: { button: () => ({}), confirm: async () => true },
     $: () => ({ addEventListener: (event, fn) => { closed = fn; }, close: () => closed() }),
@@ -67,6 +68,20 @@ module.exports = async function run() {
     current.tasks.push(legacy); context.state = clone(current);
     await context.api.clearWait('target');
     assert.equal(current.tasks[1].claim.status, 'blocked');
+  });
+  await check('stale attended wait clearing does not approve unattended execution', async () => {
+    current = board(); current.tasks[0].coordination = null; current.tasks[0].column = 'in-progress';
+    current.tasks[0].claim = { status: 'blocked', blocked_by_wait: true, attended: true };
+    context.state = clone(current); context.claimState = () => 'stale';
+    await context.api.clearWait('source');
+    assert.equal(current.tasks[0].column, 'in-progress'); assert.equal(current.tasks[0].claim, null);
+  });
+  await check('stale approved unattended wait can requeue', async () => {
+    current = board(); current.tasks[0].coordination = null; current.tasks[0].column = 'in-progress';
+    current.tasks[0].claim = { status: 'blocked', blocked_by_wait: true, unattended_approved: true };
+    context.state = clone(current); context.claimState = () => 'stale';
+    await context.api.clearWait('source');
+    assert.equal(current.tasks[0].column, 'todo'); assert.equal(current.tasks[0].claim, null);
   });
   assert.deepEqual(failures, [], failures.join('\n'));
   assert.equal(context.api.unresolvedRemoval(board(), { tasks: [] }).id, 'source', 'fresh-save guard protects removal after a conflict choice');

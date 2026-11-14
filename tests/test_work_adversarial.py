@@ -213,6 +213,18 @@ class AdversarialTests(unittest.TestCase):
         self.invoke("resolve", confirmed=True, disposition="retry-safe", note="Result is superseded; retry approved")
         self.assertEqual("awaiting_runner", self.invoke("status")["state"])
 
+    def test_stale_attended_wait_never_becomes_unattended_approval(self):
+        self.create()
+        self.cli("claim", self.tid, "--attended")
+        self.cli("wait", self.tid, "--on", "temporary pause")
+        data = self.read(); data["tasks"][0]["claim"].update(heartbeat_at="2020-01-01T00:00:00Z", claimed_at="2020-01-01T00:00:00Z")
+        self.write(data)
+        self.cli("unwait", self.tid, "--note", "pause ended")
+        task = self.read()["tasks"][0]
+        self.assertIsNone(task["claim"])
+        self.assertEqual("in-progress", task["column"])
+        self.assertNotEqual(self.cli("claim", self.tid, "--executor", "relay-local", ok=False).returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

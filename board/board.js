@@ -4415,7 +4415,7 @@ if (typeof window !== 'undefined') (() => {
       if (c && c.status === 'blocked' && c.blocked_by_wait) {
         if (claimState({ ...c, status: 'running' }) === 'stale') {   // its session is gone: release the claim, back to To do (at the end)
           delete c.blocked_by_wait; t.claim = null;
-          if (t.column !== 'todo' && n.columns.some(x => x.id === 'todo')) {
+          if (c.unattended_approved === true && !c.attended && !unresolvedWork(t) && t.column !== 'todo' && n.columns.some(x => x.id === 'todo')) {
             const last = n.tasks.filter(x => x !== t && x.column === 'todo' && validRank(x.rank)).map(x => x.rank).sort().pop() || null;
             t.column = 'todo'; if (isSplit(n)) t.rank = keyBetween(last, null);
           }

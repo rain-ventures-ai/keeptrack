@@ -3909,7 +3909,8 @@ def cmd_wait(a):
 
 def cmd_unwait(a):
     """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
-    person's to clear. A claim `wait` blocked runs again (a young one) or goes back to To do (one older than the stale limit)."""
+    person's to clear. A claim `wait` blocked runs again (a young one); an expired claim requeues only with retained
+    unattended admission. Clearing a wait never creates approval."""
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
@@ -3940,10 +3941,14 @@ def cmd_unwait(a):
         if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
-                hist(t, f"released to todo: the claim's session sent no heartbeat for {_age(age)}")
-                t["claim"] = None; move_task_to_column(data, t, "todo"); tid = t["id"]
+                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t)
+                t["claim"] = None
+                if requeue:
+                    move_task_to_column(data, t, "todo")
+                hist(t, f"released expired claim after {_age(age)}; " + ("returned to todo" if requeue else "current column preserved; no unattended approval"))
+                tid = t["id"]
                 _MUT["after"].append(lambda d: drop_claim_file(tid))
-                msg += "; its old claim is released and the card is back in To do"
+                msg += "; its old claim is released" + (" and the card is back in To do" if requeue else "; its current column is kept")
             elif c.get("before_wait") == "stuck":
                 c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
                 msg += "; its claim is stuck again (it was stuck before the wait)"
