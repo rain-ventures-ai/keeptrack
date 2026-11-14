@@ -1,0 +1,343 @@
+"""Kit v125: follow-ups from the independent review of the durable Rook task owner (all storage is temporary)."""
+import contextlib
+import copy
+import io
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+import test_work as base
+import test_work_review as review
+
+kt = base.kt
+work = kt.work_module()
+
+
+class OwnerDesignTests(unittest.TestCase):
+    setUp = base.WorkTests.setUp
+    write = base.WorkTests.write
+    read = base.WorkTests.read
+    invoke = base.WorkTests.invoke
+    create = base.WorkTests.create
+    claim = base.WorkTests.claim
+    finish = base.WorkTests.finish
+    api_cas = review.ReviewTests.api_cas
+
+    def test_release_125_is_consistent(self):
+        root = Path(base.SOURCE).parents[2]
+        version = json.loads((base.SOURCE.parent / "manifest.json").read_text())["version"]
+        self.assertGreaterEqual(version, 125)
+        self.assertEqual(str(version), re.search(r"^KIT_VERSION = (\d+)", base.SOURCE.read_text(), re.M)[1])
+        self.assertIn(f"const PAGE_KIT = {version};", (root / "board" / "board.js").read_text())
+        self.assertIn("### v125 (schema 4)", (base.SOURCE.parent / "UPGRADING.md").read_text())
+        self.assertIn("Kit v125:", (root / "CHANGELOG.md").read_text())
+
+    # 1. approval must still be current at start
+    def test_start_refuses_when_approval_was_withdrawn_between_claim_and_start(self):
+        self.create(); self.claim()
+        data = self.read(); data["tasks"][0]["column"] = "backlog"; self.write(data)
+        with self.assertRaisesRegex(SystemExit, "approved|In progress|in progress"):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+        self.assertEqual(self.read()["tasks"][0]["coordination"]["runs"], [])
+
+    def test_start_still_works_in_progress_and_replay_is_unchanged(self):
+        self.create(); self.claim()
+        self.assertTrue(self.invoke("start")["launch"])
+        self.assertFalse(self.invoke("start")["launch"])
+
+    def claim_args(self):
+        return SimpleNamespace(for_user=None, agent=None, session=None, attended=False, assign_to_me=False,
+                               force=False, session_url=None, note=None, executor="relay-local")
+
+    def test_renewal_outside_todo_or_in_progress_does_not_keep_approval(self):
+        self.create(); self.claim()
+        for column, kept in (("in-progress", True), ("todo", True), ("backlog", False), ("pending-review", False)):
+            with self.subTest(column=column):
+                data = self.read(); task = data["tasks"][0]
+                task["column"] = column
+                task["claim"].update(session_id="private-session", status="running", unattended_approved=True)
+                with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(kt, "git_branch", return_value="fixture"):
+                    kt.do_claim(self.claim_args(), self.tid, data)
+                self.assertIs(task["claim"].get("unattended_approved") is True, kept)
+
+    def test_renewal_through_the_claim_command_does_not_keep_approval_from_backlog(self):
+        self.create(); self.claim()
+        data = self.read(); task = data["tasks"][0]
+        task["coordination"] = None   # an ordinary card, so only the claim command's own rules apply
+        task["column"] = "backlog"
+        task["claim"].update(session_id="private-session", status="running", unattended_approved=True)
+        self.write(data)
+        args = SimpleNamespace(id=self.tid, for_user=None, agent=None, session=None, attended=False, assign_to_me=False,
+                               force=False, session_url=None, note=None, executor=None, on_behalf_of=None, json=False)
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(kt, "git_branch", return_value="fixture"):
+            kt.cmd_claim(args)
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "in-progress")
+        self.assertNotIn("unattended_approved", task["claim"])
+
+    # withdrawn approval must not put the card back in To do
+    def withdraw(self):
+        data = self.read(); data["tasks"][0]["column"] = "backlog"; self.write(data)
+
+    def test_release_owned_leaves_a_withdrawn_card_in_backlog(self):
+        self.create(); self.claim(); self.withdraw()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            work.release_owned(kt, self.tid, self.claim_generation)
+        answer = json.loads(out.getvalue())
+        self.assertTrue(answer["released"])
+        self.assertEqual(answer["column"], "backlog")
+        self.assertEqual(self.read()["tasks"][0]["column"], "backlog")
+
+    def test_release_owned_still_requeues_an_in_progress_card(self):
+        self.create(); self.claim()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            work.release_owned(kt, self.tid, self.claim_generation)
+        self.assertEqual(json.loads(out.getvalue())["column"], "todo")
+
+    def test_final_not_launched_event_leaves_a_withdrawn_card_in_backlog(self):
+        self.create(); self.claim(); self.invoke("start"); self.withdraw()
+        self.finish(launch_state="not_launched")
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "backlog")
+        self.assertIsNone(task["claim"])
+
+    def test_final_not_launched_event_still_requeues_an_in_progress_card(self):
+        self.create(); self.claim(); self.invoke("start")
+        self.finish(launch_state="not_launched")
+        self.assertEqual(self.read()["tasks"][0]["column"], "todo")
+
+    # leaving In progress or To do ends the approval, so coming back restores nothing
+    def test_leaving_and_returning_does_not_restore_approval(self):
+        self.create(); self.claim()
+        data = self.read(); task = data["tasks"][0]
+        kt.move_task_to_column(data, task, "backlog")
+        self.assertNotIn("unattended_approved", task["claim"])
+        kt.move_task_to_column(data, task, "in-progress")
+        self.write(data)
+        with self.assertRaisesRegex(SystemExit, "unattended|approval|approved"):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+
+    def test_moving_between_todo_and_in_progress_keeps_approval(self):
+        self.create(); self.claim()
+        data = self.read(); task = data["tasks"][0]
+        kt.move_task_to_column(data, task, "todo"); kt.move_task_to_column(data, task, "in-progress")
+        self.assertIs(task["claim"]["unattended_approved"], True)
+
+    def move_args(self, column):
+        return SimpleNamespace(id=self.tid, column=column, column_pos=None, priority=None, before=None, after=None,
+                               top=False, note=None)
+
+    def test_cli_move_out_and_back_does_not_restore_approval_before_start(self):
+        self.create(); self.claim()
+        for column in ("backlog", "in-progress"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_move(self.move_args(column))
+        self.assertNotIn("unattended_approved", self.read()["tasks"][0]["claim"])
+        with self.assertRaisesRegex(SystemExit, "unattended|approval|approved"):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+
+    def test_cli_move_between_todo_and_in_progress_keeps_approval(self):
+        self.create(); self.claim()
+        for column in ("todo", "in-progress"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_move(self.move_args(column))
+        self.assertTrue(self.invoke("start")["launch"])
+
+    def test_cli_unwait_of_an_expired_claim_leaves_a_backlog_card_in_backlog(self):
+        for column, expected in (("backlog", "backlog"), ("pending-review", "pending-review"), ("in-progress", "todo")):
+            with self.subTest(column=column):
+                data = self.read(); data["tasks"] = []; self.write(data)
+                self.request = dict(self.request, request_id="source:unwait-" + column)
+                self.create()
+                data = self.read(); task = data["tasks"][0]
+                task["coordination"] = None; task["column"] = column
+                task["waiting"] = {"on": "Existing wait", "since": "2026-01-01", "nudge": "2027-01-01"}
+                task["claim"] = {"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session", "status": "blocked",
+                                 "blocked_by_wait": True, "unattended_approved": True, "claimed_at": "2026-01-01T00:00:00Z",
+                                 "heartbeat_at": "2026-01-01T00:00:00Z"}
+                self.write(data)
+                with mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+                    os.environ.pop("BOARD_AGENT", None)
+                    kt.cmd_unwait(SimpleNamespace(id=self.tid, note="wait is over", session="private-session"))
+                task = self.read()["tasks"][0]
+                self.assertIsNone(task["claim"])
+                self.assertEqual(task["column"], expected)
+
+    def test_coordination_floor_is_kit_125(self):
+        self.assertEqual(kt.min_kit_needed({"tasks": [{"coordination": {"runs": []}}]})[0], 125)
+        self.assertEqual(kt.min_kit_needed({"tasks": [], "rook_request_index": {}})[0], 125)
+        self.create()
+        self.assertEqual(self.read()["settings"]["min_kit"], 125)
+        self.assertGreaterEqual(kt.min_kit_needed(self.read())[0], 125)
+
+    def test_screen_refuses_hyphenated_keys_joined_to_words_or_digits(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        hyphenated = "ab-" + tail
+        cases = ["9sk-" + hyphenated, "tokensk-" + hyphenated, "keysk-svcacct-" + tail, "keysk-admin-" + tail,
+                 "keysk-svcacct-" + hyphenated, "x\nsk-" + hyphenated, "tokensk-abcd-" + tail + "-more-words"]
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, {"summary": value})
+
+    def test_screen_still_accepts_hyphenated_ordinary_text(self):
+        for value in ("risk-assessment-for-q3-roadmap", "Desk-booking-integration-for-teams",
+                      "Risk-Assessment-For-Q3-Roadmap-Plan", "risk-internationalization-plan",
+                      "disk-usage-review-for-q4-capacity-planning", "task-force-2024-planning-and-review-notes"):
+            with self.subTest(value=value):
+                work.safe_content(kt, {"summary": value})
+
+    def test_screen_accepts_admin_words_and_plain_numbers_after_sk(self):
+        for value in ("Fix the task-admin-permissions page", "Desk-Admin-Panel-overview", "risk-admin-review-for-q3",
+                      "TASK-1234567890123456", "disk-usage-report-2024111412000011", "task-svcacct-migration-plan-for-q3"):
+            with self.subTest(value=value):
+                work.safe_content(kt, {"summary": value})
+
+    def test_screen_refuses_prefixed_keys_in_every_position(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        for value in ("sk-svcacct-" + tail, "sk-admin-" + tail, "sk-ant-" + tail, "sk-proj-" + tail,
+                      "keysk-svcacct-" + tail, "keysk-admin-" + tail, "tokensk-ant-" + tail, "9sk-proj-" + tail,
+                      "x\nsk-admin-" + tail, "x\tsk-svcacct-" + tail, "x\rsk-ant-" + tail):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, {"summary": value})
+
+    def test_cli_unwait_of_an_expired_claim_in_todo_stays_in_todo_with_the_claim_released(self):
+        self.create()
+        data = self.read(); task = data["tasks"][0]
+        task["coordination"] = None; task["column"] = "todo"
+        task["waiting"] = {"on": "Existing wait", "since": "2026-01-01", "nudge": "2027-01-01"}
+        task["claim"] = {"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session", "status": "blocked",
+                         "blocked_by_wait": True, "unattended_approved": True, "claimed_at": "2026-01-01T00:00:00Z",
+                         "heartbeat_at": "2026-01-01T00:00:00Z"}
+        self.write(data)
+        with mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+            os.environ.pop("BOARD_AGENT", None)
+            kt.cmd_unwait(SimpleNamespace(id=self.tid, note="wait is over", session="private-session"))
+        task = self.read()["tasks"][0]
+        self.assertIsNone(task["claim"])
+        self.assertEqual(task["column"], "todo")
+
+    def test_each_decoded_string_is_screened_not_the_json_text(self):
+        # A newline, then sk-, then a hyphenated tail: only a screen of the decoded string refuses it.
+        with self.assertRaises(SystemExit):
+            work.safe_content(kt, {"summary": "log line\nsk-ab-cd-ef-gh-ij-kl-mn-op-qr-st-uv"})
+        with self.assertRaises(SystemExit):
+            work.safe_content(kt, ["line one", "\n\tsk-ab-cd-ef-gh-ij-kl-mn-op-qr-st-uv"])
+
+    # 3. receipt bound to its task; run ID unique on the board
+    def test_receipt_of_another_task_is_refused(self):
+        self.create(); self.claim()
+        other = dict(self.request, request_id="source:event-2", title="Second card")
+        first = self.tid
+        self.invoke("request", other)
+        data = self.read(); data["tasks"][0]["claim"] = None; self.write(data)
+        # A proof file made for the first task must not start a run on another task.
+        work.receipt(self.proof, self.run, create=True, task_id=first)
+        data = self.read()
+        card = next(t for t in data["tasks"] if t["id"] != first)
+        self.tid = card["id"]
+        self.claim()
+        with self.assertRaisesRegex(SystemExit, "different task"):
+            self.invoke("start")
+        self.assertTrue(Path(self.proof).exists())
+        self.assertTrue(all(not t["coordination"]["runs"] for t in self.read()["tasks"]))
+
+    def test_receipt_task_by_number_or_id_both_match(self):
+        self.create(); self.claim()
+        number = str(self.read()["tasks"][0]["num"])
+        work.receipt(self.proof, self.run, create=True, task_id=number)
+        self.assertTrue(self.invoke("start")["launch"])
+
+    def test_run_id_held_by_another_task_is_refused(self):
+        self.create(); first = self.tid
+        self.invoke("request", dict(self.request, request_id="source:event-2", title="Second card"))
+        data = self.read()
+        data["tasks"][0]["coordination"]["runs"] = [{"id": self.run, "events": [], "terminal": {"kind": "finished"}}]
+        self.write(data)
+        self.tid = next(t["id"] for t in data["tasks"] if t["id"] != first)
+        self.claim()
+        with self.assertRaisesRegex(SystemExit, "run id"):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+        self.assertEqual(next(t for t in self.read()["tasks"] if t["id"] == self.tid)["coordination"]["runs"], [])
+
+    # 4. the private-content screen
+    def test_screen_accepts_ordinary_words_that_end_in_sk(self):
+        for value in ("risk-assessment-for-q3-roadmap", "Desk-booking-integration-for-teams",
+                      "task-management-integration-notes", "Ask-about-the-roadmap-planning-session",
+                      "DISK-cleanup-and-archive-review-plan"):
+            with self.subTest(value=value):
+                work.safe_content(kt, {"summary": value})
+
+    def test_screen_still_refuses_real_key_shapes(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        for value in ("sk-" + tail, "key sk-" + tail, "SK-" + tail, "(sk-" + tail + ")", "sk-ant-" + tail,
+                      "sk-proj-" + tail, "token=sk-" + tail, "x:sk-" + tail, "ghp_" + tail, "xoxb-" + tail):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, {"summary": value})
+
+    def test_screen_refuses_keys_after_control_characters_words_digits_and_nesting(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        ant = "sk-ant-api03-" + tail
+        cases = ["log line\n" + ant, "log line\n" + "sk-" + tail, "x\t" + ant, "x\r" + "sk-" + tail, "x\r\n" + ant,
+                 "tokensk-" + tail, "token" + ant, "9sk-" + tail, "9" + ant, "see 5sk-proj-" + tail,
+                 ["fine", ["deeper\n" + ant]], {"a": {"b": ["ok", {"c": "tokensk-" + tail}]}},
+                 {"summary": "fine", "links": ["https://example.invalid/x", "line\n" + "sk-" + tail]},
+                 {"line\n" + ant: "key in a dictionary key"}]
+        for index, value in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, value)
+
+    # CAS tests on the real mutate path
+    def test_cas_release_owned_rechecks_after_a_lost_save(self):
+        self.create(); self.claim()
+        with self.api_cas() as cas:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                work.release_owned(kt, self.tid, self.claim_generation)
+        self.assertEqual(cas["calls"], 2)
+        self.assertEqual(cas["rechecks"], [True, True])
+        self.assertTrue(json.loads(out.getvalue())["released"])
+        self.assertIsNone(cas["data"]["tasks"][0]["claim"])
+
+    def test_cas_release_owned_loser_leaves_a_successor_claim_alone(self):
+        self.create(); self.claim()
+        def successor(canonical, wanted):
+            canonical["data"]["tasks"][0]["claim"]["generation"] = "f" * 24
+        with self.api_cas(successor) as cas:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                work.release_owned(kt, self.tid, self.claim_generation)
+        self.assertFalse(json.loads(out.getvalue())["released"])
+        self.assertEqual(cas["data"]["tasks"][0]["claim"]["generation"], "f" * 24)
+
+    def test_cas_event_rechecks_and_saves_one_event(self):
+        self.create(); self.claim(); self.invoke("start")
+        with self.api_cas() as cas:
+            self.assertTrue(self.invoke("event", {"id": "e1", "kind": "progress", "summary": "Checked"})["created"])
+        self.assertEqual(cas["calls"], 2)
+        self.assertEqual(cas["rechecks"], [True, True])
+        self.assertEqual(len(cas["data"]["tasks"][0]["coordination"]["runs"][0]["events"]), 1)
+
+    def test_cas_event_loser_refuses_when_a_winner_sealed_the_run(self):
+        self.create(); self.claim(); self.invoke("start")
+        def sealed(canonical, wanted):
+            run = canonical["data"]["tasks"][0]["coordination"]["runs"][0]
+            run["terminal"] = {"id": "terminal", "kind": "finished", "digest": "x"}
+        with self.api_cas(sealed) as cas:
+            with self.assertRaisesRegex(SystemExit, "sealed|real claim|running"):
+                self.invoke("event", {"id": "e1", "kind": "progress", "summary": "Checked"})
+        self.assertEqual(cas["data"]["tasks"][0]["coordination"]["runs"][0]["events"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()

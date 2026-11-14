@@ -19,8 +19,10 @@ KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 RUN = re.compile(r"wr_[a-f0-9]{24}\Z")
 PR_LINK = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+(?:[?#].*)?\Z")
 PROGRESS = {"progress", "waiting", "result_ready", "failed"}
-PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|sk-ant-|sk-proj-|xox[baprs]-)[A-Za-z0-9_.-]{10,}"
-                     r"|sk-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY"
+PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_.-]{10,}"
+                     r"|(?<![A-Za-z0-9])sk-(?:ant-|proj-|svcacct-|admin-)[A-Za-z0-9_.-]{10,}"
+                     r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}"
+                     r"|sk-(?:[A-Za-z0-9_]*-)*(?=[A-Za-z0-9_]*\d)(?=[A-Za-z0-9_]*[A-Za-z])[A-Za-z0-9_]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY"
                      r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
                      r"|(?<!\w)(?:\+\d{1,3}[ -]?)?\(?0\d{2,4}\)?[ -]\d{3,4}[ -]\d{3,4}(?!\w)"
                      r"|[$£€]\s*\d|\b\d+(?:\.\d+)?\s*(?:USD|GBP|EUR)\b")
@@ -66,10 +68,24 @@ def payload(value):
     return result
 
 
+def private_text(value):
+    """True if any decoded string, key or scalar in value looks like a secret or contact detail."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.keys()); pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+        elif PRIVATE.search(item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, default=str)):
+            return True
+    return False
+
+
 def safe_content(kt, value):
     # Same board boundary as other CLI writes; never echo the rejected content.
-    raw = json.dumps(value, ensure_ascii=False)
-    if PRIVATE.search(raw):
+    # Screen each decoded string, never the JSON text: there a newline is the two characters \n.
+    if private_text(value):
         fail("content contains secret-shaped or contact information; link to an authorised document instead")
 
 
@@ -93,7 +109,7 @@ def coordinate(task):
 def require_current_kit(data):
     settings = data.setdefault("settings", {})
     minimum = settings.get("min_kit")
-    settings["min_kit"] = max(124, minimum) if type(minimum) is int else 124
+    settings["min_kit"] = max(125, minimum) if type(minimum) is int else 125
 
 
 def strict_archives(kt, data, base):
@@ -494,6 +510,14 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         co = coordinate(task)
         if co.get("executor") != "relay-local":
             fail("this executor is not supported by the local runner")
+        bound = proof.get("task_id")
+        if bound != ref:
+            try:
+                same = isinstance(bound, str) and kt.find(data, bound) is task
+            except SystemExit:
+                same = False
+            if not same:
+                fail("runner receipt belongs to a different task; nothing recorded")
         old = next((r for r in co["runs"] if r.get("id") == run_id), None)
         if old:
             attempt(kt, data, task, run_id, proof, retiring=True)
@@ -509,7 +533,12 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
                 project_id = kt.find_project(data, task["project"].strip())["id"]
             except SystemExit:
                 fail("project reference must resolve uniquely before unattended work")
+        if any(r.get("id") == run_id for other in data.get("tasks", []) if other is not task
+               for r in (other.get("coordination") or {}).get("runs", []) if isinstance(r, dict)):
+            fail("run id is already used by another task; choose a new run id")
         claim = own_running_claim(kt, data, task)
+        if task.get("column") != "in-progress":
+            fail("approval is no longer current: the card must still be In progress under its approved claim")
         claim.setdefault("generation", secrets.token_hex(12))
         charged = [r for r in co["runs"] if (r.get("terminal") or {}).get("launch_state") != "not_launched"
                    and (r.get("resolution") or {}).get("disposition") != "retry-safe"]
@@ -574,8 +603,8 @@ def release_owned(kt, ref, generation=None):
         preserve = any(unresolved(r) for r in (task.get("coordination") or {}).get("runs", [])) or \
             task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
             any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
-        if not preserve and claim.get("unattended_approved") is True:
-            kt.move_task_to_column(data, task, "todo")
+        if not preserve and claim.get("unattended_approved") is True and task.get("column") in ("in-progress", "todo"):
+            kt.move_task_to_column(data, task, "todo")   # a card the owner moved elsewhere stays where they put it
         kt.hist(task, "runner released its exact claim")
         kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
         answer.update(released=True, column=task.get("column"))
@@ -651,7 +680,7 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             # Only remove this run's exact claim; never invoke ordinary release's stale/no-claim exceptions.
             if claim and claim_hash(kt, claim) == run["_claim"] and coordinate(task)["runs"][-1] is run:
                 task["claim"] = None
-                if not pending:
+                if not pending and task.get("column") in ("in-progress", "todo"):
                     kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] or run.get("result")
                                            or not run.get("unattended") or run.get("admission") != "approved-todo"
                                            or claim.get("unattended_approved") is not True or claim.get("attended") else "todo")

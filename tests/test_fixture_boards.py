@@ -95,17 +95,19 @@ class FixtureBoards(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_kit_update(Args(source=KIT, quiet=True))
         minimum = subprocess.run([sys.executable, os.path.join(KIT, "keeptrack.py"), "--file", os.path.join(folder, "tasks.json"),
-                                  "settings-set", "--min-kit", "124"], capture_output=True, text=True,
+                                  "settings-set", "--min-kit", "125"], capture_output=True, text=True,
                                  env=dict(os.environ, BOARD_USER="alex", BOARD_AGENT="codex"))
         self.assertEqual(minimum.returncode, 0, minimum.stderr)
         data = kt.load_board()
-        self.assertGreaterEqual(kt.board_min_kit(data), 124)
+        self.assertGreaterEqual(kt.board_min_kit(data), 125)
         task = next(t for t in data["tasks"] if t["id"] == "t_first")
         self.assertEqual(task["coordination"], before)
         task["title"] = "Ordinary edit after upgrade"
         self.assertTrue(kt.save_changes(data, message="Fixture edit"))
         self.assertEqual(read_json(os.path.join(folder, "cards", "t_first.json"))["coordination"], before)
-        self.assertEqual(0, kt.doctor_board(False)[2])
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual([], issues)
+        self.assertEqual(0, code)
 
     def test_image_review_fixture_is_registered(self):
         self.assertIn("v4_kit98", [name for name, _ in list_fixtures()])

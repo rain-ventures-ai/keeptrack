@@ -144,7 +144,7 @@ class ProjectReferenceTests(unittest.TestCase):
     def test_coordination_sets_a_minimum_that_fences_version_123_writers(self):
         self.held(); self.target()
         data = self.read(); data["tasks"][1].update(project="One", column="todo", assignees=["owner"]); self.write(data)
-        self.assertGreaterEqual(data["settings"]["min_kit"], 124)
+        self.assertGreaterEqual(data["settings"]["min_kit"], 125)
         old = Path(self.tmp.name) / "old-kit"; old.mkdir()
         # Simulate only an older version identifier: refusal must happen before
         # any claim implementation runs, independently of its project handling.
@@ -154,12 +154,26 @@ class ProjectReferenceTests(unittest.TestCase):
         result = subprocess.run([sys.executable, "-I", str(old / "keeptrack.py"), "--file", str(self.path),
                                  "claim", "t_target", "--executor", "relay-local"], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("needs kit v124", result.stderr)
+        self.assertIn("needs kit v125", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_coordination_minimum_fences_version_124_runners(self):
+        self.held(); self.target()
+        data = self.read(); data["tasks"][1].update(project="One", column="todo", assignees=["owner"]); self.write(data)
+        self.assertEqual(data["settings"]["min_kit"], 125)
+        old = Path(self.tmp.name) / "old-kit-124"; old.mkdir()
+        (old / "keeptrack.py").write_text(base.SOURCE.read_text().replace(f"KIT_VERSION = {kt.KIT_VERSION}", "KIT_VERSION = 124"))
+        (old / "work.py").write_text((base.SOURCE.parent / "work.py").read_text())
+        before = self.path.read_bytes()
+        result = subprocess.run([sys.executable, "-I", str(old / "keeptrack.py"), "--file", str(self.path),
+                                 "claim", "t_target", "--executor", "relay-local"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("needs kit v125", result.stderr)
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_version_probe_is_read_only(self):
         before = self.path.read_bytes()
-        self.assertEqual(self.cli("--version").stdout.strip(), "keeptrack kit 124")
+        self.assertEqual(self.cli("--version").stdout.strip(), "keeptrack kit 125")
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_empty_scope_refuses_start_without_mutation_or_receipt(self):

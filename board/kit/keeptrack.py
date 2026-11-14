@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 124  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 125  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2315,7 +2315,7 @@ def min_kit_needed(data):
         needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
     if data.get("rook_request_index") is not None or (data.get("settings") or {}).get("rook_request_index") is not None or \
             any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
-        needed, what = max(124, needed), "Cards carry Rook coordination and execution holds"
+        needed, what = max(125, needed), "Cards carry Rook coordination and execution holds"
     return needed, what
 
 
@@ -3483,7 +3483,8 @@ def do_claim(a, tid, data):
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
     if not attended(a) and (t.get("column") == "todo" or
-            (old.get("session_id") == sid and old.get("status") != "done" and old.get("unattended_approved") is True)):
+            (old.get("session_id") == sid and old.get("status") != "done" and old.get("unattended_approved") is True
+             and t.get("column") in ("todo", "in-progress"))):
         t["claim"]["unattended_approved"] = True
     if attended(a):
         t["claim"]["attended"] = True
@@ -3616,6 +3617,12 @@ def drop_claim_file(task_id=None):
         pass
 
 
+def end_approval_on_leaving(task, old, column):
+    """Leaving To do or In progress ends a claim's unattended approval; coming back restores nothing (kit v125)."""
+    if old in ("todo", "in-progress") and column not in ("todo", "in-progress") and isinstance(task.get("claim"), dict):
+        task["claim"].pop("unattended_approved", None)
+
+
 def move_task_to_column(data, task, column, a=None):
     """Move a task and, on split boards, put it at the end without reusing a rank."""
     old = task.get("column")
@@ -3623,6 +3630,7 @@ def move_task_to_column(data, task, column, a=None):
         return old
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
+    end_approval_on_leaving(task, old, column)
     if "done" in (old, column):
         drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data, a)
     if data.get("layout") == "split":
@@ -3941,7 +3949,8 @@ def cmd_unwait(a):
         if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
-                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t)
+                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t) \
+                    and t.get("column") == "in-progress"
                 t["claim"] = None
                 if requeue:
                     move_task_to_column(data, t, "todo")
@@ -4011,6 +4020,7 @@ def cmd_move(a):
                 claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
             close_waiting(t, a, "move to done", data)
         old = t["column"]; t["column"] = column
+        end_approval_on_leaving(t, old, column)
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
             drop_leftover_wait(t, "reopening", data, a)
@@ -4855,7 +4865,7 @@ def _loaded_head(data):
 # does, though no commit made it. With --cursor FILE the last snapshot is kept on disk, so a change that lands between
 # two watch runs is reported by the next one: never missed (a crash between printing and saving can repeat one batch).
 WATCH_KINDS = ("new", "entered", "left", "column", "review", "claim", "blocked", "stale", "comment", "mention", "todo",
-               "wait", "chase", "overdue", "fields", "proposal")
+               "wait", "chase", "overdue", "fields", "proposal", "run")
 WATCH_FIELDS = ("title", "details", "priority", "due", "labels", "assignees", "links", "outcome", "project", "client")
 WATCH_CURSOR_V = 1
 
@@ -4863,6 +4873,27 @@ WATCH_CURSOR_V = 1
 def _wh(v):
     import hashlib
     return hashlib.sha1(json.dumps(v, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:12]
+
+
+def _coord_digest(t):
+    """Public state of each coordinated run (kit v125): run id hash -> running, finished, held or resolved. Built from
+    the terminal, needs_reconciliation and resolution flags only; never the claim hash, proof, receipt or host process."""
+    co = t.get("coordination") if isinstance(t.get("coordination"), dict) else {}
+    out = {}
+    for r in co.get("runs") or []:
+        if not isinstance(r, dict) or not isinstance(r.get("id"), str):
+            continue
+        if r.get("resolution"):
+            state = "resolved"
+        elif not r.get("terminal"):
+            state = "running"
+        else:
+            state = "held" if r.get("needs_reconciliation") else "finished"
+        out[_wh(r["id"])] = state
+    return out
+
+
+RUN_TEXT = {"running": "run started", "finished": "run finished", "held": "held for unknown effect", "resolved": "run resolved"}
 
 
 def watch_entry(data, t, today, match):
@@ -4882,7 +4913,7 @@ def watch_entry(data, t, today, match):
             "todos": [[d.get("id") or _wh(d.get("text")), bool(d.get("done")), _wh(d.get("text"))]
                       for d in t.get("todos") or [] if isinstance(d, dict)],
             "comments": [x.get("id") or _wh([x.get("at"), x.get("text")]) for x in t.get("comments") or [] if isinstance(x, dict)],
-            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS},
+            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS}, "coord": _coord_digest(t),
             "last": max(hist_at) if hist_at else ""}
 
 
@@ -4970,6 +5001,10 @@ def watch_events(old, new, data, me=""):
             ev("chase", cid, n, "wait due for a chase")
         if n["overdue"] and not o["overdue"]:
             ev("overdue", cid, n, f"overdue (due {t.get('due')})")
+        if isinstance(o.get("coord"), dict):   # a cursor from an older kit has none: no false events from it
+            for rid in sorted(n["coord"]):
+                if n["coord"][rid] != o["coord"].get(rid):
+                    ev("run", cid, n, RUN_TEXT[n["coord"][rid]], who)
         changed = [k for k in WATCH_FIELDS if o["fields"].get(k) != n["fields"].get(k)]
         if changed:
             ev("fields", cid, n, "changed " + ", ".join(changed), who)
