@@ -21,12 +21,13 @@ class FinalReviewTests(unittest.TestCase):
     claim = base.WorkTests.claim
     finish = base.WorkTests.finish
 
-    def cli(self, *args):
+    def cli(self, *args, ok=True, script=base.SOURCE):
         env = dict(os.environ, BOARD_USER="owner", BOARD_AGENT="codex", BOARD_SESSION="private-session",
                    BOARD_PROJECT="", BOARD_REPO="", BOARD_WRITE="local")
-        result = subprocess.run([sys.executable, str(base.SOURCE), "--file", str(self.path), *args],
+        result = subprocess.run([sys.executable, str(script), "--file", str(self.path), *args],
                                 cwd=self.tmp.name, env=env, capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        if ok:
+            self.assertEqual(result.returncode, 0, result.stderr)
         return result
 
     def move_project(self):
@@ -104,6 +105,70 @@ class FinalReviewTests(unittest.TestCase):
 
     def test_work_helper_is_reused_across_board_reads(self):
         self.assertIs(kt.work_module(), kt.work_module())
+
+    def test_archive_refuses_unresolved_attempt_without_losing_hold(self):
+        self.create(); self.claim(); self.invoke("start"); self.finish()
+        before = self.path.read_bytes()
+        result = self.cli("archive", self.tid, ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unresolved", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_bulk_archive_keeps_unknown_effect_even_if_card_was_marked_done(self):
+        self.create(); self.claim(); self.invoke("start"); self.finish()
+        data = self.read(); data["tasks"][0].update(column="done", updated="2020-01-01T00:00:00Z"); self.write(data)
+        self.cli("archive")
+        self.assertEqual(self.read()["tasks"][0]["id"], self.tid)
+
+    def test_coordination_requires_current_kit_atomically(self):
+        self.create()
+        data = self.read()
+        self.assertGreaterEqual(kt.board_min_kit(data), 123)
+        self.assertGreaterEqual(kt.min_kit_needed(data)[0], 123)
+        with mock.patch.object(kt, "KIT_VERSION", 122):
+            with self.assertRaisesRegex(SystemExit, "needs kit"):
+                kt.guard_schema(data)
+
+    def test_next_skips_unavailable_coordinated_card_for_unrelated_legacy_work(self):
+        self.create()
+        data = self.read(); data["tasks"][0]["column"] = "todo"
+        other = copy.deepcopy(data["tasks"][0]); other.update(id="t_other", title="Other work", project="pr_two")
+        other.pop("coordination"); data["tasks"].append(other); self.write(data)
+        self.cli("next")
+        tasks = self.read()["tasks"]
+        self.assertIsNone(tasks[0]["claim"])
+        self.assertEqual(tasks[1]["claim"]["session_id"], "private-session")
+
+    def test_delayed_cleanup_does_not_release_successor_same_session(self):
+        self.create(); data = self.read(); data["tasks"][0]["column"] = "todo"; self.write(data)
+        self.cli("claim", self.tid, "--executor", "relay-local")
+        original = self.read()["tasks"][0]["claim"]["generation"]
+        self.assertTrue(self.invoke("release", claim_generation=original)["released"])
+        self.cli("claim", self.tid, "--executor", "relay-local")
+        before = self.path.read_bytes()
+        self.assertFalse(self.invoke("release", claim_generation=original)["released"])
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_coordinated_backlog_cannot_be_claimed_unattended(self):
+        self.create()
+        result = self.cli("claim", self.tid, "--executor", "relay-local", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.read()["tasks"][0]["column"], "backlog")
+
+    def test_atomic_claim_json_returns_saved_incarnation_without_session(self):
+        self.create(); data = self.read(); data["tasks"][0]["column"] = "todo"; self.write(data)
+        result = self.cli("claim", self.tid, "--executor", "relay-local", "--json")
+        self.assertEqual(json.loads(result.stdout), {"id": self.tid, "generation": self.read()["tasks"][0]["claim"]["generation"]})
+        self.assertNotIn("private-session", result.stdout)
+
+    def test_partial_kit_cannot_skip_coordination_gate(self):
+        self.create()
+        isolated = Path(self.tmp.name) / "keeptrack.py"
+        isolated.write_text(base.SOURCE.read_text())  # no sibling work.py
+        before = self.path.read_bytes()
+        result = self.cli("claim", self.tid, "--executor", "relay-local", script=isolated, ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.path.read_bytes(), before)
 
 
 if __name__ == "__main__":

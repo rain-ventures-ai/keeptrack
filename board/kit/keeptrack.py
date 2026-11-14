@@ -2313,6 +2313,8 @@ def min_kit_needed(data):
     if (data.get("settings") or {}).get("card_contact_details") is False and CONTACT_DETAILS_KIT > needed:
         # older writers would still copy email and phone into cards
         needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
+    if any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
+        needed, what = max(123, needed), "Cards carry Rook coordination and execution holds"
     return needed, what
 
 
@@ -3431,6 +3433,8 @@ def do_claim(a, tid, data):
     if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
         from types import SimpleNamespace
         work_module().claim_gate(SimpleNamespace(**globals()), data, t, sid, getattr(a, "executor", None), attended(a))
+    elif any(isinstance(x, dict) and x.get("coordination") is not None for x in data.get("tasks", [])):
+        sys.exit("Rook coordination requires the complete kit including work.py; no claim written")
     assign_to_me = getattr(a, "assign_to_me", False)
     startable_column = t["column"] in ("backlog", "todo")
     unassigned = not (t.get("assignees") or [])
@@ -3489,6 +3493,7 @@ def do_claim(a, tid, data):
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
     # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
     _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a)}
+    _PENDING_CLAIM["response"] = {"id": t["id"], "generation": t["claim"]["generation"]}
     if FILE and not (a.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")):
         print(f"note: a --file board keeps no local claim record; pass --session {sid} (or export BOARD_SESSION) to heartbeat, done or release it")
     return t["id"]
@@ -3513,7 +3518,12 @@ def cmd_claim(a):
     if getattr(a, "assign_to_me", False) and (not a.attended or a.for_user or a.force):
         sys.exit("refused: --assign-to-me requires explicit --attended and cannot be used with --for or --force")
     _PENDING_CLAIM.clear()
-    with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
+    if getattr(a, "json", False):
+        with contextlib.redirect_stdout(io.StringIO()):
+            with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
+        print(json.dumps(_PENDING_CLAIM.pop("response")))
+    else:
+        with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
 
 def cmd_next(a):
@@ -3528,6 +3538,13 @@ def cmd_next(a):
                 continue
             if t["column"] in ("todo",) and user.lower() in [x.lower() for x in t.get("assignees", [])] \
                     and claim_state(data, t.get("claim")) in (None, "done", "stale") and not open_waiting(t):   # a waiting card is skipped
+                if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+                    from types import SimpleNamespace
+                    work = work_module()
+                    try:
+                        work.claim_gate(SimpleNamespace(**globals()), data, t, session_id(a), getattr(a, "executor", None), attended(a))
+                    except work.Refused:
+                        continue
                 return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
     _PENDING_CLAIM.clear()
@@ -12292,6 +12309,11 @@ def done_col(data):
     return next((c["id"] for c in cols if c["id"] == "done"), cols[-1]["id"] if cols else "done")
 
 
+def unresolved_work(task):
+    co = task.get("coordination")
+    return isinstance(co, dict) and any(work_module().unresolved(r) for r in co.get("runs", []) if isinstance(r, dict))
+
+
 def archive_plan(data, rules, today=None):
     """Take what can be archived out of data, including decided Review Inbox proposals."""
     today = today or board_today(data)
@@ -12304,7 +12326,7 @@ def archive_plan(data, rules, today=None):
     keep_t = []
     for t in data.get("tasks", []):
         live = t.get("claim") and t["claim"].get("status") != "done"
-        if year(t) and t.get("column") == dc and stamp(t)[:10] < cut_t and not live:
+        if year(t) and t.get("column") == dc and stamp(t)[:10] < cut_t and not live and not unresolved_work(t):
             part(year(t))["tasks"].append(t)
         else:
             keep_t.append(t)
@@ -12683,6 +12705,8 @@ def _cmd_archive(a):
             if any(getattr(a, k) is not None for k in ("done_days", "lost_days", "keep_history")):
                 sys.exit("an individual task reference cannot be combined with bulk archive rules")
             task = find(data, ref)
+            if unresolved_work(task):
+                sys.exit("this task has an unresolved Rook attempt; resolve its effects before archiving")
             if task.get("claim") and task["claim"].get("status") != "done":
                 sys.exit("an agent is working on this task; finish or release its claim before archiving")
             if open_waiting(task):
@@ -14126,6 +14150,7 @@ def main():
     s = sub.add_parser("approve", help="hosted boards only (BOARD_BACKEND=hosted): approve an assigned card (on a GitHub board, move it to To do)")
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s)
+    s.add_argument("--json", action="store_true", help="return the saved task ID and claim generation, without session credentials")
     s.add_argument("--executor", choices=("relay-local",), help="selected host route for durable coordinated work; grants no approval")
     s.add_argument("--assign-to-me", action="store_true",
                    help="with --attended on a GitHub board, assign an unassigned Backlog or To do card to you in the claim")

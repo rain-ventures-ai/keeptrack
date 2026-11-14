@@ -90,6 +90,12 @@ def coordinate(task):
     return current
 
 
+def require_current_kit(data):
+    settings = data.setdefault("settings", {})
+    minimum = settings.get("min_kit")
+    settings["min_kit"] = max(123, minimum) if type(minimum) is int else 123
+
+
 def strict_archives(kt, data, base):
     found = {}
     for key in kt.archive_years(data):
@@ -177,6 +183,7 @@ def request(kt, value):
                 "history": [], "comments": [], "claim": None, "created": ts, "updated": ts,
                 "createdBy": kt.who_am_i()}
         co = coordinate(task)
+        require_current_kit(data)
         co["request"] = {"key": value["request_id"], "digest": original, "project_id": pr["id"],
                          "source_project": value["project"], "submitted_by": kt.who_am_i(), "received_at": ts}
         task["rank"] = kt.append_rank([t.get("rank") for t in data.get("tasks", [])
@@ -243,6 +250,9 @@ def claim_gate(kt, data, task, sid, executor, attended):
             mine = runs[-1]
         if co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
             fail("this coordinated task requires its selected relay-local host; no claim written")
+        renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
+        if task.get("column") != "todo" and not renewing:
+            fail("unattended coordinated claims require an approved To do card; no claim written")
     for other in data.get("tasks", []):
         for run in (other.get("coordination") or {}).get("runs", []):
             if other is not task and (not task.get("project") or task["project"] not in run_projects(other, run)):
@@ -358,6 +368,7 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
                   "unattended": True, "events": [],
                   "_claim": claim_hash(kt, claim), "_proof": digest(proof["proof"])}
         co["runs"].append(record)
+        require_current_kit(data)
         kt.hist(task, "Rook attempt started " + run_id)
         result.update(created=True, run_id=run_id, state="recorded", launch=True)
     try:
@@ -378,7 +389,7 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
     print(json.dumps(result))
 
 
-def release_owned(kt, ref):
+def release_owned(kt, ref, generation=None):
     """Atomic runner cleanup; ordinary release intentionally has broader recovery semantics."""
     sid = session(kt)
     answer = {}
@@ -391,7 +402,14 @@ def release_owned(kt, ref):
             return
         if claim.get("attended"):
             fail("runner release requires an unattended claim; use an explicit attended finish/release path")
+        if not isinstance(generation, str) or not re.fullmatch(r"[a-f0-9]{24}", generation):
+            fail("runner release requires the expected claim generation captured when claiming")
+        if claim.get("generation") != generation:
+            answer.update(released=False, reason="claim generation changed; successor unchanged")
+            return
         task["claim"] = None
+        if task.get("coordination") is not None:
+            require_current_kit(data)
         preserve = any(unresolved(r) for r in (task.get("coordination") or {}).get("runs", [])) or \
             task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
             any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
@@ -458,6 +476,7 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             if len(run["events"]) >= MAX_EVENTS:
                 fail("progress limit reached; the terminal receipt remains available")
         entry = {**clean, "digest": digest(clean), "at": kt.now()}
+        require_current_kit(data)
         if clean["links"] and (final or clean["kind"] == "result_ready"):
             # Only the host holding this attempt's receipt can attest these links.
             # No inference from task column, old waits or arbitrary task PR links.
@@ -520,6 +539,7 @@ def resolve(kt, args):
             elif not any(url in known for url in attested):
                 fail("record the verified run result first; select its task link with --result-link")
         run["resolution"] = {**resolution, "at": kt.now(), "by": kt.who_am_i()}
+        require_current_kit(data)
         if args.disposition == "recorded-result" and task.get("column") == "todo" and not task.get("claim"):
             kt.move_task_to_column(data, task, "in-progress")
         if args.disposition == "retry-safe" and not pending and not task.get("claim"):
@@ -541,6 +561,7 @@ def parser(sub, callback):
     resolution.set_defaults(f=callback, work_action="resolve")
     release = sub.add_parser("work-release-owned", help="atomic runner cleanup: releases only this exact claim and preserves waits/results")
     release.add_argument("id")
+    release.add_argument("--claim-generation", required=True, help="expected incarnation captured at claim, never read anew during cleanup")
     release.set_defaults(f=callback, work_action="release")
     for name, action in (("work-status", "status"), ("work-start", "start"), ("work-event", "event"), ("work-finish", "finish")):
         cmd = sub.add_parser(name, help="Rook durable task/run metadata; does not grant execution authority")
@@ -560,7 +581,7 @@ def command(kt, args):
     if action == "status":
         return status(kt, args.id)
     if action == "release":
-        return release_owned(kt, args.id)
+        return release_owned(kt, args.id, getattr(args, "claim_generation", None))
     if action == "resolve":
         return resolve(kt, args)
     if action == "start":

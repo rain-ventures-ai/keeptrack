@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import secrets
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -30,6 +31,7 @@ class WorkTests(unittest.TestCase):
         work = kt.work_module()
         with self.assertRaisesRegex(SystemExit, "selected relay-local host"):
             work.claim_gate(kt, data, task, "new-session", None, False)
+        task["column"] = "todo"  # positive executor control starts from approved work
         work.claim_gate(kt, data, task, "new-session", "relay-local", False)
         work.claim_gate(kt, data, task, "owner-session", None, True)
         self.claim(); self.invoke("start")
@@ -63,7 +65,10 @@ class WorkTests(unittest.TestCase):
         return json.loads(self.path.read_text())
 
     def invoke(self, action, payload=None, **over):
-        args = SimpleNamespace(work_action=action, id=getattr(self, "tid", ""), run_id=self.run, receipt=self.proof, **over)
+        fields = dict(work_action=action, id=getattr(self, "tid", ""), run_id=self.run, receipt=self.proof,
+                      claim_generation=getattr(self, "claim_generation", None))
+        fields.update(over)
+        args = SimpleNamespace(**fields)
         out = io.StringIO()
         with mock.patch("sys.stdin", io.StringIO(json.dumps(payload))), contextlib.redirect_stdout(out):
             kt.cmd_work(args)
@@ -77,7 +82,8 @@ class WorkTests(unittest.TestCase):
     def claim(self):
         data = self.read()
         card = next(t for t in data["tasks"] if t["id"] == self.tid)
-        card.update(column="in-progress", claim={"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session",
+        self.claim_generation = secrets.token_hex(12)
+        card.update(column="in-progress", claim={"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session", "generation": self.claim_generation,
                     "claimed_at": kt.now(), "heartbeat_at": kt.now(), "status": "running"})
         self.write(data)
 
