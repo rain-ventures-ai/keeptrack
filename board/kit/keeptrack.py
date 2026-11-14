@@ -14021,12 +14021,19 @@ def _proposals_only(a):
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
 
+_WORK_MODULE = None
+
+
 def work_module():
+    global _WORK_MODULE
+    if _WORK_MODULE is not None:
+        return _WORK_MODULE
     import importlib.util
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")
     spec = importlib.util.spec_from_file_location("keeptrack_work", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    _WORK_MODULE = module
     return module
 
 

@@ -148,9 +148,20 @@ def request(kt, value):
             archived = existing is not None
         if existing is not None:
             receipt = (existing.get("coordination") or {}).get("request") or {}
-            project = existing.get("project") if value["project"] in {receipt.get("source_project"), existing.get("project")} else kt.find_project(data, value["project"])["id"]
-            original = digest({**value, "project": project})
-            if receipt.get("digest") != original and not (not receipt.get("source_project") and receipt.get("digest") == digest(value)):
+            original = receipt.get("digest")
+            legacy_exact = not receipt.get("source_project") and original == digest(value)
+            candidates = {receipt["project_id"]} if receipt.get("project_id") else {
+                p.get("id") for p in data.get("projects", []) if isinstance(p, dict)} | {
+                existing.get("project"), str((existing.get("coordination") or {}).get("owner", "")).removeprefix("rook:")}
+            matches = [p for p in candidates if p and digest({**value, "project": p}) == original]
+            project = matches[0] if len(matches) == 1 else None
+            alias = value["project"] in {receipt.get("source_project"), project}
+            if project and not alias:
+                try:
+                    alias = kt.find_project(data, value["project"])["id"] == project
+                except SystemExit:
+                    alias = False
+            if not legacy_exact and not (project and alias):
                 fail("request_id already exists with a different original payload; show it instead of adding another card")
             answer.update(view(kt, existing, data=data, archived=archived), created=False)
             return
@@ -166,7 +177,8 @@ def request(kt, value):
                 "history": [], "comments": [], "claim": None, "created": ts, "updated": ts,
                 "createdBy": kt.who_am_i()}
         co = coordinate(task)
-        co["request"] = {"key": value["request_id"], "digest": original, "source_project": value["project"], "submitted_by": kt.who_am_i(), "received_at": ts}
+        co["request"] = {"key": value["request_id"], "digest": original, "project_id": pr["id"],
+                         "source_project": value["project"], "submitted_by": kt.who_am_i(), "received_at": ts}
         task["rank"] = kt.append_rank([t.get("rank") for t in data.get("tasks", [])
                                        if t.get("column") == "backlog" and kt.valid_rank(t.get("rank"))])
         kt.append_priority_rank(data, task)
@@ -208,6 +220,16 @@ def unresolved(run):
     return not run.get("terminal") or (run.get("needs_reconciliation") and not run.get("resolution"))
 
 
+def run_projects(task, run):
+    """Retargeting a card cannot move an already running attempt's hold."""
+    projects = {task.get("project"), run.get("project_id")}
+    if not run.get("project_id"):
+        owner = str((task.get("coordination") or {}).get("owner") or "")
+        if owner.startswith("rook:"):
+            projects.add(owner[5:])  # conservative scope for historical receipts
+    return projects - {None, ""}
+
+
 def claim_gate(kt, data, task, sid, executor, attended):
     if attended:
         return
@@ -222,9 +244,9 @@ def claim_gate(kt, data, task, sid, executor, attended):
         if co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
             fail("this coordinated task requires its selected relay-local host; no claim written")
     for other in data.get("tasks", []):
-        if other is not task and not (task.get("project") and other.get("project") == task.get("project")):
-            continue
         for run in (other.get("coordination") or {}).get("runs", []):
+            if other is not task and (not task.get("project") or task["project"] not in run_projects(other, run)):
+                continue
             if run is not mine and unresolved(run):
                 fail("this project has an unresolved coordinated attempt; no claim written")
 
@@ -235,6 +257,8 @@ def own_running_claim(kt, data, task):
         fail("a real claim owned by this exact session is required")
     if kt.claim_state(data, claim) != "running" or kt.open_waiting(task):
         fail("the exact claim must be running and the task must not be waiting")
+    if claim.get("attended"):
+        fail("runner transitions require an unattended claim; attended work grants no unattended approval")
     return claim
 
 
@@ -323,14 +347,15 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         if any(unresolved(r) for r in co["runs"]):
             fail("an unresolved attempt needs reconciliation before another start")
         for other in data.get("tasks", []):
-            if other is task or not task.get("project") or other.get("project") != task["project"]:
+            if other is task or not task.get("project"):
                 continue
             other_co = other.get("coordination") or {}
-            if other.get("claim") and kt.claim_state(data, other["claim"]) == "running":
+            if other.get("project") == task["project"] and other.get("claim") and kt.claim_state(data, other["claim"]) == "running":
                 fail("this project's other implementation is still claimed or unresolved")
-            if any(unresolved(r) for r in other_co.get("runs", [])):
+            if any(unresolved(r) and task["project"] in run_projects(other, r) for r in other_co.get("runs", [])):
                 fail("this project's other coordinated attempt needs completion or reconciliation")
-        record = {"id": run_id, "started_at": kt.now(), "agent": claim.get("agent"), "events": [],
+        record = {"id": run_id, "started_at": kt.now(), "agent": claim.get("agent"), "project_id": task.get("project"),
+                  "unattended": True, "events": [],
                   "_claim": claim_hash(kt, claim), "_proof": digest(proof["proof"])}
         co["runs"].append(record)
         kt.hist(task, "Rook attempt started " + run_id)
@@ -364,6 +389,8 @@ def release_owned(kt, ref):
         if not claim or claim.get("session_id") != sid or kt.is_placeholder_claim(claim):
             answer.update(released=False, reason="no matching claim; task unchanged")
             return
+        if claim.get("attended"):
+            fail("runner release requires an unattended claim; use an explicit attended finish/release path")
         task["claim"] = None
         preserve = any(unresolved(r) for r in (task.get("coordination") or {}).get("runs", [])) or \
             task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
@@ -445,7 +472,8 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             if claim and claim_hash(kt, claim) == run["_claim"] and coordinate(task)["runs"][-1] is run:
                 task["claim"] = None
                 if not pending:
-                    kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] or run.get("result") else "todo")
+                    kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] or run.get("result")
+                                           or not run.get("unattended") or claim.get("attended") else "todo")
                 kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
         else:
             run["events"].append(entry)
