@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 122  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 123  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2313,6 +2313,9 @@ def min_kit_needed(data):
     if (data.get("settings") or {}).get("card_contact_details") is False and CONTACT_DETAILS_KIT > needed:
         # older writers would still copy email and phone into cards
         needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
+    if data.get("rook_request_index") is not None or (data.get("settings") or {}).get("rook_request_index") is not None or \
+            any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
+        needed, what = max(123, needed), "Cards carry Rook coordination and execution holds"
     return needed, what
 
 
@@ -3173,6 +3176,8 @@ def searchable(t):
     """A card as text search sees it: without the claim's and the run record's session ids (a query could otherwise
     extend a redacted prefix one character at a time)."""
     out = {k: v for k, v in t.items() if k not in ("claim", "last_run")}
+    if "coordination" in out:
+        out["coordination"] = work_module().public(out["coordination"])
     for k in ("claim", "last_run"):
         if isinstance(t.get(k), dict):
             out[k] = {x: y for x, y in t[k].items() if x != "session_id"}
@@ -3272,7 +3277,13 @@ def cmd_list(a):
     for t in ordered:
         if not matches(t, today): continue
         if getattr(a, "json", False):
-            json_items.append(t); continue
+            item = copy.deepcopy(t)
+            if "coordination" in item:
+                item["coordination"] = work_module().public(item["coordination"])
+            for key in ("claim", "last_run"):
+                if isinstance(item.get(key), dict) and item[key].get("session_id"):
+                    item[key]["session_id"] = redact_session(item[key]["session_id"])
+            json_items.append(item); continue
         cleared = f"  [agent cleared: {len(unchecked_cleared(t))}]" if a.attention and recently_cleared(t) else ""
         scoring = (f"  value={t.get('value', '—')} effort={t.get('effort', '—')} score="
                    + (f"{task_score(t):.3g}" if task_score(t) is not None else "—")) if sort == "score" else ""
@@ -3308,6 +3319,8 @@ def cmd_show(a):
         archived = archived_tasks(data, base) if any(i not in live for i in after_ids(t)) else None
         links = after_links(data, t, archived)
     t = dict(t); t["_claim_state"] = claim_state(data, t.get("claim"))
+    if "coordination" in t:
+        t["coordination"] = work_module().public(t["coordination"])
     hs = t.pop("history", []); cms = t.pop("comments", [])
     for k in ("claim", "last_run"):   # a session id is a claim's proof of ownership (and a session may hold other cards): shown only in part
         if t.get(k) and t[k].get("session_id"):
@@ -3418,6 +3431,11 @@ def do_claim(a, tid, data):
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
     sid = session_id(a)
+    if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+        from types import SimpleNamespace
+        work_module().claim_gate(SimpleNamespace(**globals()), data, t, sid, getattr(a, "executor", None), attended(a))
+    elif any(isinstance(x, dict) and x.get("coordination") is not None for x in data.get("tasks", [])):
+        sys.exit("Rook coordination requires the complete kit including work.py; no claim written")
     assign_to_me = getattr(a, "assign_to_me", False)
     startable_column = t["column"] in ("backlog", "todo")
     unassigned = not (t.get("assignees") or [])
@@ -3461,8 +3479,12 @@ def do_claim(a, tid, data):
         hist(t, f"assigned to @{user}: attended claim", f"{agent}@{user}")
         print(f"#{t['num']} assignees: {user}")
     t["claim"] = {"agent": agent, "on_behalf_of": user, "session_id": sid, "session_url": url,
+                  "generation": (old.get("generation") if old.get("session_id") == sid and old.get("status") != "done" else None) or secrets.token_hex(12),
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
+    if not attended(a) and (t.get("column") == "todo" or
+            (old.get("session_id") == sid and old.get("status") != "done" and old.get("unattended_approved") is True)):
+        t["claim"]["unattended_approved"] = True
     if attended(a):
         t["claim"]["attended"] = True
     if t["column"] != "in-progress":
@@ -3475,6 +3497,7 @@ def do_claim(a, tid, data):
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
     # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
     _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a)}
+    _PENDING_CLAIM["response"] = {"id": t["id"], "generation": t["claim"]["generation"]}
     if FILE and not (a.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")):
         print(f"note: a --file board keeps no local claim record; pass --session {sid} (or export BOARD_SESSION) to heartbeat, done or release it")
     return t["id"]
@@ -3499,7 +3522,12 @@ def cmd_claim(a):
     if getattr(a, "assign_to_me", False) and (not a.attended or a.for_user or a.force):
         sys.exit("refused: --assign-to-me requires explicit --attended and cannot be used with --for or --force")
     _PENDING_CLAIM.clear()
-    with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
+    if getattr(a, "json", False):
+        with contextlib.redirect_stdout(io.StringIO()):
+            with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
+        print(json.dumps(_PENDING_CLAIM.pop("response")))
+    else:
+        with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
 
 
 def cmd_next(a):
@@ -3514,6 +3542,13 @@ def cmd_next(a):
                 continue
             if t["column"] in ("todo",) and user.lower() in [x.lower() for x in t.get("assignees", [])] \
                     and claim_state(data, t.get("claim")) in (None, "done", "stale") and not open_waiting(t):   # a waiting card is skipped
+                if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+                    from types import SimpleNamespace
+                    work = work_module()
+                    try:
+                        work.claim_gate(SimpleNamespace(**globals()), data, t, session_id(a), getattr(a, "executor", None), attended(a))
+                    except work.Refused:
+                        continue
                 return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
     _PENDING_CLAIM.clear()
@@ -3526,10 +3561,19 @@ def must_claim(t):
     return t["claim"]
 
 
+def coordinated_renewal_gate(data, task, claim):
+    if not claim.get("attended") and any(t.get("coordination") is not None for t in data.get("tasks", [])):
+        from types import SimpleNamespace
+        work_module().renewal_gate(SimpleNamespace(**globals()), data, task, claim)
+
+
 def cmd_heartbeat(a):
     def fn(data):
+        _MUT["recheck"] = True
         t = find(data, a.id); c = must_claim(t)
         claim_owner_check(data, t, a, "heartbeat")
+        if (a.status or c.get("status")) == "running":
+            coordinated_renewal_gate(data, t, c)
         if a.status == "running" and waiting_of(t):
             sys.exit(f"refused: {t['id']} is waiting on {waiting_text(waiting_of(t))}; its claim can't run until the wait ends "
                      "(unwait: whoever set it in that session, or a person)")
@@ -3865,7 +3909,8 @@ def cmd_wait(a):
 
 def cmd_unwait(a):
     """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
-    person's to clear. A claim `wait` blocked runs again (a young one) or goes back to To do (one older than the stale limit)."""
+    person's to clear. A claim `wait` blocked runs again (a young one); an expired claim requeues only with retained
+    unattended admission. Clearing a wait never creates approval."""
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
@@ -3896,14 +3941,20 @@ def cmd_unwait(a):
         if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
-                hist(t, f"released to todo: the claim's session sent no heartbeat for {_age(age)}")
-                t["claim"] = None; move_task_to_column(data, t, "todo"); tid = t["id"]
+                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t)
+                t["claim"] = None
+                if requeue:
+                    move_task_to_column(data, t, "todo")
+                hist(t, f"released expired claim after {_age(age)}; " + ("returned to todo" if requeue else "current column preserved; no unattended approval"))
+                tid = t["id"]
                 _MUT["after"].append(lambda d: drop_claim_file(tid))
-                msg += "; its old claim is released and the card is back in To do"
+                msg += "; its old claim is released" + (" and the card is back in To do" if requeue else "; its current column is kept")
             elif c.get("before_wait") == "stuck":
                 c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
                 msg += "; its claim is stuck again (it was stuck before the wait)"
             else:
+                _MUT["recheck"] = True
+                coordinated_renewal_gate(data, t, c)
                 busy = [] if c.get("attended") else busy_over_limit(data, t)   # reviving counts like a new claim
                 if busy:
                     msg += f"; its claim stays blocked: {limit_message(data, busy)}"   # keeps blocked_by_wait: no stale, no release
@@ -5268,22 +5319,31 @@ def cmd_auto_heartbeat(a):
                  and not (isinstance(v.get("beat_at"), (int, float)) and v["beat_at"] > due)}
         if not cards:
             return  # a person drives this session, no card is active, or this session's cards had their beat
-        gone, beaten, full = [], [], []
+        gone, beaten, full, held = [], [], [], []
 
         def fn(data):
             _MUT["recheck"] = True   # a lost race re-runs on the newest board: never a merge of this beat into another session's claim
-            gone.clear(); beaten.clear(); full.clear()
+            gone.clear(); beaten.clear(); full.clear(); held.clear()
             for tid, v in cards.items():   # every card this session (or the clone's, or BOARD_SESSION's) claimed and still holds
                 t = next((x for x in data.get("tasks", []) if x.get("id") == tid), None); c = (t or {}).get("claim")
                 if not c or c.get("status") == "done" or c.get("session_id") != v.get("session"):
                     gone.append(tid); continue  # released, finished, taken over or deleted: forget the card, keep the clone's session
+                if c.get("status") == "running":
+                    try:
+                        coordinated_renewal_gate(data, t, c)
+                    except SystemExit:
+                        held.append(tid); continue
                 if claim_state(data, c) == "stale" and busy_over_limit(data, t):   # reviving it would pass the claim limit
                     full.append(tid); continue   # said once, after the save: a lost race re-runs fn
                 c["heartbeat_at"] = now(); t["updated"] = now(); beaten.append(tid)
+            if held and not beaten:
+                sys.exit("claim renewal refused by an unresolved project hold; no board write")
         mutate(fn, "Agent heartbeat: " + ", ".join(cards))
         for tid in full:
             print(f"keeptrack: claim {tid} is stale and the board's agent limit is full; it stays stale "
                   "(another session may take the card)", file=sys.stderr)
+        for tid in held:
+            print(f"keeptrack: claim {tid} cannot renew through an unresolved project hold; inspect the coordinated attempt", file=sys.stderr)
         at = int(time.time())
 
         def change(entries):   # the record as it is now: only the entries this beat saw, and only while they are the same claim
@@ -5595,13 +5655,22 @@ def cmd_merge_card(a):
     data, _ = load()
     src, dst = find(data, a.src), find(data, a.into)
     if src["id"] == dst["id"]: sys.exit("a card cannot be merged into itself")
+    if unresolved_work(src):
+        sys.exit("refused: source card has an unresolved coordinated attempt; resolve it before merging")
     if src.get("claim") and src["claim"].get("status") != "done":
         sys.exit(f"refused: an agent is working on #{src.get('num')}; finish or release its claim first")
     if open_waiting(src):
         sys.exit(f"refused: #{src.get('num')} is waiting on {waiting_text(open_waiting(src))}; unwait it first")
     sid, did = src["id"], dst["id"]
     def fn(data):
+        _MUT["recheck"] = True
         s, d = find(data, sid), find(data, did)
+        if unresolved_work(s):
+            sys.exit("refused: source card has an unresolved coordinated attempt; resolve it before merging")
+        if s.get("claim") and s["claim"].get("status") != "done":
+            sys.exit(f"refused: an agent is working on #{s.get('num')}; finish or release its claim first")
+        if open_waiting(s):
+            sys.exit(f"refused: #{s.get('num')} is waiting on {waiting_text(open_waiting(s))}; unwait it first")
         if relation(d, sid) and relation(d, sid).get("status") == "merged":
             return   # a retry after the merge saved: only the archive is left
         merge_card_into(s, d)
@@ -7059,6 +7128,8 @@ HELP_TOPICS = {
     "setup": ["use", "where", "here", "boards", "board-head", "resolve", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
               "migrate", "verify", "doctor"],
 }
+if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+    HELP_TOPICS["durable-work"] = ["request-work", "work-status", "work-start", "work-event", "work-finish", "work-release-owned", "work-resolve"]
 
 
 def cmd_help(a):
@@ -8601,7 +8672,10 @@ def cmd_task_rm(a):
     """Delete a task that was created by mistake (the only other way out is done -> archive). Needs --yes.
     Nothing else points at a task, so only the card goes; its number is not reused."""
     def fn(data):
+        _MUT["recheck"] = True
         t = find(data, a.id)
+        if unresolved_work(t):
+            sys.exit("refused: card has an unresolved coordinated attempt; resolve it before deleting")
         c = t.get("claim") or {}
         if c and c.get("status") not in (None, "done"):
             sys.exit(f"#{t['num']} has an active claim ({c.get('agent') or c.get('on_behalf_of') or 'someone'}); release it first")
@@ -10675,6 +10749,25 @@ def inbound_text(data, rel):
 
 def inbound_parse(text):
     """The v1 item, checked; InboundError says what is wrong."""
+    # Python versions differ in the nesting their JSON decoder accepts. Bound
+    # containers before parsing; brackets inside quoted/escaped text are data.
+    depth, quoted, escaped = 0, False, False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > 128:
+                raise InboundError("not valid JSON (nested too deeply)")
+        elif char in "]}":
+            depth -= 1
     try:
         item = json.loads(text)
     except ValueError as e:
@@ -12257,6 +12350,11 @@ def done_col(data):
     return next((c["id"] for c in cols if c["id"] == "done"), cols[-1]["id"] if cols else "done")
 
 
+def unresolved_work(task):
+    co = task.get("coordination")
+    return isinstance(co, dict) and any(work_module().unresolved(r) for r in co.get("runs", []) if isinstance(r, dict))
+
+
 def archive_plan(data, rules, today=None):
     """Take what can be archived out of data, including decided Review Inbox proposals."""
     today = today or board_today(data)
@@ -12269,7 +12367,7 @@ def archive_plan(data, rules, today=None):
     keep_t = []
     for t in data.get("tasks", []):
         live = t.get("claim") and t["claim"].get("status") != "done"
-        if year(t) and t.get("column") == dc and stamp(t)[:10] < cut_t and not live:
+        if year(t) and t.get("column") == dc and stamp(t)[:10] < cut_t and not live and not unresolved_work(t):
             part(year(t))["tasks"].append(t)
         else:
             keep_t.append(t)
@@ -12648,6 +12746,8 @@ def _cmd_archive(a):
             if any(getattr(a, k) is not None for k in ("done_days", "lost_days", "keep_history")):
                 sys.exit("an individual task reference cannot be combined with bulk archive rules")
             task = find(data, ref)
+            if unresolved_work(task):
+                sys.exit("this task has an unresolved Rook attempt; resolve its effects before archiving")
             if task.get("claim") and task["claim"].get("status") != "done":
                 sys.exit("an agent is working on this task; finish or release its claim before archiving")
             if open_waiting(task):
@@ -13981,9 +14081,30 @@ def _automation_parser(sub):
 def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
-    reads = {"list", "show", "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
+    reads = {"list", "show", "work-status", "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
+
+
+_WORK_MODULE = None
+
+
+def work_module():
+    global _WORK_MODULE
+    if _WORK_MODULE is not None:
+        return _WORK_MODULE
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")
+    spec = importlib.util.spec_from_file_location("keeptrack_work", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _WORK_MODULE = module
+    return module
+
+
+def cmd_work(a):
+    from types import SimpleNamespace
+    return work_module().command(SimpleNamespace(**globals()), a)
 
 
 def main():
@@ -13991,6 +14112,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--file", help="use a local tasks.json instead of GitHub (testing)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+        work_module().parser(sub, cmd_work)
     s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report")
     s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish"])
     s.add_argument("--run-id"); s.add_argument("--status", choices=["success", "partial", "failed", "blocked"])
@@ -14068,6 +14191,8 @@ def main():
     s = sub.add_parser("approve", help="hosted boards only (BOARD_BACKEND=hosted): approve an assigned card (on a GitHub board, move it to To do)")
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s)
+    s.add_argument("--json", action="store_true", help="return the saved task ID and claim generation, without session credentials")
+    s.add_argument("--executor", choices=("relay-local",), help="selected host route for durable coordinated work; grants no approval")
     s.add_argument("--assign-to-me", action="store_true",
                    help="with --attended on a GitHub board, assign an unassigned Backlog or To do card to you in the claim")
     s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
@@ -14440,6 +14565,8 @@ def main():
         sys.exit(f"unknown BOARD_BACKEND {BACKEND!r}: use github (the default) or hosted, or unset it")
     if BACKEND == "github" and not FILE:
         github_api_base()   # kit v81: a hosted board's variables on a GitHub board stop every transport, `gh` too
+    if a.f is cmd_work:
+        return a.f(a) or 0
     if not FILE and BACKEND != "github":
         return hosted_dispatch(a) or 0
     return a.f(a) or 0

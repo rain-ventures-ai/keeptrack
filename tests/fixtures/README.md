@@ -1,5 +1,7 @@
 # Frozen board fixtures
 
+`v4_kit123` freezes optional Rook ownership/request/run metadata beside existing waits and inbound records. Upgrades, ordinary edits and archive/restore must preserve coordination receipts and all existing entities.
+
 `v3_prioritise` freezes optional task value/effort/board-wide ranks. Tests verify upgrade,
 split migration, ordinary current/frozen-v48 CLI edits, and archive/restore preserve these fields.
 

@@ -87,6 +87,20 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_v123_coordination_survives_upgrade_and_ordinary_mutation(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit123", "fixture.json"))
+        folder, _ = self.use_fixture("v4_kit123", meta)
+        before = read_json(os.path.join(folder, "cards", "t_first.json"))["coordination"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        task = next(t for t in data["tasks"] if t["id"] == "t_first")
+        self.assertEqual(task["coordination"], before)
+        task["title"] = "Ordinary edit after upgrade"
+        self.assertTrue(kt.save_changes(data, message="Fixture edit"))
+        self.assertEqual(read_json(os.path.join(folder, "cards", "t_first.json"))["coordination"], before)
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_image_review_fixture_is_registered(self):
         self.assertIn("v4_kit98", [name for name, _ in list_fixtures()])
 

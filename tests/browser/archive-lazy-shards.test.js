@@ -47,4 +47,5 @@ const env = (extra = {}) => ({ version: 3, archive: true, year: '2020', tasks: [
   const packed = await context.api.shardArchiveFamily('2020',large,{}, {archive:{files:{}}},{files:new Map()},config,0);
   assert.ok(serializations < 1000 * 2 + packed.size * 4, 'packing serializes each logical record once, not growing whole-year prefixes');
   console.log('archive lazy/shard helper tests passed');
+  await require('./work-lifecycle.test.js')();
 })().catch(e=>{console.error(e);process.exitCode=1;});

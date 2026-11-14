@@ -1,5 +1,5 @@
 {
-  "version": 122,
+  "version": 123,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -8,6 +8,8 @@
     "board/ROUTINES.md": "ROUTINES.md",
     "board/INBOUND.md": "INBOUND.md",
     "board/keeptrack.py": "keeptrack.py",
+    "board/work.py": "work.py",
+    "board/WORK.md": "WORK.md",
     "board/upgrade.py": "upgrade.py",
     "board/README.md": "README.md",
     "board/CARDS.md": "CARDS.md",

@@ -25,6 +25,13 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v123 (schema 4)
+Durable Rook task/run metadata and idempotent request intake. The optional `coordination` field preserves the existing schema; no migration or automatic admission. First use raises `settings.min_kit` to 123 so older writers cannot bypass the new holds. See [WORK.md](WORK.md) for the command contract and recovery limits.
+- Install both `keeptrack.py` and its sibling `work.py` via the manifest. `request-work` saves Backlog only. Logical source IDs survive transport changes, edits, completion and archiving. An unreadable archive refuses creation rather than guessing.
+- `work-start`, bounded `work-event`, `work-finish`, exact `work-release-owned` and explicit owner-confirmed `work-resolve` use the normal atomic mutation path. Potentially launched attempts with an unknown effect remain held for reconciliation. An attempt finishing does not mark a task Done.
+- Public CLI views omit private run verifier fields. Full board repository access remains trusted; runner bearer receipts must be stored separately, outside the worker sandbox and off the board.
+- The matching Relay runner requires this kit for safe exact-claim cleanup: `claim --json` returns the saved generation and `work-release-owned --claim-generation` checks that incarnation. Coordinated work additionally requires bwrap. Upgrade the board kit before the Relay runner. Neither upgrade enables a timer or grants approval.
+
 ### v122 (schema 4)
 The inbound alert knows the drain's schedule, the drain records when it last ran, and the web Settings edit the inbound sources. No data change and no migration: `settings.inbound_schedule` and `inbound.last_run` are new and optional, and older kits ignore them (an older kit's drain drops `last_run` when it writes the record, so a board whose runner still runs an older kit should upgrade it too).
 - New command `inbound-schedule [--days mon-fri] [--time HH:MM ...] [--tz ZONE] [--grace N] [--clear]`. A person sets it; an agent that is not attended may only `--clear`.
