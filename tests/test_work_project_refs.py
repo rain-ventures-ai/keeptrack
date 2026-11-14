@@ -22,6 +22,49 @@ class ProjectReferenceTests(unittest.TestCase):
     target = fixtures.AdversarialTests.target
     legacy = fixtures.AdversarialTests.legacy
 
+    def renamed_historical_hold(self):
+        self.held(); self.target()
+        data = self.read(); held = data["tasks"][0]
+        # Captured v123 representation: both the run and logical owner used
+        # the legacy card's raw project name, before canonical start storage.
+        held["project"] = "One"
+        held["coordination"]["owner"] = "rook:One"
+        held["coordination"]["runs"][0]["project_id"] = "One"
+        data["tasks"][1].update(project="pr_one", column="todo", assignees=["owner"])
+        self.write(data)
+        self.cli("project-set", "pr_one", "--name", "Renamed")
+
+    def test_renamed_historical_scope_refuses_claim_until_reconciled(self):
+        self.renamed_historical_hold(); before = self.path.read_bytes()
+        result = self.cli("claim", "t_target", "--executor", "relay-local", "--json", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retained project", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_renamed_historical_scope_refuses_start_without_orphan(self):
+        self.renamed_historical_hold()
+        self.tid = "t_target"; self.claim()
+        self.run = "wr_" + "b" * 24
+        self.proof = str(Path(self.tmp.name) / "target-proof.json")
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(SystemExit, "retained project"):
+            self.invoke("start")
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertFalse(Path(self.proof).exists())
+
+    def test_renamed_historical_scope_refuses_unrelated_renewal(self):
+        self.renamed_historical_hold(); self.tid = "t_target"; self.claim()
+        before = self.path.read_bytes()
+        result = self.cli("heartbeat", "t_target", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retained project", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_owner_reconciliation_removes_unknown_historical_scope_barrier(self):
+        self.renamed_historical_hold()
+        self.invoke("resolve", confirmed=True, note="Fixture owner checked all effects; retry is safe", disposition="retry-safe")
+        self.assertEqual(self.cli("claim", "t_target", "--executor", "relay-local", "--json").returncode, 0)
+
     def assert_alias_is_held(self, ref):
         self.held(); self.target()
         data = self.read(); task = data["tasks"][1]

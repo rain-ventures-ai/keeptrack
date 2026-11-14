@@ -318,13 +318,22 @@ def project_keys(data, ref, cache=None):
 
 def run_projects(task, run, data=None, cache=None):
     """Retargeting a card cannot move an already running attempt's hold."""
-    projects = [task.get("project"), run.get("project_id")]
+    retained = [run.get("project_id")]
     if not run.get("project_id"):
         owner = str((task.get("coordination") or {}).get("owner") or "")
         if owner.startswith("rook:"):
-            projects.append(owner[5:])  # conservative scope for historical receipts
+            retained.append(owner[5:])  # conservative scope for historical receipts
+    projects = [task.get("project"), *retained]
     if data is None:
         return set(projects) - {None, ""}
+    ids = cache.get(None) if cache is not None else None
+    if ids is None:
+        ids = {p["id"] for p in data.get("projects", []) if isinstance(p, dict) and isinstance(p.get("id"), str)}
+        if cache is not None:
+            cache[None] = ids
+    for ref in retained:
+        if ref and not ids.intersection(project_keys(data, ref, cache)):
+            fail("unresolved attempt's retained project cannot resolve safely; owner must reconcile it before unattended work")
     return set().union(*(project_keys(data, ref, cache) for ref in projects))
 
 

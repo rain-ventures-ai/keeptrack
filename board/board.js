@@ -8694,10 +8694,12 @@ if (typeof window !== 'undefined') (() => {
     return before.tasks.find(t => !remaining.has(t.id) && unresolvedWork(t));
   }
   function unresolvedProjectHold(board, task) {
-    const cache = new Map(), wanted = projectScopeKeys(board, task.project, cache);
-    return board.tasks.some(other => other !== task && wanted.size && (other.coordination?.runs || []).some(run => {
-      const projects = [other.project, run.project_id, !run.project_id && String(other.coordination?.owner || '').replace(/^rook:/, '')];
-      return projects.filter(ref => ref !== false).some(ref => [...projectScopeKeys(board, ref, cache)].some(id => wanted.has(id))) && (!run.terminal || (run.needs_reconciliation && !run.resolution));
+    const cache = new Map(), wanted = projectScopeKeys(board, task.project, cache), ids = new Set((board.projects || []).filter(p => p && typeof p.id === 'string').map(p => p.id));
+    return board.tasks.some(other => other !== task && (other.coordination?.runs || []).some(run => {
+      if (run.terminal && !(run.needs_reconciliation && !run.resolution)) return false;
+      const retained = run.project_id || String(other.coordination?.owner || '').replace(/^rook:/, '');
+      if (retained && ![...projectScopeKeys(board, retained, cache)].some(id => ids.has(id))) return true;
+      return [other.project, retained].some(ref => [...projectScopeKeys(board, ref, cache)].some(id => wanted.has(id)));
     }));
   }
   function projectScopeKeys(board, ref, cache) {
