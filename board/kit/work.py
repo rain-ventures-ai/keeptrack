@@ -302,7 +302,10 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
 
     def change(data):
         kt._MUT["recheck"] = kt._MUT["rerun"] = True
-        task = kt.find(data, ref)
+        try:
+            task = kt.find(data, ref)
+        except SystemExit as exc:
+            raise Refused(str(exc)) from None
         co = coordinate(task)
         if co.get("executor") != "relay-local":
             fail("this executor is not supported by the local runner")

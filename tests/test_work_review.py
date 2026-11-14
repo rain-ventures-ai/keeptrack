@@ -29,6 +29,12 @@ class ReviewTests(unittest.TestCase):
             self.invoke("start")
         self.assertFalse(Path(self.proof).exists())
 
+    def test_01_missing_task_refusal_also_has_no_new_receipt(self):
+        self.tid = "t_missing"
+        with self.assertRaises(SystemExit):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+
     def test_02_old_card_states_do_not_attest_this_runs_effects(self):
         initial = self.read()
         for column, links, waiting in (("pending-review", [], None), ("done", [], None),
