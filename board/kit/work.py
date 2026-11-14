@@ -19,8 +19,9 @@ KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}\Z")
 RUN = re.compile(r"wr_[a-f0-9]{24}\Z")
 PR_LINK = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+(?:[?#].*)?\Z")
 PROGRESS = {"progress", "waiting", "result_ready", "failed"}
-PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|sk-ant-|sk-proj-|xox[baprs]-)[A-Za-z0-9_.-]{10,}"
-                     r"|sk-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY"
+PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_.-]{10,}"
+                     r"|(?<![A-Za-z0-9])sk-(?:ant-|proj-)[A-Za-z0-9_.-]{10,}"
+                     r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY"
                      r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
                      r"|(?<!\w)(?:\+\d{1,3}[ -]?)?\(?0\d{2,4}\)?[ -]\d{3,4}[ -]\d{3,4}(?!\w)"
                      r"|[$£€]\s*\d|\b\d+(?:\.\d+)?\s*(?:USD|GBP|EUR)\b")
@@ -494,6 +495,14 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         co = coordinate(task)
         if co.get("executor") != "relay-local":
             fail("this executor is not supported by the local runner")
+        bound = proof.get("task_id")
+        if bound != ref:
+            try:
+                same = isinstance(bound, str) and kt.find(data, bound) is task
+            except SystemExit:
+                same = False
+            if not same:
+                fail("runner receipt belongs to a different task; nothing recorded")
         old = next((r for r in co["runs"] if r.get("id") == run_id), None)
         if old:
             attempt(kt, data, task, run_id, proof, retiring=True)
@@ -509,7 +518,12 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
                 project_id = kt.find_project(data, task["project"].strip())["id"]
             except SystemExit:
                 fail("project reference must resolve uniquely before unattended work")
+        if any(r.get("id") == run_id for other in data.get("tasks", []) if other is not task
+               for r in (other.get("coordination") or {}).get("runs", []) if isinstance(r, dict)):
+            fail("run id is already used by another task; choose a new run id")
         claim = own_running_claim(kt, data, task)
+        if task.get("column") != "in-progress":
+            fail("approval is no longer current: the card must still be In progress under its approved claim")
         claim.setdefault("generation", secrets.token_hex(12))
         charged = [r for r in co["runs"] if (r.get("terminal") or {}).get("launch_state") != "not_launched"
                    and (r.get("resolution") or {}).get("disposition") != "retry-safe"]
