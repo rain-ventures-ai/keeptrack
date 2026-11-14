@@ -10691,6 +10691,25 @@ def inbound_text(data, rel):
 
 def inbound_parse(text):
     """The v1 item, checked; InboundError says what is wrong."""
+    # Python versions differ in the nesting their JSON decoder accepts. Bound
+    # containers before parsing; brackets inside quoted/escaped text are data.
+    depth, quoted, escaped = 0, False, False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > 128:
+                raise InboundError("not valid JSON (nested too deeply)")
+        elif char in "]}":
+            depth -= 1
     try:
         item = json.loads(text)
     except ValueError as e:

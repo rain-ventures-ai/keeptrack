@@ -254,6 +254,16 @@ class Failures(Board):
         self.assertIn("nested too deeply", self.root()["inbound"]["failed"][bomb]["error"])
         self.assertEqual(0, self.kt("inbound", ok=False).returncode, "the same failure again is not news: exit 0")
 
+    def test_nesting_limit_is_independent_of_decoder_and_ignores_quoted_brackets(self):
+        value = item("bounded", message='[{' * 200 + '\\"' + '}]' * 200)
+        self.assertEqual(value, keeptrack.inbound_parse(json.dumps(value)))
+        nested = {}
+        for _ in range(130):
+            nested = {"next": nested}
+        value["payload"] = nested
+        with self.assertRaisesRegex(keeptrack.InboundError, "nested too deeply"):
+            keeptrack.inbound_parse(json.dumps(value))
+
     def test_a_reserved_company_fails_alone(self):
         self.kt("inbound-source", "rainshift-contact", "--mode", "card")
         os.makedirs(os.path.join(self.repo, "intake"))

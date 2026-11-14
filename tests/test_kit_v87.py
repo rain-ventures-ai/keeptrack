@@ -113,6 +113,22 @@ class ArchiveCommand(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def fixture(self, name):
+        copy_board_fixture(name, self.dir)
+        # These cases exercise archive size/history, not proposal retention.
+        # Keep unrelated fixture decisions fresh; the slimming test explicitly
+        # makes its own target 40 days old after this setup.
+        folder = os.path.join(self.dir, "proposals")
+        if os.path.isdir(folder):
+            for name in os.listdir(folder):
+                path = os.path.join(folder, name)
+                with open(path, encoding="utf-8") as stream:
+                    value = json.load(stream)
+                if isinstance(value.get("decision"), dict):
+                    value["decision"]["at"] = datetime.date.today().isoformat() + "T00:00:00Z"
+                    with open(path, "w", encoding="utf-8") as stream:
+                        json.dump(value, stream, indent=2)
+
     def prefill(self, year, kb):
         os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
         with open(os.path.join(self.dir, "archive", year + ".json"), "w", encoding="utf-8") as f:
@@ -132,7 +148,7 @@ class ArchiveCommand(unittest.TestCase):
                               env=self.env, cwd=self.tmp.name, capture_output=True, text=True)
 
     def test_split_board_near_the_limit_archives_and_warns_on_stderr(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         self.prefill(self.year, 710)
         ref = self.unclaimed_card()
         before = snapshot(self.dir)
@@ -146,7 +162,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertGreater(len(after[f"archive/{self.year}.json"]), len(before[f"archive/{self.year}.json"]))   # and is in the year file
 
     def test_split_board_every_item_held_back_changes_nothing(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         self.prefill(self.year, 905)
         ref = self.unclaimed_card()
         before = snapshot(self.dir)
@@ -157,7 +173,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertEqual(before, snapshot(self.dir))   # not one file under the board folder changed
 
     def test_split_board_one_year_held_back_the_rest_archived(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         root = json.load(open(self.file, encoding="utf-8"))
         ids = []
         for n, year in (("t_first", "2025"), ("t_second", "2024")):
@@ -178,7 +194,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertEqual(before["archive/2025.json"], after["archive/2025.json"])
 
     def test_dry_run_reports_the_hold_back_and_writes_nothing(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         self.prefill(self.year, 905)
         before = snapshot(self.dir)
         r = self.kt("archive", "--dry-run", self.unclaimed_card())
@@ -186,7 +202,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertEqual(before, snapshot(self.dir))
 
     def test_one_file_board_is_checked_too(self):
-        copy_board_fixture("v3", self.dir)
+        self.fixture("v3")
         self.prefill(self.year, 905)
         before = snapshot(self.dir)
         r = self.kt("archive", self.unclaimed_card())
@@ -202,7 +218,7 @@ class ArchiveCommand(unittest.TestCase):
         return card
 
     def test_history_only_year_held_says_history_not_zero_items(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         path = os.path.join(self.dir, "cards", "t_second.json")
         card = json.load(open(path, encoding="utf-8"))
         card["history"] = [{"at": "2026-09-01T08:00:%02d.000Z" % i, "by": "alex", "text": "step %d" % i} for i in range(40)]
@@ -217,7 +233,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertEqual(before, snapshot(self.dir))
 
     def test_held_names_are_cleaned_and_a_non_string_contact_name_does_not_crash(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         self.done_card("t_second", "2025", title="Evil \x1b[31mred\x07 title")
         person = {"id": "p_lost", "name": 12345, "company": "Zed", "stage": "Lost", "updated": "2025-01-05T09:00:00.000Z",
                   "created": "2025-01-05T09:00:00.000Z", "comments": [], "history": []}
@@ -234,7 +250,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertNotIn("\x1b", d.stdout + d.stderr)
 
     def test_one_card_is_measured_without_counting_its_archived_history_twice(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         ref = self.unclaimed_card()
         os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
         big = [{"at": "2025-01-01T08:00:00.000Z", "by": "alex", "text": "y" * (150 * 1024)}]
@@ -254,7 +270,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertIn(ref, [t["id"] for t in written["tasks"]])
 
     def test_slimming_saved_while_every_year_is_held_exits_one_and_says_so(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         self.done_card("t_second", "2025")
         self.prefill("2025", 905)
         path = os.path.join(self.dir, "proposals", "r_task000044.json")
@@ -269,7 +285,7 @@ class ArchiveCommand(unittest.TestCase):
         self.assertNotIn("reason", json.load(open(path, encoding="utf-8")))
 
     def test_rename_refuses_to_push_an_archive_year_over_the_limit(self):
-        copy_board_fixture("v4_kit72", self.dir)
+        self.fixture("v4_kit72")
         card = self.done_card("t_second", "2025", client="Acme")
         os.makedirs(os.path.join(self.dir, "archive"), exist_ok=True)
 
