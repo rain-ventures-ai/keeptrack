@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v125 (schema 4)
+Follow-ups from the independent review of the durable Rook task owner. No data change and no migration; the board minimum stays at 124.
+- `work-start` refuses unless the card is still In progress under its approved claim. Moving the card to Backlog after the claim withdraws approval. A refused start leaves no new receipt.
+- A claim renewal keeps `unattended_approved` only while the card is in To do or In progress.
+- `work-start` refuses a receipt made for another task and a run ID that any task on the board already holds.
+- A board-wide `watch` reports coordinated runs with a new event kind, `run`: run started, run finished, held for unknown effect, run resolved. The snapshot keeps a hash of each run ID and one state word. It never holds the claim hash, proof, receipt or host process.
+- The work content screen no longer refuses ordinary words that end in `sk-` (for example `risk-assessment-for-q3-roadmap`). Real key shapes still refuse.
+- Run `kit-update` only. Check: `kit-check` says v125, and `keeptrack.py watch --help` lists `run` among the kinds. An older watch cursor makes no false run events on its first poll.
 ### v124 (schema 4)
 Fixes historical project references bypassing durable Rook holds. Update both CLI/plugin and web clients. New coordination writes raise `settings.min_kit` to 124; when upgrading a board that already has coordination, explicitly run `keeptrack.py settings-set --min-kit 124` within the upgrade PR before unattended use. Doctor reports the missing minimum. The board data schema stays compatible; raw project references are preserved, new run scopes use canonical IDs, and unresolved/ambiguous starts refuse. No runner or timer is enabled.
 

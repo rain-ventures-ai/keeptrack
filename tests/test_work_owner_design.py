@@ -27,6 +27,15 @@ class OwnerDesignTests(unittest.TestCase):
     finish = base.WorkTests.finish
     api_cas = review.ReviewTests.api_cas
 
+    def test_release_125_is_consistent(self):
+        root = Path(base.SOURCE).parents[2]
+        version = json.loads((base.SOURCE.parent / "manifest.json").read_text())["version"]
+        self.assertGreaterEqual(version, 125)
+        self.assertEqual(str(version), re.search(r"^KIT_VERSION = (\d+)", base.SOURCE.read_text(), re.M)[1])
+        self.assertIn(f"const PAGE_KIT = {version};", (root / "board" / "board.js").read_text())
+        self.assertIn("### v125 (schema 4)", (base.SOURCE.parent / "UPGRADING.md").read_text())
+        self.assertIn("Kit v125:", (root / "CHANGELOG.md").read_text())
+
     # 1. approval must still be current at start
     def test_start_refuses_when_approval_was_withdrawn_between_claim_and_start(self):
         self.create(); self.claim()

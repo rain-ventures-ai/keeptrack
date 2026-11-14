@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 124  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 125  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4856,7 +4856,7 @@ def _loaded_head(data):
 # does, though no commit made it. With --cursor FILE the last snapshot is kept on disk, so a change that lands between
 # two watch runs is reported by the next one: never missed (a crash between printing and saving can repeat one batch).
 WATCH_KINDS = ("new", "entered", "left", "column", "review", "claim", "blocked", "stale", "comment", "mention", "todo",
-               "wait", "chase", "overdue", "fields", "proposal")
+               "wait", "chase", "overdue", "fields", "proposal", "run")
 WATCH_FIELDS = ("title", "details", "priority", "due", "labels", "assignees", "links", "outcome", "project", "client")
 WATCH_CURSOR_V = 1
 
@@ -4864,6 +4864,27 @@ WATCH_CURSOR_V = 1
 def _wh(v):
     import hashlib
     return hashlib.sha1(json.dumps(v, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:12]
+
+
+def _coord_digest(t):
+    """Public state of each coordinated run (kit v125): run id hash -> running, finished, held or resolved. Built from
+    the terminal, needs_reconciliation and resolution flags only; never the claim hash, proof, receipt or host process."""
+    co = t.get("coordination") if isinstance(t.get("coordination"), dict) else {}
+    out = {}
+    for r in co.get("runs") or []:
+        if not isinstance(r, dict) or not isinstance(r.get("id"), str):
+            continue
+        if r.get("resolution"):
+            state = "resolved"
+        elif not r.get("terminal"):
+            state = "running"
+        else:
+            state = "held" if r.get("needs_reconciliation") else "finished"
+        out[_wh(r["id"])] = state
+    return out
+
+
+RUN_TEXT = {"running": "run started", "finished": "run finished", "held": "held for unknown effect", "resolved": "run resolved"}
 
 
 def watch_entry(data, t, today, match):
@@ -4883,7 +4904,7 @@ def watch_entry(data, t, today, match):
             "todos": [[d.get("id") or _wh(d.get("text")), bool(d.get("done")), _wh(d.get("text"))]
                       for d in t.get("todos") or [] if isinstance(d, dict)],
             "comments": [x.get("id") or _wh([x.get("at"), x.get("text")]) for x in t.get("comments") or [] if isinstance(x, dict)],
-            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS},
+            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS}, "coord": _coord_digest(t),
             "last": max(hist_at) if hist_at else ""}
 
 
@@ -4971,6 +4992,10 @@ def watch_events(old, new, data, me=""):
             ev("chase", cid, n, "wait due for a chase")
         if n["overdue"] and not o["overdue"]:
             ev("overdue", cid, n, f"overdue (due {t.get('due')})")
+        if isinstance(o.get("coord"), dict):   # a cursor from an older kit has none: no false events from it
+            for rid in sorted(n["coord"]):
+                if n["coord"][rid] != o["coord"].get(rid):
+                    ev("run", cid, n, RUN_TEXT[n["coord"][rid]], who)
         changed = [k for k in WATCH_FIELDS if o["fields"].get(k) != n["fields"].get(k)]
         if changed:
             ev("fields", cid, n, "changed " + ", ".join(changed), who)

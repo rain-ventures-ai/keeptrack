@@ -159,7 +159,7 @@ class ProjectReferenceTests(unittest.TestCase):
 
     def test_version_probe_is_read_only(self):
         before = self.path.read_bytes()
-        self.assertEqual(self.cli("--version").stdout.strip(), "keeptrack kit 124")
+        self.assertEqual(self.cli("--version").stdout.strip(), "keeptrack kit 125")
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_empty_scope_refuses_start_without_mutation_or_receipt(self):
