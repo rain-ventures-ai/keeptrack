@@ -20,8 +20,8 @@ RUN = re.compile(r"wr_[a-f0-9]{24}\Z")
 PR_LINK = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/\d+(?:[?#].*)?\Z")
 PROGRESS = {"progress", "waiting", "result_ready", "failed"}
 PRIVATE = re.compile(r"(?:gh[pousr]_|github_pat_|xox[baprs]-)[A-Za-z0-9_.-]{10,}"
-                     r"|(?<![A-Za-z0-9])sk-(?:ant-|proj-)[A-Za-z0-9_.-]{10,}"
-                     r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY"
+                     r"|sk-(?:ant-|proj-)[A-Za-z0-9_.-]{10,}"
+                     r"|(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9_]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY"
                      r"|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
                      r"|(?<!\w)(?:\+\d{1,3}[ -]?)?\(?0\d{2,4}\)?[ -]\d{3,4}[ -]\d{3,4}(?!\w)"
                      r"|[$£€]\s*\d|\b\d+(?:\.\d+)?\s*(?:USD|GBP|EUR)\b")
@@ -67,10 +67,24 @@ def payload(value):
     return result
 
 
+def private_text(value):
+    """True if any decoded string, key or scalar in value looks like a secret or contact detail."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, dict):
+            pending.extend(item.keys()); pending.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            pending.extend(item)
+        elif PRIVATE.search(item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, default=str)):
+            return True
+    return False
+
+
 def safe_content(kt, value):
     # Same board boundary as other CLI writes; never echo the rejected content.
-    raw = json.dumps(value, ensure_ascii=False)
-    if PRIVATE.search(raw):
+    # Screen each decoded string, never the JSON text: there a newline is the two characters \n.
+    if private_text(value):
         fail("content contains secret-shaped or contact information; link to an authorised document instead")
 
 

@@ -118,6 +118,19 @@ class OwnerDesignTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     work.safe_content(kt, {"summary": value})
 
+    def test_screen_refuses_keys_after_control_characters_words_digits_and_nesting(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        ant = "sk-ant-api03-" + tail
+        cases = ["log line\n" + ant, "log line\n" + "sk-" + tail, "x\t" + ant, "x\r" + "sk-" + tail, "x\r\n" + ant,
+                 "tokensk-" + tail, "token" + ant, "9sk-" + tail, "9" + ant, "see 5sk-proj-" + tail,
+                 ["fine", ["deeper\n" + ant]], {"a": {"b": ["ok", {"c": "tokensk-" + tail}]}},
+                 {"summary": "fine", "links": ["https://example.invalid/x", "line\n" + "sk-" + tail]},
+                 {"line\n" + ant: "key in a dictionary key"}]
+        for index, value in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, value)
+
     # CAS tests on the real mutate path
     def test_cas_release_owned_rechecks_after_a_lost_save(self):
         self.create(); self.claim()
