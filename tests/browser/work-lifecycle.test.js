@@ -83,6 +83,14 @@ module.exports = async function run() {
     await context.api.clearWait('source');
     assert.equal(current.tasks[0].column, 'todo'); assert.equal(current.tasks[0].claim, null);
   });
+  await check('legacy project name cannot bypass a canonical hold on web unwait', async () => {
+    current = board(); current.projects = [{ id: 'pr_one', name: 'One', client: 'Example' }];
+    const legacy = task('target'); legacy.coordination = null; legacy.project = 'One';
+    legacy.claim = { status: 'blocked', blocked_by_wait: true }; legacy.waiting = { on: 'pause' };
+    current.tasks.push(legacy); context.state = clone(current); context.claimState = () => 'running';
+    await context.api.clearWait('target');
+    assert.equal(current.tasks[1].claim.status, 'blocked');
+  });
   assert.deepEqual(failures, [], failures.join('\n'));
   assert.equal(context.api.unresolvedRemoval(board(), { tasks: [] }).id, 'source', 'fresh-save guard protects removal after a conflict choice');
   const resolved = board(); resolved.tasks[0].coordination.runs[0].resolution = { disposition: 'recorded-result' };

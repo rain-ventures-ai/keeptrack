@@ -25,6 +25,9 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v124 (schema 4)
+Fixes historical project references bypassing durable Rook holds. Update both CLI/plugin and web clients. New coordination writes raise `settings.min_kit` to 124; when upgrading a board that already has coordination, explicitly run `keeptrack.py settings-set --min-kit 124` within the upgrade PR before unattended use. Doctor reports the missing minimum. The board data schema stays compatible; raw project references are preserved, new run scopes use canonical IDs, and unresolved/ambiguous starts refuse. No runner or timer is enabled.
+
 ### v123 (schema 4)
 Durable Rook task/run metadata and idempotent request intake. The optional `coordination` field preserves the existing schema; no migration or automatic admission. First use raises `settings.min_kit` to 123 so older writers cannot bypass the new holds. See [WORK.md](WORK.md) for the command contract and recovery limits.
 - Install both `keeptrack.py` and its sibling `work.py` via the manifest. `request-work` saves Backlog only. Logical source IDs survive transport changes, edits, completion and archiving. An unreadable archive refuses creation rather than guessing.

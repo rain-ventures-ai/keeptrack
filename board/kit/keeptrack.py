@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 123  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 124  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2315,7 +2315,7 @@ def min_kit_needed(data):
         needed, what = CONTACT_DETAILS_KIT, "settings.card_contact_details is off"
     if data.get("rook_request_index") is not None or (data.get("settings") or {}).get("rook_request_index") is not None or \
             any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
-        needed, what = max(123, needed), "Cards carry Rook coordination and execution holds"
+        needed, what = max(124, needed), "Cards carry Rook coordination and execution holds"
     return needed, what
 
 
@@ -14110,6 +14110,7 @@ def cmd_work(a):
 def main():
     global FILE
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=f"keeptrack kit {KIT_VERSION}")
     p.add_argument("--file", help="use a local tasks.json instead of GitHub (testing)")
     sub = p.add_subparsers(dest="cmd", required=True)
     if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):

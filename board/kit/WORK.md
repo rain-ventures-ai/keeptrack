@@ -1,12 +1,12 @@
 # Durable Rook work
 
-Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Kit 123+, GitHub boards only. Hosted boards explicitly refuse these commands.
+Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Kit 124+, GitHub boards only. Hosted boards explicitly refuse these commands.
 
 ## Request and read
 
 `keeptrack.py request-work` reads one JSON object on stdin (at most 16 KiB): `request_id`, `title`, `project`, optional `details` and `todos`. Use a stable opaque source/message ID without private content. Copy the original key and payload across retries and front doors. The result is a Backlog card with a stable task ID and logical `rook:<project-id>` owner. It does not approve, dispatch or start anything.
 
-The same key and original payload return the same card after edits, completion or archive. A changed payload under the same key refuses. Introducing coordination raises `settings.min_kit` to 123 atomically; older writers become read-only so they cannot bypass execution holds. Never fall back to ordinary `add` after an uncertain save. Different keys are not semantic deduplication. Report `possible_related` to the owner using the ordinary duplicate-decision process.
+The same key and original payload return the same card after edits, completion or archive. A changed payload under the same key refuses. Introducing coordination raises `settings.min_kit` to 124 atomically; older writers become read-only so they cannot bypass execution holds. For existing coordinated boards, raise that minimum within their ordinary kit-upgrade PR before unattended use. Never fall back to ordinary `add` after an uncertain save. Different keys are not semantic deduplication. Report `possible_related` to the owner using the ordinary duplicate-decision process.
 
 An append-only `rook_request_index` establishes absence without reading unrelated archives for every new request. Its IDs, checksum and settings marker are committed in the same whole-board CAS as creation. Archive, deletion and ordinary writers retain it. A known ID with a missing card refuses instead of recreating it; an unavailable archive blocks an indexed archived replay, but cannot invalidate absence already proven by the complete index. Restoring a damaged established index requires its committed version, never rebuilding from surviving cards alone.
 
@@ -29,6 +29,8 @@ These are host-runner commands, not general worker tools. Keep the high-entropy 
 Historical proof-backed terminal retirement can seal an older attempt without removing a successor claim or modifying its column. Claim generations distinguish release/reclaim by the same session; live renewals keep their generation, but a completed claim starts a new incarnation and cannot renew an unresolved run. Identical authenticated old starts/events replay as `created: false`; new old-run progress still refuses. This does not resolve unknown effects by itself.
 
 Project holds also apply to heartbeat and unwait revival, including the automatic heartbeat hook and web wait clearing. The exact owning coordinated attempt can renew its own claim; unrelated projects still receive heartbeats. Clearing an expired wait requeues only a claim with retained unattended admission and no unresolved run. Attended and historical claims keep their current column; clearing a wait never creates approval. A stale legacy claim is not proof that its process stopped: another coordinated start in that project refuses until it is explicitly reconciled or released.
+
+Historical project names, case variants and ID prefixes are resolved before comparing current and retained scopes. Ambiguous references conservatively hold every matching project; unmatched raw identities are retained rather than discarded. New starts require a uniquely resolvable current project and store its canonical ID. Authenticated replay is checked first, so later project edits cannot turn an old start into another launch or an error.
 
 Unknown-effect decisions use evidence bound to the attempt by a host receipt (`result_ready` event or terminal links). Old task PR links, waits or columns cannot attest a later run. Only the host, not ordinary card text or an arbitrary PR-shaped URL, can record that run result. The card's canonical column/wait is still preserved.
 
