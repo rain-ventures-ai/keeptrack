@@ -3617,6 +3617,12 @@ def drop_claim_file(task_id=None):
         pass
 
 
+def end_approval_on_leaving(task, old, column):
+    """Leaving To do or In progress ends a claim's unattended approval; coming back restores nothing (kit v125)."""
+    if old in ("todo", "in-progress") and column not in ("todo", "in-progress") and isinstance(task.get("claim"), dict):
+        task["claim"].pop("unattended_approved", None)
+
+
 def move_task_to_column(data, task, column, a=None):
     """Move a task and, on split boards, put it at the end without reusing a rank."""
     old = task.get("column")
@@ -3624,8 +3630,7 @@ def move_task_to_column(data, task, column, a=None):
         return old
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
-    if old in ("todo", "in-progress") and column not in ("todo", "in-progress") and isinstance(task.get("claim"), dict):
-        task["claim"].pop("unattended_approved", None)   # leaving approved work ends the approval; coming back restores nothing
+    end_approval_on_leaving(task, old, column)
     if "done" in (old, column):
         drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data, a)
     if data.get("layout") == "split":
@@ -3944,7 +3949,8 @@ def cmd_unwait(a):
         if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
             if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
-                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t)
+                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t) \
+                    and t.get("column") in ("todo", "in-progress")
                 t["claim"] = None
                 if requeue:
                     move_task_to_column(data, t, "todo")
@@ -4014,6 +4020,7 @@ def cmd_move(a):
                 claim_owner_check(data, t, a, "done")   # marking done is finishing: another session's live claim needs --force here too
             close_waiting(t, a, "move to done", data)
         old = t["column"]; t["column"] = column
+        end_approval_on_leaving(t, old, column)
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
             drop_leftover_wait(t, "reopening", data, a)

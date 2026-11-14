@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -128,6 +129,78 @@ class OwnerDesignTests(unittest.TestCase):
         data = self.read(); task = data["tasks"][0]
         kt.move_task_to_column(data, task, "todo"); kt.move_task_to_column(data, task, "in-progress")
         self.assertIs(task["claim"]["unattended_approved"], True)
+
+    def move_args(self, column):
+        return SimpleNamespace(id=self.tid, column=column, column_pos=None, priority=None, before=None, after=None,
+                               top=False, note=None)
+
+    def test_cli_move_out_and_back_does_not_restore_approval_before_start(self):
+        self.create(); self.claim()
+        for column in ("backlog", "in-progress"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_move(self.move_args(column))
+        self.assertNotIn("unattended_approved", self.read()["tasks"][0]["claim"])
+        with self.assertRaisesRegex(SystemExit, "unattended|approval|approved"):
+            self.invoke("start")
+        self.assertFalse(Path(self.proof).exists())
+
+    def test_cli_move_between_todo_and_in_progress_keeps_approval(self):
+        self.create(); self.claim()
+        for column in ("todo", "in-progress"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_move(self.move_args(column))
+        self.assertTrue(self.invoke("start")["launch"])
+
+    def test_cli_unwait_of_an_expired_claim_leaves_a_backlog_card_in_backlog(self):
+        for column, expected in (("backlog", "backlog"), ("pending-review", "pending-review"), ("in-progress", "todo")):
+            with self.subTest(column=column):
+                data = self.read(); data["tasks"] = []; self.write(data)
+                self.request = dict(self.request, request_id="source:unwait-" + column)
+                self.create()
+                data = self.read(); task = data["tasks"][0]
+                task["coordination"] = None; task["column"] = column
+                task["waiting"] = {"on": "Existing wait", "since": "2026-01-01", "nudge": "2027-01-01"}
+                task["claim"] = {"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session", "status": "blocked",
+                                 "blocked_by_wait": True, "unattended_approved": True, "claimed_at": "2026-01-01T00:00:00Z",
+                                 "heartbeat_at": "2026-01-01T00:00:00Z"}
+                self.write(data)
+                with mock.patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()):
+                    os.environ.pop("BOARD_AGENT", None)
+                    kt.cmd_unwait(SimpleNamespace(id=self.tid, note="wait is over", session="private-session"))
+                task = self.read()["tasks"][0]
+                self.assertIsNone(task["claim"])
+                self.assertEqual(task["column"], expected)
+
+    def test_coordination_floor_is_kit_125(self):
+        self.assertEqual(kt.min_kit_needed({"tasks": [{"coordination": {"runs": []}}]})[0], 125)
+        self.assertEqual(kt.min_kit_needed({"tasks": [], "rook_request_index": {}})[0], 125)
+        self.create()
+        self.assertEqual(self.read()["settings"]["min_kit"], 125)
+        self.assertGreaterEqual(kt.min_kit_needed(self.read())[0], 125)
+
+    def test_screen_refuses_hyphenated_keys_joined_to_words_or_digits(self):
+        tail = "a1B2c3D4e5F6g7H8i9J0k1L2"
+        hyphenated = "ab-" + tail
+        cases = ["9sk-" + hyphenated, "tokensk-" + hyphenated, "keysk-svcacct-" + tail, "keysk-admin-" + tail,
+                 "keysk-svcacct-" + hyphenated, "x\nsk-" + hyphenated, "tokensk-abcd-" + tail + "-more-words"]
+        for value in cases:
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    work.safe_content(kt, {"summary": value})
+
+    def test_screen_still_accepts_hyphenated_ordinary_text(self):
+        for value in ("risk-assessment-for-q3-roadmap", "Desk-booking-integration-for-teams",
+                      "Risk-Assessment-For-Q3-Roadmap-Plan", "risk-internationalization-plan",
+                      "disk-usage-review-for-q4-capacity-planning", "task-force-2024-planning-and-review-notes"):
+            with self.subTest(value=value):
+                work.safe_content(kt, {"summary": value})
+
+    def test_each_decoded_string_is_screened_not_the_json_text(self):
+        # A newline, then sk-, then a hyphenated tail: only a screen of the decoded string refuses it.
+        with self.assertRaises(SystemExit):
+            work.safe_content(kt, {"summary": "log line\nsk-ab-cd-ef-gh-ij-kl-mn-op-qr-st-uv"})
+        with self.assertRaises(SystemExit):
+            work.safe_content(kt, ["line one", "\n\tsk-ab-cd-ef-gh-ij-kl-mn-op-qr-st-uv"])
 
     # 3. receipt bound to its task; run ID unique on the board
     def test_receipt_of_another_task_is_refused(self):

@@ -33,7 +33,8 @@ Follow-ups from the independent review of the durable Rook task owner. No data c
 - A board-wide `watch` reports coordinated runs with a new event kind, `run`: run started, run finished, held for unknown effect, run resolved. The snapshot keeps a hash of each run ID and one state word. It never holds the claim hash, proof, receipt or host process.
 - The work content screen no longer refuses ordinary words that end in `sk-` (for example `risk-assessment-for-q3-roadmap`). Real key shapes still refuse.
 - A runner release (`work-release-owned`) or a not-launched final event returns a card to To do only when it is still In progress or To do. A card the owner moved elsewhere stays where they put it.
-- Moving a card out of To do or In progress with the CLI ends its unattended approval; moving it back restores nothing. The web board's move does not clear it yet. Until it does, a card the owner moves out and back in on the web board can still start. Prefer moving a withdrawn card to Backlog and releasing the claim.
+- Clearing an expired wait (`unwait`, and the web board) requeues a card only while it is In progress. A card in Backlog or Pending review keeps its column.
+- Moving a card out of To do or In progress with the CLI (`move`, `claim`, `release`) ends its unattended approval; moving it back restores nothing. The web board's move does not clear it yet. Until it does, a card the owner moves out and back in on the web board can still start. Prefer moving a withdrawn card to Backlog and releasing the claim.
 - `watch` shows a run as running until a terminal receipt lands. A run that never ends, or whose claim went stale, still shows as running.
 - Run `kit-update` only (then `settings-set --min-kit 125` on a coordinated board). Check: `kit-check` says v125, and `keeptrack.py watch --help` lists `run` among the kinds. An older watch cursor makes no false run events on its first poll.
 ### v124 (schema 4)

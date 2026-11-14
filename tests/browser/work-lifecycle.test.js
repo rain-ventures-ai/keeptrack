@@ -83,6 +83,16 @@ module.exports = async function run() {
     await context.api.clearWait('source');
     assert.equal(current.tasks[0].column, 'todo'); assert.equal(current.tasks[0].claim, null);
   });
+  await check('stale approved unattended wait does not requeue a card the owner moved to Backlog', async () => {
+    for (const column of ['backlog', 'pending-review']) {
+      current = board(); current.columns.push({ id: 'backlog' }, { id: 'pending-review' });
+      current.tasks[0].coordination = null; current.tasks[0].column = column;
+      current.tasks[0].claim = { status: 'blocked', blocked_by_wait: true, unattended_approved: true };
+      context.state = clone(current); context.claimState = () => 'stale';
+      await context.api.clearWait('source');
+      assert.equal(current.tasks[0].column, column); assert.equal(current.tasks[0].claim, null);
+    }
+  });
   await check('legacy project name cannot bypass a canonical hold on web unwait', async () => {
     current = board(); current.projects = [{ id: 'pr_one', name: 'One', client: 'Example' }];
     const legacy = task('target'); legacy.coordination = null; legacy.project = 'One';
