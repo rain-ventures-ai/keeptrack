@@ -87,6 +87,60 @@ class AdversarialTests(unittest.TestCase):
         self.cli("task-rm", self.tid, "--yes")
         self.assertEqual([], self.read()["tasks"])
 
+    def legacy(self, column="backlog"):
+        self.create(); data = self.read(); task = data["tasks"][0]
+        task.pop("coordination"); task.update(column=column, assignees=["owner"]); self.write(data)
+
+    def test_legacy_backlog_cannot_receive_a_runner_claim(self):
+        self.legacy(); before = self.path.read_bytes()
+        result = self.cli("claim", self.tid, "--executor", "relay-local", "--json", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("To do", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_interactive_legacy_claim_cannot_start_a_runner(self):
+        self.legacy(); self.cli("claim", self.tid, "--json")
+        before = self.path.read_bytes()
+        with self.assertRaisesRegex(SystemExit, "approved To do"):
+            self.invoke("start")
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_legacy_cleanup_does_not_create_approval(self):
+        self.legacy(); self.cli("claim", self.tid, "--json")
+        generation = self.read()["tasks"][0]["claim"]["generation"]
+        self.assertTrue(self.invoke("release", claim_generation=generation)["released"])
+        self.assertEqual("in-progress", self.read()["tasks"][0]["column"])
+
+    def test_approved_legacy_work_can_start_and_requeue_before_launch(self):
+        self.legacy("todo"); self.cli("claim", self.tid, "--executor", "relay-local", "--json")
+        self.assertTrue(self.invoke("start")["launch"])
+        self.finish(launch_state="not_launched")
+        self.assertEqual("todo", self.read()["tasks"][0]["column"])
+
+    def test_historical_attempt_without_admission_never_requeues(self):
+        self.create(); self.claim(); self.invoke("start")
+        data = self.read(); task = data["tasks"][0]
+        task["claim"].pop("unattended_approved", None)
+        task["coordination"]["runs"][0].pop("admission", None)
+        self.write(data)
+        self.finish(launch_state="not_launched")
+        self.assertEqual("in-progress", self.read()["tasks"][0]["column"])
+        self.invoke("resolve", confirmed=True, disposition="retry-safe", note="Effects checked, task approval is still separate")
+        self.assertEqual("in-progress", self.read()["tasks"][0]["column"])
+
+    def test_unsealed_run_remains_visible_after_task_outcome(self):
+        self.create(); self.claim(); self.invoke("start")
+        for column in ("done", "pending-review", "in-progress"):
+            with self.subTest(column=column):
+                data = self.read(); task = data["tasks"][0]
+                task.update(column=column, claim=None)
+                if column == "in-progress":
+                    task["waiting"] = {"who": "owner", "what": "answer", "since": kt.now()}
+                self.write(data)
+                result = self.invoke("status")
+                self.assertEqual("reconciliation_required", result["state"])
+                self.assertEqual(column, result["column"])
+
 
 if __name__ == "__main__":
     unittest.main()

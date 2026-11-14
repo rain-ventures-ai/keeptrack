@@ -1486,6 +1486,8 @@ if (typeof window !== 'undefined') (() => {
   }
   function applyInverse(target, entry) {
     const { before, after } = entry;
+    const oldTasks = new Set((before.tasks || []).map(t => t.id)), addedTasks = new Set((after.tasks || []).filter(t => !oldTasks.has(t.id)).map(t => t.id));
+    if (target.tasks.some(t => addedTasks.has(t.id) && unresolvedWork(t))) throw new Error('This card has an unresolved coordinated attempt. Resolve it before undoing its creation.');
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
       if (key === 'tasks' || key === 'contacts') continue;
       if (sameJson(before[key], after[key])) continue;
@@ -1631,6 +1633,7 @@ if (typeof window !== 'undefined') (() => {
           if (pick === 'discard') { back(pre); setStatus('Kept the newer version; your change was discarded', 'ok'); return false; }
           mg.clashes.forEach((c, i) => { if (pick[i].side === 'mine') setAt(latest, c.path, c.mine === undefined ? undefined : clone(c.mine)); else if (pick[i].side === 'edit') setAt(latest, c.path, pick[i].value); });
         }
+        if (unresolvedRemoval(pre, latest)) { back(pre); fail('An unresolved coordinated attempt cannot be removed. Resolve it first.'); return false; }
         const protectedRemoval = pre.contacts.find(p => memberOf(p, pre) && !latest.contacts.some(x => x.id === p.id));
         if (protectedRemoval) { back(pre); fail('Board members’ own records cannot be removed from the CRM.'); return false; }
         const missingCompany = latest.people.find(m => memberCompanies(m).some(company => !latest.clients.includes(company)));
@@ -4319,6 +4322,9 @@ if (typeof window !== 'undefined') (() => {
   // the same as keeptrack.py merge_card_into: nothing on the kept card is replaced
   function mergeCardInto(n, srcId, dstId) {
     const src = n.tasks.find(x => x.id === srcId), dst = n.tasks.find(x => x.id === dstId); if (!src || !dst) return;
+    if (unresolvedWork(src)) throw new Error('This card has an unresolved coordinated attempt. Resolve it before merging.');
+    if (src.claim && src.claim.status !== 'done') throw new Error('An agent is working on this task. Finish or release its claim before merging.');
+    if (waitingOf(src)) throw new Error('This card is waiting on something. Clear the wait before merging.');
     if (relationOf(dst, srcId) && relationOf(dst, srcId).status === 'merged') return;
     if ((src.details || '').trim() && !similarNorm(dst.details).includes(similarNorm(src.details)))
       dst.details = ((dst.details || '').trimEnd() + `\n\nMerged from #${src.num} (${src.title}):\n` + src.details.trim()).trim();
@@ -4334,10 +4340,11 @@ if (typeof window !== 'undefined') (() => {
   }
   async function mergeCards(srcId, dstId) {
     const src = state.tasks.find(x => x.id === srcId), dst = state.tasks.find(x => x.id === dstId); if (!src || !dst || writeBlocked()) return;
+    if (unresolvedWork(src)) { toast('This card has an unresolved coordinated attempt. Resolve it before merging.', true); return; }
     if (src.claim && src.claim.status !== 'done') { toast(`An agent is working on #${src.num}. Release its claim first.`, true); return; }
     if (waitingOf(src)) { toast(`#${src.num} is waiting on something. Clear the wait first.`, true); return; }
     if (!(await ask('Merge these cards?', [`#${src.num} “${src.title}” goes into #${dst.num} “${dst.title}”.`, 'Its description, checklist, links, labels and comments are copied. Then it is archived: nothing is deleted, and Search with Include archive can put it back.'], 'Merge'))) return;
-    const ok = await mutate(n => mergeCardInto(n, srcId, dstId), `Merge #${src.num} into #${dst.num}`, [srcId, dstId]); if (!ok) return;
+    const ok = await mutate(n => mergeCardInto(n, srcId, dstId), `Merge #${src.num} into #${dst.num}`, [srcId, dstId], null, { recheck: true }); if (!ok) return;
     await finishMerge(srcId, dstId);
   }
   async function finishMerge(srcId, dstId) {   // the archive half of a merge; also the retry when it did not finish
@@ -4872,7 +4879,11 @@ if (typeof window !== 'undefined') (() => {
     editingDesc = false;
     const closed = new Promise(resolve => $('dlgCard').addEventListener('close', resolve, { once: true }));
     $('dlgCard').close(); await closed; if (backPending) await backPending;
-    mutate(n => { n.tasks = n.tasks.filter(x => x.id !== id); }, `Delete task: ${title}`, [id]);
+    mutate(n => {
+      const task = n.tasks.find(x => x.id === id);
+      if (task && unresolvedWork(task)) throw new Error('This card has an unresolved coordinated attempt. Resolve it before deleting.');
+      n.tasks = n.tasks.filter(x => x.id !== id);
+    }, `Delete task: ${title}`, [id], null, { recheck: true });
   }
 
   // Settings → Connection → Advanced → Move settings: tokens and keys go in only when "Include tokens and keys" is ticked; each copy asks first
@@ -8674,10 +8685,18 @@ if (typeof window !== 'undefined') (() => {
   const archivePartKey = y => /^[0-9]{4}(?:-[1-9][0-9]{0,5})?$/.test(String(y));
   const archYears = () => Object.keys(((state.archive || {}).files) || {}).filter(archivePartKey).sort().reverse();   // a year is four digits: a crafted key (../x) is never fetched
   const dayIso = n => { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d); };
+  function unresolvedWork(task) {
+    return (task.coordination?.runs || []).some(run => !run.terminal || (run.needs_reconciliation && !run.resolution));
+  }
+  function unresolvedRemoval(before, after) {
+    const remaining = new Set(after.tasks.map(t => t.id));
+    return before.tasks.find(t => !remaining.has(t.id) && unresolvedWork(t));
+  }
   function archivePlan(d, rules) {   // takes what can be archived out of d; returns { year: { tasks, contacts, history: { id: [entries] } } }
     if (rules.taskId) {
       const t = d.tasks.find(x => x.id === rules.taskId);
       if (!t) throw new Error('This task is no longer on the board. Refresh before archiving.');
+      if (unresolvedWork(t)) throw new Error('This card has an unresolved coordinated attempt. Resolve it before archiving.');
       if (t.claim && t.claim.status !== 'done') throw new Error('An agent is working on this task. Finish or release its claim before archiving.');
       if (rules.onlyDone && t.column !== (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id) throw new Error(`#${t.num} is no longer in Done, so it was not archived.`);
       const y = todayIso().slice(0, 4); d.tasks = d.tasks.filter(x => x.id !== t.id);
@@ -8685,14 +8704,14 @@ if (typeof window !== 'undefined') (() => {
     }
     if (rules.taskIds) {   // a batch (quick archives queued while one ran, or Archive all): a card that left Done, went away or got a live claim meanwhile stays on the board
       const ids = new Set(rules.taskIds), dc = (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id, take = [];
-      d.tasks = d.tasks.filter(t => { if (!ids.has(t.id) || (t.claim && t.claim.status !== 'done') || (rules.onlyDone && t.column !== dc)) return true; take.push(t); return false; });
+      d.tasks = d.tasks.filter(t => { if (!ids.has(t.id) || unresolvedWork(t) || (t.claim && t.claim.status !== 'done') || (rules.onlyDone && t.column !== dc)) return true; take.push(t); return false; });
       return take.length ? { [todayIso().slice(0, 4)]: { tasks: take, contacts: [], history: {} } } : {};
     }
     const cutT = dayIso(rules.done_days), cutP = dayIso(rules.lost_days), today = todayIso(), plan = {}, stamp = x => x.updated || x.created || today;
     const dc = (d.columns.find(c => c.id === 'done') || d.columns[d.columns.length - 1] || {}).id;
     const part = y => plan[y] || (plan[y] = { tasks: [], contacts: [], history: {} });
     d.tasks = d.tasks.filter(t => { const live = t.claim && t.claim.status !== 'done';
-      if (t.column === dc && stamp(t).slice(0, 10) < cutT && !live) { part(stamp(t).slice(0, 4)).tasks.push(t); return false; } return true; });
+      if (t.column === dc && stamp(t).slice(0, 10) < cutT && !live && !unresolvedWork(t)) { part(stamp(t).slice(0, 4)).tasks.push(t); return false; } return true; });
     d.contacts = (d.contacts || []).filter(p => { if (!memberOf(p, d) && String(p.stage || '').toLowerCase() === 'lost' && stamp(p).slice(0, 10) < cutP && !((p.next_due || '') >= today)) { part(stamp(p).slice(0, 4)).contacts.push(p); return false; } return true; });
     const n = rules.keep_history;
     if (n) [...d.tasks, ...d.contacts].forEach(x => { const h = x.history || []; if (h.length > n) { part(today.slice(0, 4)).history[x.id] = h.slice(0, h.length - n); x.history = h.slice(-n); } });
@@ -9927,6 +9946,7 @@ if (typeof window !== 'undefined') (() => {
         }
         const grewName = reservedGrew(pre, latest);   // kit v89: as mutateNow
         if (grewName != null) throw new Error(reservedSaveMsg(grewName, pre));
+        if (unresolvedRemoval(pre, latest)) throw new Error('An unresolved coordinated attempt cannot be removed. Resolve it first.');
         base = pre; mine = clone(latest);
         if (await hostedSave(latest, message) === 'ok') { render(); setStatus('Saved ' + new Date().toLocaleTimeString(), 'ok'); return true; }
       }

@@ -3481,6 +3481,9 @@ def do_claim(a, tid, data):
                   "generation": (old.get("generation") if old.get("session_id") == sid and old.get("status") != "done" else None) or secrets.token_hex(12),
                   "host": socket.gethostname(), "cwd": os.getcwd(), "branch": git_branch(),
                   "status": "running", "note": a.note or "", "claimed_at": ts, "heartbeat_at": ts}
+    if not attended(a) and (t.get("column") == "todo" or
+            (old.get("session_id") == sid and old.get("status") != "done" and old.get("unattended_approved") is True)):
+        t["claim"]["unattended_approved"] = True
     if attended(a):
         t["claim"]["attended"] = True
     if t["column"] != "in-progress":

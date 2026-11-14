@@ -84,7 +84,7 @@ class WorkTests(unittest.TestCase):
         card = next(t for t in data["tasks"] if t["id"] == self.tid)
         self.claim_generation = secrets.token_hex(12)
         card.update(column="in-progress", claim={"agent": "codex", "on_behalf_of": "owner", "session_id": "private-session", "generation": self.claim_generation,
-                    "claimed_at": kt.now(), "heartbeat_at": kt.now(), "status": "running"})
+                    "claimed_at": kt.now(), "heartbeat_at": kt.now(), "status": "running", "unattended_approved": True})
         self.write(data)
 
     def finish(self, **over):

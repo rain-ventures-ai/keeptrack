@@ -116,6 +116,13 @@ def view(kt, task, *, data=None, archived=False):
         state, next_step = "archived", "inspect archived outcome; no new task was created"
     elif any(r.get("needs_reconciliation") and not r.get("resolution") for r in co.get("runs", [])):
         state, next_step = "reconciliation_required", "inspect this run's effects; an old card outcome or link does not resolve them"
+    elif any(unresolved(r) for r in co.get("runs", [])):
+        active = kt.claim_state(data or {}, claim) == "running" and any(
+            not r.get("terminal") and r.get("_claim") == claim_hash(kt, claim)
+            for r in (task.get("coordination") or {}).get("runs", []))
+        state = "running" if active else "reconciliation_required"
+        next_step = "follow the current claim; a recorded claim is not proof of process liveness" if active else \
+            "the runner must reconcile its unresolved attempt before another launch"
     elif task.get("column") == "done":
         state, next_step = ("cancelled" if task.get("outcome") == "cancelled" else "complete"), "no execution is requested"
     elif wait:
@@ -125,8 +132,6 @@ def view(kt, task, *, data=None, archived=False):
     elif claim and claim.get("status") != "done":
         state = "running" if kt.claim_state(data or {}, claim) == "running" else "reconciliation_required"
         next_step = "follow the current claim; a recorded claim is not proof of process liveness"
-    elif any(unresolved(r) for r in co.get("runs", [])):
-        state, next_step = "reconciliation_required", "the runner must reconcile its unresolved attempt before another launch"
     elif co.get("runs") and co["runs"][-1].get("result"):
         state, next_step = "result_ready", "reconcile this run's host-attested evidence through the existing result/review path"
     elif task.get("column") == "todo":
@@ -242,6 +247,10 @@ def claim_gate(kt, data, task, sid, executor, attended):
         return
     co = task.get("coordination")
     mine = None
+    claim = task.get("claim") or {}
+    renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
+    if executor == "relay-local" and task.get("column") != "todo" and not (renewing and claim.get("unattended_approved") is True):
+        fail("unattended runner claims require an approved To do card; no claim written")
     if co is not None:
         co = coordinate(task)
         claim = task.get("claim") or {}
@@ -269,6 +278,8 @@ def own_running_claim(kt, data, task):
         fail("the exact claim must be running and the task must not be waiting")
     if claim.get("attended"):
         fail("runner transitions require an unattended claim; attended work grants no unattended approval")
+    if claim.get("unattended_approved") is not True:
+        fail("runner transitions require a claim from approved To do work; historical or interactive claims grant no unattended approval")
     return claim
 
 
@@ -365,7 +376,7 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             if any(unresolved(r) and task["project"] in run_projects(other, r) for r in other_co.get("runs", [])):
                 fail("this project's other coordinated attempt needs completion or reconciliation")
         record = {"id": run_id, "started_at": kt.now(), "agent": claim.get("agent"), "project_id": task.get("project"),
-                  "unattended": True, "events": [],
+                  "unattended": True, "admission": "approved-todo", "events": [],
                   "_claim": claim_hash(kt, claim), "_proof": digest(proof["proof"])}
         co["runs"].append(record)
         require_current_kit(data)
@@ -413,7 +424,7 @@ def release_owned(kt, ref, generation=None):
         preserve = any(unresolved(r) for r in (task.get("coordination") or {}).get("runs", [])) or \
             task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
             any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
-        if not preserve:
+        if not preserve and claim.get("unattended_approved") is True:
             kt.move_task_to_column(data, task, "todo")
         kt.hist(task, "runner released its exact claim")
         kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
@@ -492,7 +503,8 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
                 task["claim"] = None
                 if not pending:
                     kt.move_task_to_column(data, task, "in-progress" if run["needs_reconciliation"] or run.get("result")
-                                           or not run.get("unattended") or claim.get("attended") else "todo")
+                                           or not run.get("unattended") or run.get("admission") != "approved-todo"
+                                           or claim.get("unattended_approved") is not True or claim.get("attended") else "todo")
                 kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
         else:
             run["events"].append(entry)
@@ -542,7 +554,7 @@ def resolve(kt, args):
         require_current_kit(data)
         if args.disposition == "recorded-result" and task.get("column") == "todo" and not task.get("claim"):
             kt.move_task_to_column(data, task, "in-progress")
-        if args.disposition == "retry-safe" and not pending and not task.get("claim"):
+        if args.disposition == "retry-safe" and not pending and not task.get("claim") and run.get("admission") == "approved-todo":
             kt.move_task_to_column(data, task, "todo")
         kt.hist(task, "Rook attempt resolved: " + note)
         result.update(created=True, task=view(kt, task, data=data))

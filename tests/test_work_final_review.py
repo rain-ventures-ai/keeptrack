@@ -55,7 +55,7 @@ class FinalReviewTests(unittest.TestCase):
     def test_project_reassignment_cannot_move_an_unresolved_runs_hold(self):
         self.create(); self.claim(); self.invoke("start"); self.move_project()
         data = self.read()
-        other = {"id": "t_concurrent", "project": "pr_one", "claim": None}
+        other = {"id": "t_concurrent", "project": "pr_one", "claim": None, "column": "todo"}
         with self.assertRaisesRegex(SystemExit, "unresolved"):
             kt.work_module().claim_gate(kt, data, other, "other-session", "relay-local", False)
 
