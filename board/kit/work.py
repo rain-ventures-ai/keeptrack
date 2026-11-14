@@ -332,7 +332,9 @@ def run_projects(task, run, data=None, cache=None):
         if cache is not None:
             cache[None] = ids
     for ref in retained:
-        if ref and not ids.intersection(project_keys(data, ref, cache)):
+        if ref:
+            project_keys(data, ref, cache)  # validate the retained reference before membership checks
+        if ref and ref not in ids:
             fail("unresolved attempt's retained project cannot resolve safely; owner must reconcile it before unattended work")
     return set().union(*(project_keys(data, ref, cache) for ref in projects))
 

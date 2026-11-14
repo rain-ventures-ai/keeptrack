@@ -41,6 +41,22 @@ class ProjectReferenceTests(unittest.TestCase):
         self.assertIn("retained project", result.stderr)
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_reused_historical_name_cannot_rebind_the_original_hold(self):
+        self.renamed_historical_hold()
+        data = self.read(); data["projects"].append({"id": "pr_replacement", "name": "One", "client": "Example"}); self.write(data)
+        before = self.path.read_bytes()
+        result = self.cli("claim", "t_target", "--executor", "relay-local", "--json", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retained project", result.stderr)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_substring_match_cannot_rebind_a_historical_hold(self):
+        self.renamed_historical_hold()
+        data = self.read(); data["projects"].append({"id": "pr_replacement", "name": "One replacement", "client": "Example"}); self.write(data)
+        result = self.cli("claim", "t_target", "--executor", "relay-local", "--json", ok=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retained project", result.stderr)
+
     def test_renamed_historical_scope_refuses_start_without_orphan(self):
         self.renamed_historical_hold()
         self.tid = "t_target"; self.claim()

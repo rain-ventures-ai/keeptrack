@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
-Kit v124 also refuses unattended admission/revival when an unresolved historical run's retained name no longer resolves after a project rename. The owner must reconcile that receipt before unrelated scope can be proven safe; resolved historical records do not block work.
+Kit v124 also requires exact canonical retained run identity for unattended admission/revival. Historical raw names/prefixes can rebind after rename or name reuse and require explicit owner reconciliation before unrelated scope can be proven safe; resolved historical records do not block work.
 
 Kit v124: historical project names, case variants and ID prefixes cannot bypass Rook project holds. Claim, start, renewal and web wait clearing compare canonical scopes while retaining raw identities conservatively; new run receipts store canonical project IDs. New starts refuse an unresolved project reference without leaving an orphan receipt, while authenticated old starts still replay without launching. Initial proof publication and retries cross directory/ancestry durability barriers before the canonical attempt is saved, preventing a power loss from stranding a run without its proof. Coordinated boards require minimum kit 124 to fence older writers; update an existing coordinated board's minimum within its upgrade PR. No live board, runner or timer is changed by this source release.
 

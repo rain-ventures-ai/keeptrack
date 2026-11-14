@@ -8698,7 +8698,7 @@ if (typeof window !== 'undefined') (() => {
     return board.tasks.some(other => other !== task && (other.coordination?.runs || []).some(run => {
       if (run.terminal && !(run.needs_reconciliation && !run.resolution)) return false;
       const retained = run.project_id || String(other.coordination?.owner || '').replace(/^rook:/, '');
-      if (retained && ![...projectScopeKeys(board, retained, cache)].some(id => ids.has(id))) return true;
+      if (retained && !ids.has(retained)) return true;
       return [other.project, retained].some(ref => [...projectScopeKeys(board, ref, cache)].some(id => wanted.has(id)));
     }));
   }
