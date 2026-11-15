@@ -499,6 +499,7 @@ async function assertFits(page, where) {
       const updated = api.card('t_research'); updated.coordination.research.current = { done: 'Guide compared.', remaining: '<img src=x onerror=alert(1)>', next_actor: 'owner' };
       api.files['cards/t_research.json'] = text(updated); api.head = 'head-' + ++api.n;
       await page.reload(); await page.locator('#dlgCard[open]').waitFor();
+      await page.waitForFunction(() => document.getElementById('cRookCurrent')?.textContent.includes('Guide compared.'));
       assert.match(await page.locator('#cRookCurrent').textContent(), /Guide compared/);
       assert.equal(await page.locator('#cRookCurrent img').count(), 0, 'Current state never renders model HTML');
       await assertFits(page, 'Rook current state'); await shot(page, 'rook-current-state');
