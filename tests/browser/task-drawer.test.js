@@ -472,6 +472,13 @@ async function assertFits(page, where) {
         details: 'Explain the public documentation.', links: [{ url: 'https://example.org/guide', title: 'Guide' }] }));
       const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [];
       page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(() => { localStorage.setItem('kb_rook_owner_action:acme/board|main|board/tasks.json', JSON.stringify({ endpoint: 'https://owner.test/owner-action', token: 'o'.repeat(64) })); });
+      await page.route('https://owner.test/owner-action', async route => {
+        if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Methods': 'POST' } });
+        const p = route.request().postDataJSON();
+        await route.fulfill({ status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+          body: JSON.stringify({ v: 1, task_id: p.task_id, approval_id: p.approval_id, answer_id: p.answer_id, content_hash: p.content_hash }) });
+      });
       await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
       await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html#3');
       await page.locator('#dlgCard[open]').waitFor(); await page.locator('#cRookStart').click();

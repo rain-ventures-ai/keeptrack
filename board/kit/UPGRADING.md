@@ -37,7 +37,9 @@ adding the opt-in configuration. This source release enables nothing on a board.
 
 Install the complete kit including `research.py`. Research requires a separately
 approved host/account, one board/project, private report destination and
-notification configuration. See [WORK.md](WORK.md#public-research-pilot).
+notification configuration. The button also requires a separate owner endpoint,
+browser capability and host-only signing key; an owner Git push is insufficient.
+These are configured only after approval, not by a kit copy. See [WORK.md](WORK.md#public-research-pilot).
 No live upgrade, runner, sender or schedule is part of this source change.
 
 ### v125 (schema 4)

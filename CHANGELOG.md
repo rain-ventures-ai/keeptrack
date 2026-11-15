@@ -7,15 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 Kit v126: disabled-by-default public research pilot. An owner-only card button
-binds the existing `ask.approve` to the exact request. Admission verifies the
-authenticated GitHub push that introduced the answer, consumes it once and
+binds the existing `ask.approve` to the exact request. Admission verifies a
+signed private action from a separate authenticated owner endpoint, consumes it once and
 requires a private host receipt for claim/start. Report handover saves the
 versioned artifact link, short Current state and run outcome atomically, without
 progress comments. Withdrawal and browser Undo cannot revive the research grant.
 `watch-poll` transports the existing public watch projection for one project;
 proofs are absent from events and cursors. Complete kit packaging includes
 `research.py`; pilot boards require minimum kit 126. No live board, host, account,
-sender or schedule is enabled by this release.
+endpoint, sender or schedule is enabled by this release. Git pushes cannot
+substitute for owner action proof; checked host resolution retires a held
+research attempt without deleting evidence or restarting the old action.
 
 Kit v125: follow-ups from the independent review of the durable Rook task owner. `work-start` refuses once approval is withdrawn (the card must still be In progress under its approved claim), a receipt made for another task, and a run ID already held by any task. A claim renewal keeps unattended approval only in To do or In progress. A board-wide `watch` has a new `run` event kind (started, finished, held for unknown effect, resolved) built from public state only. The work content screen accepts ordinary text such as `risk-assessment-for-q3-roadmap` and screens decoded text, so a key after a newline, tab, digit or word still refuses. Coordination now needs kit 125 (`settings.min_kit`), so older runners cannot skip the checks. A runner release or not-launched finish leaves a withdrawn card in its column, and leaving To do or In progress through the CLI (including `move`) ends unattended approval. Clearing an expired wait requeues a card only from In progress. The work content screen also refuses `svcacct-` and `admin-` keys and any `sk-` tail with a 16-character hyphen-free run of letters and digits. No data change and no migration.
 

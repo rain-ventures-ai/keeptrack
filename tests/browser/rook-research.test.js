@@ -10,9 +10,14 @@ const board = () => ({ settings: { kit_owner: 'owner', rook_research: { v: 1, en
     todos: [], after: [], links: [{ url: 'https://example.org/guide', title: 'Public guide' }], comments: [], history: [] }] });
 
 module.exports = async function run() {
-  let data = board(), user = 'owner', saves = 0, saved, race = () => {}, toast = '';
+  let data = board(), user = 'owner', saves = 0, saved, race = () => {}, toast = '', ownerAvailable = true;
   const cfg = () => ({ repo: 'owner/board', me: user });
-  const context = vm.createContext({ Map, Set, URL, Error, TextEncoder, Uint8Array, Date: class extends Date { static now() { return Date.parse('2026-11-15T12:00:00Z'); } }, crypto: webcrypto, clone, jcanon: canonical, cfg,
+  const context = vm.createContext({ Map, Set, URL, Error, TextEncoder, Uint8Array, AbortController, setTimeout, clearTimeout,
+    rookApprovalConfig: () => ({ endpoint: 'https://owner.example.org/owner-action', token: 'o'.repeat(64) }),
+    fetch: async (url, options) => { assert.equal(url, 'https://owner.example.org/owner-action'); assert.equal(options.credentials, 'omit');
+      assert.equal(options.headers.Authorization, 'Bearer ' + 'o'.repeat(64)); const p = JSON.parse(options.body);
+      return { ok: ownerAvailable, json: async () => ({ v: 1, task_id: p.task_id, approval_id: p.approval_id, answer_id: p.answer_id, content_hash: p.content_hash }) }; },
+    Date: class extends Date { static now() { return Date.parse('2026-11-15T12:00:00Z'); } }, crypto: webcrypto, clone, jcanon: canonical, cfg,
     state: data, ro: false, HOSTED: false, kitOwner: () => 'owner', toast: t => { toast = t; },
     boardId: () => 'r_abcdef1234', rid6: () => '123456', nowIso: () => '2026-11-15T12:00:00Z', waitingOf: t => t.waiting,
     proposalIn: () => null, proposalPath: id => `proposals/${id}.json`, jsonText: JSON.stringify, stamp: () => {},
@@ -21,7 +26,7 @@ module.exports = async function run() {
       saves++; saved = result; data = latest; context.state = data; return true; } });
   vm.runInContext(source.slice(source.indexOf('  function rookResearchScope('), source.indexOf('  function renderRookResearch(')) +
     '\nthis.api = { rookResearchScope, revokeResearchOnEdit, handResearchToRook };', context);
-  const reset = () => { data = board(); context.state = data; user = 'owner'; saves = 0; race = () => {}; };
+  const reset = () => { data = board(); context.state = data; user = 'owner'; saves = 0; race = () => {}; ownerAvailable = true; };
   assert.equal(await context.api.handResearchToRook('t_research'), true);
   assert.equal(saves, 1);
   const p = JSON.parse(saved.files['proposals/r_abcdef1234.json']);
@@ -31,6 +36,7 @@ module.exports = async function run() {
   assert.equal(data.tasks[0].coordination.research.request.answer_id, p.decision.id);
   assert.equal(await context.api.handResearchToRook('t_research'), false, 'duplicate click does not create another approval');
   reset(); user = 'other'; assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
+  reset(); ownerAvailable = false; assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0, 'no public approval is saved when the private owner endpoint refuses');
   reset(); race = d => { d.tasks[0].details = 'Edited during save'; };
   assert.equal(await context.api.handResearchToRook('t_research'), false); assert.match(toast, /changed/); assert.equal(saves, 0);
   reset(); data.settings.rook_research.enabled = false;

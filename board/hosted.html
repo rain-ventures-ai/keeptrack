@@ -269,7 +269,16 @@
             </div></div>
           </div>
           <div id="sTokenReuse" class="hint tokenreuse" role="status"></div>
-          <p class="hint">One token per board, kept in this browser and sent only to api.github.com. <a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Make a token with the right permissions →</a></p>
+          <details class="sfold" id="sRookApproval"><summary>Rook owner approval</summary>
+            <p class="hint">For the currently connected board only. This separate owner credential stays in this browser; settings codes and task data never include it.</p>
+            <div data-props>
+              <div data-row="Owner endpoint" data-for="sRookEndpoint"><input id="sRookEndpoint" type="url" placeholder="https://your-approved-host/owner-action" autocomplete="off"></div>
+              <div data-row="Owner token" data-for="sRookToken"><input id="sRookToken" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved token"></div>
+            </div>
+            <button id="sRookSave" type="button" class="small">Save Rook owner approval</button>
+            <p class="hint">Clear the endpoint and save to forget it. This does not enable a runner or change the board.</p>
+          </details>
+          <p class="hint">One GitHub token per board, kept in this browser and sent only to api.github.com. <a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Make a token with the right permissions →</a></p>
           <details class="sfold"><summary>Token help</summary>
             <p class="hint">The link fills in the <b>Resource owner</b> and the <b>Contents</b> and <b>Issues</b> permissions. You still choose <b>Only select repositories</b> and pick this board repo.</p>
             <p class="hint">One token can serve every board it can access. Boards owned by different GitHub organisations may need different tokens.</p>

@@ -23,6 +23,8 @@ SCHEMA = "keeptrack.research/1"
 EXECUTOR = "relay-research"
 HASH = re.compile(r"sha256:[a-f0-9]{64}\Z")
 PUBLIC_POLICY_FIELDS = {"v", "enabled", "board", "owner", "projects", "profile", "policy_digest", "approval_ttl"}
+ACTION_BINDINGS = {"board", "owner", "project", "task_id", "approval_id", "answer_id", "content_hash", "policy_digest"}
+ACTION_FIELDS = ACTION_BINDINGS | {"schema", "kind", "id", "proof", "issued_at", "expires_at", "mac"}
 
 
 def fail(message):
@@ -221,8 +223,54 @@ def _approval_identity(item):
             "answer": {k: d.get(k) for k in ("action", "id", "by", "at", "answer", "relayed")}}
 
 
+def owner_action_key(path):
+    key = _private_receipt(path)
+    if set(key) != {"schema", "kind", "proof"} or key.get("kind") != "owner-action-key":
+        fail("invalid private owner-action key")
+    return bytes.fromhex(key["proof"])
+
+
+def action_mac(value, key):
+    body = {k: v for k, v in value.items() if k != "mac"}
+    return hmac.new(key, json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode(), hashlib.sha256).hexdigest()
+
+
+def verify_owner_action(path, key_path, expected, now, ttl, *, allow_expired=False):
+    """The trusted host pins this key/path outside all board/worker mounts.
+
+    A Git push or arbitrary owner-labelled board record is never this receipt.
+    An agent with the owner's host filesystem/signing key is outside this boundary.
+    """
+    if set(expected) != ACTION_BINDINGS:
+        fail("invalid owner-action binding")
+    value = _private_receipt(path)
+    if set(value) != ACTION_FIELDS or value.get("kind") != "owner-action" or \
+            not re.fullmatch(r"oa_[a-f0-9]{24}", str(value.get("id", ""))) or \
+            not hmac.compare_digest(str(value.get("mac", "")), action_mac(value, owner_action_key(key_path))):
+        fail("owner-action signature is invalid")
+    if any(value.get(k) != v for k, v in expected.items()):
+        fail("owner action belongs to another request or adopted configuration")
+    issued, expiry, current = _time(value["issued_at"]), _time(value["expires_at"]), _time(now)
+    if not 0 < (expiry - issued).total_seconds() <= ttl or (issued - current).total_seconds() > 5 or \
+            (not allow_expired and current > expiry):
+        fail("owner action is expired or outside its admission window")
+    return {"provider": "owner-action", "id": value["id"], "digest": digest(value)}
+
+
+def issue_owner_action(path, key_path, expected, now, ttl):
+    """Called only after the owner endpoint authenticates its separate capability."""
+    if set(expected) != ACTION_BINDINGS or type(ttl) is not int or not 60 <= ttl <= 3600:
+        fail("invalid owner-action scope or lifetime")
+    if not Path(path).exists() and not Path(path).is_symlink():
+        value = {"schema": SCHEMA, "kind": "owner-action", "id": "oa_" + secrets.token_hex(12), "proof": secrets.token_hex(32),
+                 **expected, "issued_at": now, "expires_at": (_time(now) + dt.timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z")}
+        value["mac"] = action_mac(value, owner_action_key(key_path))
+        _private_receipt(path, value)
+    return verify_owner_action(path, key_path, expected, now, ttl)
+
+
 def owner_push(kt, item, p):
-    """Authenticate the actor through GitHub activity, not a commit author or card field.
+    """Optional Git audit only: a push is NOT authority for a specific action.
 
     The button makes one commit. Its exact proposal answer must be new in the
     owner's normal push, not merely present in an unrelated later owner push.
@@ -246,7 +294,8 @@ def owner_push(kt, item, p):
         try: return json.loads(out)
         except ValueError: fail("invalid GitHub owner-action provenance")
     prefix = "repos/" + p["board"]
-    path = kt.PATH.rsplit("/", 1)[0] + "/proposals/" + item["id"] + ".json"
+    directory = kt.PATH.rpartition("/")[0]
+    path = (directory + "/" if directory else "") + "proposals/" + item["id"] + ".json"
     q = urllib.parse.urlencode({"path": path, "sha": kt.BRANCH, "per_page": 1})
     commits = read(prefix + "/commits?" + q)
     commit = commits[0].get("sha") if isinstance(commits, list) and len(commits) == 1 else None
@@ -287,12 +336,21 @@ def owner_push(kt, item, p):
 def admit(kt, work, args):
     data, _ = kt.load(); task = kt.find(data, args.id)
     item, hashed = approved(kt, data, task, args.approval, args.answer, args.policy_digest, allow_consumed=True)
+    action_path, key_path = getattr(args, "owner_action_receipt", None), getattr(args, "owner_action_key", None)
     if Path(args.admission_receipt).exists() or Path(args.admission_receipt).is_symlink():
         private = _private_receipt(args.admission_receipt)
     else:
         if not kt.FILE:
             kt.require_review_storage(data)
-        provenance = owner_push(kt, item, policy(data, args.policy_digest))
+        if action_path and key_path:
+            p = policy(data, args.policy_digest)
+            expected = {"board": p["board"], "owner": p["owner"], "project": task["project"], "task_id": task["id"],
+                        "approval_id": args.approval, "answer_id": args.answer, "content_hash": hashed, "policy_digest": args.policy_digest}
+            provenance = verify_owner_action(action_path, key_path, expected, kt.now(), p["approval_ttl"])
+        elif kt.FILE:
+            provenance = {"provider": "offline-fixture"}
+        else:
+            fail("an independently authenticated private owner-action receipt is required; Git pushes are not approval")
         private = _private_receipt(args.admission_receipt, {"schema": SCHEMA, "task_id": task["id"],
             "approval_id": args.approval, "answer_id": args.answer, "content_hash": hashed,
             "policy_digest": args.policy_digest, "proof": secrets.token_hex(32), "provenance": provenance,
@@ -306,6 +364,12 @@ def admit(kt, work, args):
             verify(kt, current, card, private, args.policy_digest)
             answer.update(created=False, task=work.view(kt, card, data=current)); return
         prop, content_hash = approved(kt, current, card, args.approval, args.answer, args.policy_digest)
+        if action_path and key_path:
+            p = policy(current, args.policy_digest)
+            expected = {"board": p["board"], "owner": p["owner"], "project": card["project"], "task_id": card["id"],
+                        "approval_id": args.approval, "answer_id": args.answer, "content_hash": content_hash, "policy_digest": args.policy_digest}
+            if verify_owner_action(action_path, key_path, expected, kt.now(), p["approval_ttl"]) != private.get("provenance"):
+                fail("owner action changed during admission")
         request = (co.get("research") or {}).get("request")
         if request and (request.get("approval_id") != args.approval or request.get("answer_id") != args.answer):
             fail("a newer button action supersedes this admission")
@@ -339,7 +403,7 @@ def admit(kt, work, args):
 
 def verify(kt, data, task, private, expected_policy):
     record = ((task.get("coordination") or {}).get("research") or {}).get("admission") or {}
-    if not kt.FILE and (private.get("provenance") or {}).get("provider") != "github-activity":
+    if not kt.FILE and (private.get("provenance") or {}).get("provider") != "owner-action":
         fail("this host receipt has no authenticated owner-action provenance")
     if task.get("id") != private.get("task_id") or record.get("active") is not True or \
             record.get("answer_id") != private.get("answer_id") or record.get("approval_id") != private.get("approval_id") or \
@@ -447,6 +511,9 @@ def parser(sub, callback):
     p = sub.add_parser("work-research-reconcile", help="authenticate a saved research outcome with its private run receipt")
     p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
     p.set_defaults(f=callback, work_action="research-reconcile")
+    p = sub.add_parser("work-research-retire", help="retire a host-attested owner resolution; never infer it from board flags")
+    p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
+    p.set_defaults(f=callback, work_action="research-retire")
     p = sub.add_parser("work-research-candidates", help="read the current opted-in project's research requests; no queue or admission")
     p.add_argument("--project", required=True); p.set_defaults(f=callback, work_action="research-candidates")
     p = sub.add_parser("watch-poll", help="one read-only watch snapshot diff; cursor is not authority or an event log")
@@ -459,6 +526,7 @@ def parser(sub, callback):
             p.add_argument("--policy-digest", required=True)
         if name == "admit":
             p.add_argument("--approval", required=True); p.add_argument("--answer", required=True)
+            p.add_argument("--owner-action-receipt"); p.add_argument("--owner-action-key")
         if name == "handover":
             p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
             p.add_argument("--informational", action="store_true")
@@ -579,6 +647,27 @@ def command(kt, work, args):
         return
     if action == "admit":
         return admit(kt, work, args)
+    if action == "retire":
+        proof = work.receipt(args.receipt, args.run_id); result = {}
+        def retire(data):
+            kt._MUT["recheck"] = kt._MUT["rerun"] = True
+            task = kt.find(data, args.id); run = work.attempt(kt, data, task, args.run_id, proof, retiring=True)
+            resolution = run.get("resolution")
+            if not run.get("terminal") or not isinstance(resolution, dict) or \
+                    (proof.get("owner_resolution") or {}).get("digest") != digest(resolution).removeprefix("sha256:"):
+                fail("a checked private owner resolution is required before retiring research")
+            co = work.coordinate(task); grant = (co.get("research") or {}).get("admission") or {}
+            if not run.get("research_admission") or grant.get("id") != run["research_admission"] or task.get("claim") or \
+                    any(work.unresolved(r) for r in co["runs"]):
+                fail("cannot retire a successor, claimed task or unresolved research attempt")
+            grant["active"] = False
+            if task.get("column") not in {"done", "pending-review"}:
+                kt.move_task_to_column(data, task, "backlog")
+                co["research"]["current"] = {"done": "Owner checked and retired the interrupted attempt.",
+                    "remaining": "A fresh owner action is needed to research this request again.", "next_actor": "owner"}
+            result.update(retired=True, run_id=args.run_id)
+        kt.mutate(retire, "Rook: retire checked research resolution")
+        print(json.dumps(result)); return
     if action == "handover":
         raw = kt.sys.stdin.read(16385)
         if len(raw.encode()) > 16384: fail("handover exceeds 16 KiB")
@@ -587,9 +676,8 @@ def command(kt, work, args):
     if action == "snapshot":
         spec = None
         try:
-            if (task.get("coordination") or {}).get("research"):
-                spec = scope(data, task)
-                work.safe_content(kt, spec)
+            spec = scope(data, task)
+            work.safe_content(kt, spec)
         except SystemExit:
             spec = None  # retain recovery identity, never the rejected input
         print(json.dumps({"schema": SCHEMA, "task": work.view(kt, task, data=data), "scope": spec}, ensure_ascii=False))

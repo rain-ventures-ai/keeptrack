@@ -225,6 +225,59 @@ class ResearchTests(unittest.TestCase):
                 mock.patch.object(kt, "github_api_base", return_value="https://api.github.com"), mock.patch.object(kt, "http", side_effect=lambda method, path, **kw: reply(path, **kw)):
             return self.research.owner_push(kt, item, self.read()["settings"]["rook_research"])
 
+    def test_root_level_board_proposal_audit_uses_the_actual_proposal_directory(self):
+        self.ready()
+        item = self.read()["proposals"][0]
+        queries = []
+        def http(method, path, **kwargs):
+            queries.append(path)
+            return 0, "[]", ""
+        with mock.patch.multiple(kt, FILE=None, REPO="owner/board", BRANCH="main", PATH="tasks.json"), mock.patch.object(kt, "github_api_base", return_value="https://api.github.com"), mock.patch.object(kt, "http", side_effect=http):
+            with self.assertRaises(SystemExit): self.research.owner_push(kt, item, self.read()["settings"]["rook_research"])
+        import urllib.parse
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlsplit(queries[0]).query)["path"], ["proposals/" + item["id"] + ".json"])
+
+    def test_authenticated_owner_action_is_required_in_addition_to_repository_data(self):
+        self.ready(); root = Path(self.tmp.name)
+        key = root / "owner-key.json"; action = root / "owner-action.json"
+        key.write_text(json.dumps({"schema": self.research.SCHEMA, "kind": "owner-action-key", "proof": "d" * 64})); key.chmod(0o600)
+        expected = {"board": "owner/board", "owner": "owner", "project": "pr_one", "task_id": self.tid,
+                    "approval_id": self.prop_id, "answer_id": self.answer_id,
+                    "content_hash": self.research.digest(self.research.scope(self.read(), self.read()["tasks"][0])), "policy_digest": self.policy_hash}
+        self.research.issue_owner_action(action, key, expected, kt.now(), 300)
+        checked = self.research.verify_owner_action(action, key, expected, kt.now(), 300)
+        self.assertEqual(checked["provider"], "owner-action")
+        changed = json.loads(action.read_text()); changed["task_id"] = "t_attacker"; action.write_text(json.dumps(changed)); action.chmod(0o600)
+        with self.assertRaisesRegex(SystemExit, "signature|action"):
+            self.research.verify_owner_action(action, key, expected, kt.now(), 300)
+
+    def test_even_a_real_owner_push_cannot_replace_the_independent_action(self):
+        self.ready(); data = self.read()
+        with mock.patch.multiple(kt, FILE=None, REPO="owner/board"), mock.patch.object(kt, "load", return_value=(data, None)), \
+                mock.patch.object(kt, "require_review_storage"), mock.patch.object(self.research, "owner_push", side_effect=AssertionError("a push is not approval")):
+            with self.assertRaisesRegex(SystemExit, "independently authenticated"):
+                self.admit()
+        self.assertFalse(Path(self.admission).exists())
+
+    def test_action_expiring_between_read_and_save_refuses_admission(self):
+        self.ready(); root = Path(self.tmp.name)
+        key = root / "owner-key.json"; action = root / "owner-action.json"
+        key.write_text(json.dumps({"schema": self.research.SCHEMA, "kind": "owner-action-key", "proof": "d" * 64})); key.chmod(0o600)
+        expected = {"board": "owner/board", "owner": "owner", "project": "pr_one", "task_id": self.tid,
+                    "approval_id": self.prop_id, "answer_id": self.answer_id,
+                    "content_hash": self.research.digest(self.research.scope(self.read(), self.read()["tasks"][0])), "policy_digest": self.policy_hash}
+        now = kt.now(); issued = self.research._time(now) - self.research.dt.timedelta(seconds=250)
+        self.research.issue_owner_action(action, key, expected, issued.isoformat(), 300)
+        expiry = self.research._time(now) + self.research.dt.timedelta(seconds=51)
+        real_mutate = kt.mutate; clock = [now]
+        def expire(fn, message):
+            clock[0] = expiry.isoformat(); return real_mutate(fn, message)
+        # The proposal remains fresh; only the independently issued action expires.
+        with mock.patch.object(kt, "mutate", side_effect=expire), mock.patch.object(kt, "now", side_effect=lambda: clock[0]):
+            with self.assertRaisesRegex(SystemExit, "expired"):
+                self.invoke("research-admit", owner_action_receipt=str(action), owner_action_key=str(key))
+        self.assertEqual(self.read()["tasks"][0]["column"], "backlog")
+
     def test_authenticated_github_push_introduces_exact_answer(self):
         self.ready(); result = self.provenance()
         self.assertEqual(result["provider"], "github-activity"); self.assertEqual(result["actor"], "owner")

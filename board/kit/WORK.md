@@ -17,10 +17,13 @@ the full proposal and answer IDs, its adopted configuration digest and a private
 admission receipt. Admission consumes that answer once and moves the card to
 To do. Claim requires the private admission receipt; start additionally binds
 the exact session/claim generation to a separate private run proof. Relayed answers, `confirmed`, card prose and labels
-grant no approval. The host also checks GitHub repository activity for the exact
-normal owner push introducing the answer, and compares the proposal before and
-after that push. A forged `by` field, spoofed commit author or unrelated later
-owner push is insufficient. Missing provenance means wait. File mode is for
+grant no approval. Before saving that answer the browser authenticates to a
+separate owner endpoint using a private capability. The endpoint persists a
+signed receipt for the exact board, owner, project, task, proposal/answer IDs,
+input digest, policy and expiry. Admission requires `--owner-action-receipt`
+and `--owner-action-key`; the trusted host pins both private paths. Git pushes,
+including genuine owner pushes, are audit data and cannot replace that action.
+Missing or invalid proof means wait. File mode is for
 offline fixtures only. Leaving To do/In progress withdraws the grant, including when
 there is no claim. Browser Undo cannot revive it.
 
@@ -60,9 +63,12 @@ must reconcile the current task/run after a wake or restart. Hosted mode is
 unsupported. `work-research-snapshot` and `work-research-check` give the host a
 bounded request projection without activity/comment history.
 
-The existing GitHub-owner credential boundary cannot distinguish a person from
-a malicious process holding that person's full board token. The research
-worker must therefore receive neither that token, the proof nor a board clone.
+The separate browser capability and host signing key must remain inaccessible
+to workers and other repository agents. Settings → Rook owner approval stores
+the endpoint/capability only in this browser for the connected board, outside
+settings exports. The signing key stays on the trusted host. A stolen browser
+capability or compromised owner host is outside this boundary. The research
+worker receives neither credential, admission proof nor a board clone.
 Generic chat/voice MCP confirmation is not direct owner-input proof: those
 requests still wait for the button until a verified ingress is implemented.
 The host/operator contract is in [Relay PR 161](https://github.com/rain-ventures-ai/keeptrack-relay/pull/161).
@@ -71,6 +77,13 @@ review and unresolved holds, but informational research completion currently
 has no completion notification. The host writes private versioned files;
 an approved private HTTPS mapping and an active notification sender must be
 provided and checked separately.
+
+After inspecting an uncertain attempt, the owner uses the Relay host's checked
+`--resolve-run` command. It binds the canonical resolution to private evidence
+before `work-research-retire` withdraws that exact run's grant and releases the
+host intent. A bare board resolution cannot clear the private hold. Evidence is
+retained and the old action never relaunches; another attempt needs a new button
+action. This is separate from ordinary repository-run resolution.
 
 ## Request and read
 
