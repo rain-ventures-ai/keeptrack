@@ -2278,6 +2278,9 @@ def _mutate(fn, message):
             data.clear(); data.update(merged)
             base = theirs
             _MUT["extra"] = {}
+        if any(isinstance(t, dict) and ((t.get("coordination") or {}).get("research") or {}).get("admission")
+               for t in base.get("tasks", [])):
+            work_module().research_module().revoke_changed_inputs(base, data)
         extra = _MUT["extra"]
         try:
             ok = save_changes(data, sha, message, extra=extra) if extra else save(data, sha, message)

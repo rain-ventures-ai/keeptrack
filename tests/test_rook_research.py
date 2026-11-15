@@ -307,6 +307,24 @@ class ResearchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "did not introduce"):
             self.provenance(current=changed)
 
+    def test_snapshot_rejected_content_has_no_scope_but_retains_recovery_identity(self):
+        self.ready(); self.start(); data = self.read()
+        data["tasks"][0]["details"] = "sk-proj-" + "a" * 48
+        self.write(data)
+        snapshot = self.invoke("research-snapshot")
+        self.assertIsNone(snapshot["scope"])
+        self.assertEqual(snapshot["task"]["id"], self.tid)
+        self.assertNotIn(data["tasks"][0]["details"], json.dumps(snapshot))
+
+    def test_native_input_edit_and_restore_cannot_revive_an_old_grant(self):
+        self.ready(); self.admit()
+        original = self.read()["tasks"][0]["details"]
+        kt.mutate(lambda data: data["tasks"][0].update(details="Different scope"), "test changed research input")
+        self.assertFalse(self.read()["tasks"][0]["coordination"]["research"]["admission"]["active"])
+        kt.mutate(lambda data: data["tasks"][0].update(details=original), "test restored research input")
+        with self.assertRaisesRegex(SystemExit, "withdrawn|absent"):
+            self.invoke("research-check")
+
 
 if __name__ == "__main__":
     unittest.main()

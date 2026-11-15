@@ -4035,6 +4035,11 @@ if (typeof window !== 'undefined') (() => {
       const a = t.coordination?.research?.admission; if (!a || typeof a !== 'object' || Array.isArray(a)) continue;
       const previous = old.get(t.id), was = previous?.coordination?.research?.admission;
       if (!was || was.id !== a.id || was.active !== true || !['todo', 'in-progress'].includes(t.column)) a.active = false;
+      if (a.active === true) {
+        try {
+          if (jcanon(rookResearchScope(before, previous, cfg().repo)) !== jcanon(rookResearchScope(after, t, cfg().repo))) a.active = false;
+        } catch (_) { a.active = false; }
+      }
       if (previous && ['todo', 'in-progress'].includes(previous.column) && !['todo', 'in-progress'].includes(t.column) && t.claim) delete t.claim.unattended_approved;
     }
   }

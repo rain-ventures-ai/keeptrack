@@ -46,6 +46,14 @@ module.exports = async function run() {
   assert.equal(after.tasks[0].claim.unattended_approved, undefined);
   const undone = clone(before); context.api.revokeResearchOnEdit(after, undone);
   assert.equal(undone.tasks[0].coordination.research.admission.active, false, 'undo cannot restore a consumed grant');
+  for (const edit of [t => { t.details = 'Different approved scope'; }, t => { t.links[0].url = 'https://example.org/other'; },
+    t => { t.todos.push({ text: 'Additional work', done: false }); }]) {
+    const changed = clone(before); edit(changed.tasks[0]);
+    context.api.revokeResearchOnEdit(before, changed);
+    assert.equal(changed.tasks[0].coordination.research.admission.active, false, 'editing approved input withdraws authority');
+    const restored = clone(before); context.api.revokeResearchOnEdit(changed, restored);
+    assert.equal(restored.tasks[0].coordination.research.admission.active, false, 'undoing an input edit cannot restore the old grant');
+  }
   assert.match(source, /revokeResearchOnEdit\(pre, latest\)/, 'every browser save checks revocation');
   console.log('Rook research button, scope race and revocation checks passed');
 };

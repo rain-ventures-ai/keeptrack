@@ -103,6 +103,29 @@ def scope(data, task):
             "executor": EXECUTOR, "profile": p["profile"], "policy_digest": p["policy_digest"]}
 
 
+def revoke_changed_inputs(before, after):
+    """Native edits cannot restore a consumed grant by restoring its old input.
+
+    Called on the existing mutation base after conflict rechecks/merge. New
+    grants are created only by admission; this retires an existing identity.
+    """
+    old = {t.get("id"): t for t in before.get("tasks", []) if isinstance(t, dict)}
+    for task in after.get("tasks", []):
+        grant = ((task.get("coordination") or {}).get("research") or {}).get("admission")
+        previous = old.get(task.get("id"))
+        was = (((previous or {}).get("coordination") or {}).get("research") or {}).get("admission")
+        if not isinstance(grant, dict) or not isinstance(was, dict) or grant.get("id") != was.get("id"):
+            continue
+        if was.get("active") is not True or task.get("column") not in {"todo", "in-progress"}:
+            grant["active"] = False
+        elif grant.get("active") is True:
+            try:
+                if scope(before, previous) != scope(after, task):
+                    grant["active"] = False
+            except SystemExit:
+                grant["active"] = False
+
+
 def proposal_input(data, task):
     spec = scope(data, task); hashed = digest(spec)
     return {"kind": "ask.approve", "title": "Hand public research to Rook", "decider": policy(data)["owner"],
@@ -568,7 +591,7 @@ def command(kt, work, args):
                 spec = scope(data, task)
                 work.safe_content(kt, spec)
         except SystemExit:
-            pass  # still expose the canonical run/outcome for crash recovery; no authority
+            spec = None  # retain recovery identity, never the rejected input
         print(json.dumps({"schema": SCHEMA, "task": work.view(kt, task, data=data), "scope": spec}, ensure_ascii=False))
         return
     if action == "draft":
