@@ -233,13 +233,13 @@ def owner_push(kt, item, p):
     rows = read(prefix + "/activity?" + q)
     if not isinstance(rows, list) or len(rows) > 100: fail("invalid GitHub activity response")
     matches = [r for r in rows if isinstance(r, dict) and r.get("after") == commit and r.get("ref") == "refs/heads/" + kt.BRANCH
-               and (r.get("pusher") or {}).get("login") == p["owner"] and r.get("push_type") == "normal"]
+               and isinstance(r.get("actor"), dict) and r["actor"].get("login") == p["owner"] and r.get("activity_type") == "push"]
     if len(matches) != 1: fail("the exact approval commit has no verified normal owner push; wait for GitHub activity")
     row = matches[0]
     before = row.get("before")
     if not re.fullmatch(r"[a-f0-9]{40}", str(before or "")) or before == "0" * 40:
         fail("owner push has no verifiable preceding board state")
-    age = (_time(kt.now()) - _time(row.get("pushed_at"))).total_seconds()
+    age = (_time(kt.now()) - _time(row.get("timestamp"))).total_seconds()
     if age < -5 or age > p["approval_ttl"]: fail("owner push is outside the admission window")
     def at(ref, absent=False):
         response = read(prefix + "/contents/" + urllib.parse.quote(path, safe="/") + "?ref=" + ref, absent=absent)

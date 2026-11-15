@@ -207,8 +207,10 @@ class ResearchTests(unittest.TestCase):
         import base64
         item = self.read()["proposals"][0]
         commit, before = "1" * 40, "2" * 40
-        push = {"id": 12, "after": commit, "before": before, "ref": "refs/heads/main", "push_type": "normal",
-                "pushed_at": kt.now(), "pusher": {"login": actor}}
+        # Repository Activities API, X-GitHub-Api-Version: 2022-11-28.
+        # These are API actor fields, never Git commit author fields.
+        push = {"id": 12, "after": commit, "before": before, "ref": "refs/heads/main", "activity_type": "push",
+                "timestamp": kt.now(), "actor": {"login": actor}}
         def reply(path, **kwargs):
             self.assertEqual(kwargs, {"retries": 0})
             if "/commits?" in path: return 0, json.dumps([{"sha": commit, "author": {"login": "owner"}}]), ""
@@ -233,6 +235,14 @@ class ResearchTests(unittest.TestCase):
             self.provenance(actor="other-writer")
         with self.assertRaisesRegex(SystemExit, "no verified normal owner push"):
             self.provenance(rows=[])
+
+    def test_force_push_and_unsupported_activity_shape_do_not_admit(self):
+        self.ready()
+        for extra in ({"activity_type": "force_push", "timestamp": kt.now(), "actor": {"login": "owner"}},
+                      {"push_type": "normal", "pushed_at": kt.now(), "pusher": {"login": "owner"}}):
+            row = {"id": 12, "after": "1" * 40, "before": "2" * 40, "ref": "refs/heads/main", **extra}
+            with self.subTest(extra=extra), self.assertRaisesRegex(SystemExit, "no verified normal owner push"):
+                self.provenance(rows=[row])
 
     def test_unrelated_later_owner_push_does_not_adopt_a_forged_answer(self):
         self.ready()
