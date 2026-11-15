@@ -278,6 +278,25 @@ class ResearchTests(unittest.TestCase):
                 self.invoke("research-admit", owner_action_receipt=str(action), owner_action_key=str(key))
         self.assertEqual(self.read()["tasks"][0]["column"], "backlog")
 
+    def test_cached_signed_receipt_does_not_replace_the_owner_action_on_retry(self):
+        self.ready(); data = self.read()
+        private = {"schema": self.research.SCHEMA, "task_id": self.tid, "approval_id": self.prop_id,
+            "answer_id": self.answer_id, "content_hash": self.research.digest(self.research.scope(data, data["tasks"][0])),
+            "policy_digest": self.policy_hash, "proof": "c" * 64, "provenance": {"provider": "owner-action"},
+            "approval_digest": self.research.digest(self.research._approval_identity(data["proposals"][0]))}
+        self.research._private_receipt(self.admission, private)
+        def save(fn, message): fn(data); self.write(data)
+        with mock.patch.multiple(kt, FILE=None, REPO="owner/board"), mock.patch.object(kt, "load", return_value=(data, None)), mock.patch.object(kt, "mutate", side_effect=save):
+            with self.assertRaisesRegex(SystemExit, "owner.action"):
+                self.admit()
+
+    def test_watch_caps_project_cards_before_projection(self):
+        self.ready(); data = self.read(); original = data["tasks"][0]
+        data["tasks"] = [{**original, "id": "t_card" + str(n).zfill(4)} for n in range(257)]; self.write(data)
+        with mock.patch.object(kt, "watch_entry", wraps=kt.watch_entry) as entries:
+            with self.assertRaisesRegex(SystemExit, "bound"): self.poll()
+            self.assertEqual(entries.call_count, 0)
+
     def test_authenticated_github_push_introduces_exact_answer(self):
         self.ready(); result = self.provenance()
         self.assertEqual(result["provider"], "github-activity"); self.assertEqual(result["actor"], "owner")

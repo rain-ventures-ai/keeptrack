@@ -4027,10 +4027,13 @@ if (typeof window !== 'undefined') (() => {
         typeof (t.details || '') !== 'string' || (t.details || '').length > 2000 || !Array.isArray(t.links) || !t.links.length || t.links.length > 8 ||
         !Array.isArray(t.todos) || t.todos.length > 20 || !Array.isArray(t.after || []) || (t.after || []).length > 32) throw new Error('Add a short request and one to eight public HTTPS source links first.');
     for (const l of t.links) { const u = new URL(l.url); if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.port || /\s/.test(l.url) || l.url.length > 2000) throw new Error('Research sources must be public HTTPS links.'); }
-    if (t.todos.some(x => !x || typeof x.text !== 'string' || typeof x.done !== 'boolean')) throw new Error('Research checklist entries need text and a done flag.');
+    if (t.todos.some(x => !x || typeof x.text !== 'string' || !x.text.trim() || Array.from(x.text).length > 300 || typeof x.done !== 'boolean')) throw new Error('Research checklist entries need text of at most 300 characters and a done flag.');
     const brief = t.title + (t.details ? '\n\n' + t.details : '') + (t.todos.length ? '\n\nChecklist:\n' + t.todos.map(x => x.text).join('\n') : '');
     if (new TextEncoder().encode(brief).length > 4000) throw new Error('Shorten the combined request and checklist to 4000 UTF-8 bytes.');
-    return { schema: 'keeptrack.research/1', board, owner: p.owner, approval_ttl: p.approval_ttl, task: { id: t.id, project: t.project, title: t.title, details: t.details || '', todos: clone(t.todos), links: clone(t.links), after: clone(t.after || []) },
+    const request = { id: t.id, project: t.project, title: t.title, details: t.details || '', todos: clone(t.todos), links: clone(t.links), after: clone(t.after || []) };
+    if (new TextEncoder().encode(JSON.stringify(request, null, 1)).length > 16384) throw new Error('Shorten the research request and source metadata to 16 KiB.');
+    if (request.after.some(x => typeof x !== 'string' || !/^t_[a-z0-9]{4,20}$/.test(x))) throw new Error('Research dependencies need canonical task IDs.');
+    return { schema: 'keeptrack.research/1', board, owner: p.owner, approval_ttl: p.approval_ttl, task: request,
       executor: 'relay-research', profile: p.profile, policy_digest: p.policy_digest };
   }
   function revokeResearchOnEdit(before, after) {

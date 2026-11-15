@@ -363,6 +363,8 @@ def admit(kt, work, args):
         if existing.get("answer_id") == args.answer:
             verify(kt, current, card, private, args.policy_digest)
             answer.update(created=False, task=work.view(kt, card, data=current)); return
+        if (not kt.FILE or (private.get("provenance") or {}).get("provider") == "owner-action") and (not action_path or not key_path):
+            fail("the signed private owner-action receipt and configured key are required for every unconsumed admission")
         prop, content_hash = approved(kt, current, card, args.approval, args.answer, args.policy_digest)
         if action_path and key_path:
             p = policy(current, args.policy_digest)
@@ -551,10 +553,22 @@ def watch_poll(kt, args):
     project = kt.find_project(data, args.project)["id"]
     bound = {"v": 1, "board": kt._current_board(), "project": project}
     today = kt.board_today(data).isoformat()
-    current = kt.watch_snapshot(data, lambda t, day: t.get("project") == project, today)
-    # No global Review Inbox or unrelated task metadata in a project cursor.
-    current["proposals"] = {}
-    current["cards"] = {k: v for k, v in current["cards"].items() if v.get("m")}
+    chosen = []
+    for task in data.get("tasks") or []:
+        if isinstance(task, dict) and task.get("id") and task.get("project") == project:
+            chosen.append(task)
+            if len(chosen) > 256:
+                fail("watch project exceeds the pilot cursor bound; use a smaller project")
+    # Project before hashing; no unrelated cards or global Review Inbox work.
+    current = {"cards": {}, "proposals": {}}
+    size = len(json.dumps({"scope": bound, "snapshot": current}, separators=(",", ":"), ensure_ascii=False).encode())
+    for task in chosen:
+        entry = kt.watch_entry(data, task, today, True)
+        fragment = json.dumps({task["id"]: entry}, separators=(",", ":"), ensure_ascii=False).encode()
+        size += len(fragment) - 2 + bool(current["cards"])
+        if size > 131072:
+            fail("watch project exceeds the pilot cursor bound; use a smaller project")
+        current["cards"][task["id"]] = entry
     old = None
     if cursor:
         try:

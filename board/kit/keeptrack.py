@@ -7190,7 +7190,7 @@ HELP_TOPICS = {
 if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
     HELP_TOPICS["durable-work"] = ["request-work", "work-status", "work-start", "work-event", "work-finish", "work-release-owned", "work-resolve"]
     HELP_TOPICS["public-research"] = ["watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
-        "work-research-admit", "work-research-check", "work-research-handover", "work-research-reconcile", "work-research-note"]
+        "work-research-admit", "work-research-check", "work-research-handover", "work-research-reconcile", "work-research-retire", "work-research-note"]
 
 
 def cmd_help(a):
