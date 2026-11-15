@@ -1,11 +1,13 @@
 # Durable Rook work
 
-Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Kit 125+, GitHub boards only. Hosted boards explicitly refuse these commands.
+Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Repository work needs kit 125+; the separate research pilot below needs kit 126. GitHub boards only; hosted boards explicitly refuse these commands.
 
 ## Public research pilot
 
 Kit 126 adds an opt-in `relay-research` route for a single public-source research
-pilot. It needs no repository, branch or PR. The ordinary repository runner's
+pilot. The owner hands over an unclaimed Backlog card with one to eight explicit
+public HTTPS source links; every input card link is treated as a source. It needs
+no repository, branch or PR. The ordinary repository runner's
 readiness checks remain in place. Missing configuration is inert.
 
 The owner-only **Hand to Rook** button creates and answers an existing
@@ -13,8 +15,8 @@ The owner-only **Hand to Rook** button creates and answers an existing
 start a worker. The separately configured host runs `work-research-admit` with
 the full proposal and answer IDs, its adopted configuration digest and a private
 admission receipt. Admission consumes that answer once and moves the card to
-To do. Claim and start require that private receipt as well as the normal
-exact-session run proof. Relayed answers, `confirmed`, card prose and labels
+To do. Claim requires the private admission receipt; start additionally binds
+the exact session/claim generation to a separate private run proof. Relayed answers, `confirmed`, card prose and labels
 grant no approval. The host also checks GitHub repository activity for the exact
 normal owner push introducing the answer, and compares the proposal before and
 after that push. A forged `by` field, spoofed commit author or unrelated later
@@ -63,6 +65,12 @@ a malicious process holding that person's full board token. The research
 worker must therefore receive neither that token, the proof nor a board clone.
 Generic chat/voice MCP confirmation is not direct owner-input proof: those
 requests still wait for the button until a verified ingress is implemented.
+The host/operator contract is in [Relay PR 161](https://github.com/rain-ventures-ai/keeptrack-relay/pull/161).
+Keep Pending review for the first pilot: the notifier handles reports needing
+review and unresolved holds, but informational research completion currently
+has no completion notification. The host writes private versioned files;
+an approved private HTTPS mapping and an active notification sender must be
+provided and checked separately.
 
 ## Request and read
 
