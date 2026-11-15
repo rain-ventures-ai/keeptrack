@@ -41,6 +41,10 @@ successor claims and unknown-effect holds refuse a late report. A retry of an
 already saved handover returns the saved result without duplicating its link.
 `work-research-reconcile` verifies the saved payload's private host seal before
 recovery treats it as an achieved outcome; copying board fields cannot forge it.
+Before launch, `work-research-note` accepts only fixed host reason codes. A
+temporarily unavailable source leaves a quiet Rook wait. A rejected source or
+expired run window returns the card to Backlog, withdraws the grant and records
+one owner exception. It neither adds progress comments nor charges an attempt.
 
 `watch` adds `research` alongside `run`. `watch-poll --project ID` reads an
 optional cursor JSON string from stdin and returns `{events,cursor,baseline,

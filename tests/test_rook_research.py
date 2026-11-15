@@ -269,6 +269,19 @@ class ResearchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "admitted coordinated"):
             kt.work_module().claim_gate(kt, data, task, "new", "relay-research", False, self.admission, self.policy_hash)
 
+    def test_prelaunch_refusal_is_visible_without_comments_or_a_charged_attempt(self):
+        self.ready(); self.admit(); self.invoke("research-note", reason="source_rejected")
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "backlog"); self.assertIn("needs-human", task["labels"])
+        self.assertFalse(task["coordination"]["research"]["admission"]["active"])
+        self.assertEqual(task["coordination"]["research"]["current"]["next_actor"], "owner")
+        self.assertEqual(task["coordination"]["runs"], []); self.assertEqual(task["comments"], [])
+
+    def test_prelaunch_note_cannot_replace_an_unresolved_or_claimed_run(self):
+        self.ready(); self.start()
+        with self.assertRaisesRegex(SystemExit, "active or unresolved"):
+            self.invoke("research-note", reason="source_rejected")
+
 
 if __name__ == "__main__":
     unittest.main()

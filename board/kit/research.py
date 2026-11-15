@@ -288,6 +288,9 @@ def admit(kt, work, args):
         after = kt.after_links(current, card, None)
         if any(x.get("state") != "done" for x in after):
             fail("task has unfinished dependencies")
+        previous_note = (co.get("research") or {}).get("prelaunch_note") or {}
+        if previous_note.get("label_added") and "needs-human" in card.get("labels", []):
+            card["labels"].remove("needs-human")
         co["executor"] = EXECUTOR
         co["research"] = {"v": 1, "admission": {"id": "ra_" + secrets.token_hex(12), "active": True,
             "approval_id": args.approval, "answer_id": args.answer, "content_hash": content_hash,
@@ -406,6 +409,10 @@ def sealed_handover(task, run, proof):
 
 
 def parser(sub, callback):
+    p = sub.add_parser("work-research-note", help="host-only bounded prelaunch wait or refusal; never worker-supplied prose")
+    p.add_argument("id"); p.add_argument("--admission-receipt", required=True); p.add_argument("--policy-digest", required=True)
+    p.add_argument("--reason", choices=("source_unavailable", "source_rejected", "admission_expired", "host_unavailable"), required=True)
+    p.set_defaults(f=callback, work_action="research-note")
     p = sub.add_parser("work-research-reconcile", help="authenticate a saved research outcome with its private run receipt")
     p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
     p.set_defaults(f=callback, work_action="research-reconcile")
@@ -491,6 +498,33 @@ def watch_poll(kt, args):
 
 def command(kt, work, args):
     action = args.work_action.removeprefix("research-")
+    if action == "note":
+        private = _private_receipt(args.admission_receipt); result = {}
+        owner = args.reason in {"source_rejected", "admission_expired"}
+        def change(data):
+            kt._MUT["recheck"] = kt._MUT["rerun"] = True; result.clear()
+            task = kt.find(data, args.id); co = work.coordinate(task)
+            verify(kt, data, task, private, args.policy_digest)
+            if task.get("claim") or any(work.unresolved(r) for r in co["runs"]):
+                fail("prelaunch note cannot replace an active or unresolved attempt")
+            text = {"source_unavailable": "A public source is temporarily unavailable; Rook can retry within the admission window.",
+                    "source_rejected": "Use public HTTPS source links, then hand this request to Rook again.",
+                    "admission_expired": "The run window ended before launch. Hand this request to Rook again if it is still wanted.",
+                    "host_unavailable": "The configured research host is unavailable; work has not started."}[args.reason]
+            current = {"done": "Owner request saved; no research worker launched.", "remaining": text, "next_actor": "owner" if owner else "rook"}
+            if co["research"].get("current") != current:
+                co["research"]["current"] = current
+                kt.hist(task, "Rook research needs owner input before launch" if owner else "Rook research waiting before launch")
+            if owner:
+                co["research"]["admission"]["active"] = False
+                kt.move_task_to_column(data, task, "backlog")
+                added = "needs-human" not in task.setdefault("labels", [])
+                if added:
+                    task["labels"].append("needs-human"); kt.hist(task, "labels: needs-human")
+                co["research"]["prelaunch_note"] = {"reason": args.reason, "label_added": added}
+            result.update(task=work.view(kt, task, data=data))
+        kt.mutate(change, "Rook: research prelaunch status")
+        print(json.dumps(result, ensure_ascii=False)); return
     if action == "reconcile":
         data, _ = kt.load(); task = kt.find(data, args.id)
         proof = work.receipt(args.receipt, args.run_id)

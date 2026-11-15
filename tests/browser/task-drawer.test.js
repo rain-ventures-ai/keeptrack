@@ -460,6 +460,35 @@ async function assertFits(page, where) {
       await page.close();
     }
 
+    // The opted-in Rook button saves one owner answer and no launch. Current state is plain data.
+    {
+      const api = new Github(), metadata = JSON.parse(api.files['tasks.json']);
+      metadata.settings.kit_owner = 'alex'; metadata.settings.min_kit = 126;
+      metadata.settings.rook_research = { v: 1, enabled: true, board: 'acme/board', owner: 'alex', projects: ['pr_one'],
+        profile: 'public-research', policy_digest: 'sha256:' + 'b'.repeat(64), approval_ttl: 600 };
+      metadata.columns.push({ id: 'backlog', name: 'Backlog' }); api.files['tasks.json'] = text(metadata);
+      api.files['projects/pr_one.json'] = text({ id: 'pr_one', name: 'Research pilot', client: 'Acme' });
+      api.files['cards/t_research.json'] = text(card('t_research', 3, 'Compare the public guide', { column: 'backlog', project: 'pr_one',
+        details: 'Explain the public documentation.', links: [{ url: 'https://example.org/guide', title: 'Guide' }] }));
+      const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = [];
+      page.on('pageerror', e => errors.push(e.message));
+      await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
+      await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html#3');
+      await page.locator('#dlgCard[open]').waitFor(); await page.locator('#cRookStart').click();
+      await page.locator('.ui-toast', { hasText: 'Handed to Rook' }).waitFor();
+      const request = api.card('t_research').coordination.research.request;
+      const proposal = JSON.parse(api.files[`proposals/${request.approval_id}.json`]);
+      assert.equal(proposal.decision.by, 'alex'); assert.equal(proposal.decision.answer.approved, true);
+      assert.equal(proposal.change.content_hash, request.content_hash); assert.equal(api.card('t_research').column, 'backlog');
+      assert.equal(await page.locator('#cRookStart:visible').count(), 0);
+      const updated = api.card('t_research'); updated.coordination.research.current = { done: 'Guide compared.', remaining: '<img src=x onerror=alert(1)>', next_actor: 'owner' };
+      api.files['cards/t_research.json'] = text(updated); api.head = 'head-' + ++api.n;
+      await page.reload(); await page.locator('#dlgCard[open]').waitFor();
+      assert.match(await page.locator('#cRookCurrent').textContent(), /Guide compared/);
+      assert.equal(await page.locator('#cRookCurrent img').count(), 0, 'Current state never renders model HTML');
+      await assertFits(page, 'Rook current state'); await shot(page, 'rook-current-state');
+      assert.deepEqual(errors, []); await page.close();
+    }
     console.log('task-drawer: all checks passed');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
