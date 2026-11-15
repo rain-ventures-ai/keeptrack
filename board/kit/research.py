@@ -90,12 +90,16 @@ def projection(data, task):
             fail("checklist entries need bounded text and a boolean done flag")
     if any(not isinstance(i, str) or not re.fullmatch(r"t_[a-z0-9]{4,20}", i) for i in value["after"]):
         fail("dependencies need canonical task IDs")
+    brief = value["title"] + ("\n\n" + value["details"] if value["details"] else "")
+    if value["todos"]: brief += "\n\nChecklist:\n" + "\n".join(t["text"] for t in value["todos"])
+    if len(brief.encode()) > 4000:
+        fail("combined research brief and checklist exceed 4000 UTF-8 bytes")
     return value
 
 
 def scope(data, task):
     p = policy(data)
-    return {"schema": SCHEMA, "board": p["board"], "task": projection(data, task),
+    return {"schema": SCHEMA, "board": p["board"], "owner": p["owner"], "approval_ttl": p["approval_ttl"], "task": projection(data, task),
             "executor": EXECUTOR, "profile": p["profile"], "policy_digest": p["policy_digest"]}
 
 
@@ -130,6 +134,9 @@ def approved(kt, data, task, proposal_id, answer_id, expected_policy, *, allow_c
     decision, change = item.get("decision") or {}, item.get("change") or {}
     want = proposal_input(data, task)
     kt.work_module().safe_content(kt, scope(data, task))
+    if any(item.get(k) != want[k] for k in ("kind", "title", "decider", "action_key", "work_key", "reason")) or \
+            change != want["change"] or (item.get("source") or {}).get("kind") != "other":
+        fail("approval does not describe this exact Rook action")
     if item.get("kind") != "ask.approve" or item.get("status") != "answered" or item.get("decider") != p["owner"] or \
             decision.get("action") != "answer" or decision.get("id") != answer_id or \
             decision.get("by") != p["owner"] or decision.get("relayed") or \
@@ -185,8 +192,9 @@ def _private_receipt(path, create=None):
 def _approval_identity(item):
     d, c, s = item.get("decision") or {}, item.get("change") or {}, item.get("source") or {}
     return {"id": item.get("id"), "kind": item.get("kind"), "status": item.get("status"), "decider": item.get("decider"),
-            "source": {k: s.get(k) for k in ("kind", "id", "revision")},
-            "change": {k: c.get(k) for k in ("task", "content_hash")},
+            "title": item.get("title"), "reason": item.get("reason"), "action_key": item.get("action_key"), "work_key": item.get("work_key"),
+            "source": {k: s.get(k, "") for k in ("kind", "id", "revision", "title", "date", "url")},
+            "change": c,
             "answer": {k: d.get(k) for k in ("action", "id", "by", "at", "answer", "relayed")}}
 
 
@@ -510,7 +518,7 @@ def command(kt, work, args):
             text = {"source_unavailable": "A public source is temporarily unavailable; Rook can retry within the admission window.",
                     "source_rejected": "Use public HTTPS source links, then hand this request to Rook again.",
                     "admission_expired": "The run window ended before launch. Hand this request to Rook again if it is still wanted.",
-                    "host_unavailable": "The configured research host is unavailable; work has not started."}[args.reason]
+                    "host_unavailable": "Configured research execution is not available yet; no worker started. Rook will recheck."}[args.reason]
             current = {"done": "Owner request saved; no research worker launched.", "remaining": text, "next_actor": "owner" if owner else "rook"}
             if co["research"].get("current") != current:
                 co["research"]["current"] = current

@@ -480,6 +480,21 @@ async function assertFits(page, where) {
       const proposal = JSON.parse(api.files[`proposals/${request.approval_id}.json`]);
       assert.equal(proposal.decision.by, 'alex'); assert.equal(proposal.decision.answer.approved, true);
       assert.equal(proposal.change.content_hash, request.content_hash); assert.equal(api.card('t_research').column, 'backlog');
+      // Cross the actual browser/CLI contract boundary, including independent JS/Python canonical hashing.
+      const os = require('node:os'), { spawnSync } = require('node:child_process');
+      const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'rook-button-')); fs.chmodSync(fixture, 0o700);
+      try {
+        const dataFile = path.join(fixture, 'tasks.json'), receipt = path.join(fixture, 'admission.json');
+        fs.writeFileSync(dataFile, text({ version: 3, settings: metadata.settings, columns: metadata.columns, people: metadata.people,
+          agents: ['rook-research'], projects: [JSON.parse(api.files['projects/pr_one.json'])], tasks: [api.card('t_research')], proposals: [proposal] }));
+        const run = args => spawnSync('python3', [path.join(ROOT, 'board/kit/keeptrack.py'), '--file', dataFile, ...args], {
+          encoding: 'utf8', timeout: 15000, env: { ...process.env, BOARD_REPO: 'acme/board', BOARD_BRANCH: 'main', BOARD_USER: 'alex', BOARD_AGENT: 'rook-research', BOARD_SESSION: 'rook-ui-fixture' } });
+        const draft = run(['work-research-draft', 't_research']); assert.equal(draft.status, 0, draft.stderr);
+        assert.equal(JSON.parse(draft.stdout).content_hash, request.content_hash, 'the CLI sees exactly the request approved in the browser');
+        const admitted = run(['work-research-admit', 't_research', '--approval', request.approval_id, '--answer', request.answer_id,
+          '--admission-receipt', receipt, '--policy-digest', metadata.settings.rook_research.policy_digest]);
+        assert.equal(admitted.status, 0, admitted.stderr); assert.equal(JSON.parse(admitted.stdout).created, true);
+      } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
       assert.equal(await page.locator('#cRookStart:visible').count(), 0);
       const updated = api.card('t_research'); updated.coordination.research.current = { done: 'Guide compared.', remaining: '<img src=x onerror=alert(1)>', next_actor: 'owner' };
       api.files['cards/t_research.json'] = text(updated); api.head = 'head-' + ++api.n;

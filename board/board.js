@@ -4023,13 +4023,16 @@ if (typeof window !== 'undefined') (() => {
         typeof (t.details || '') !== 'string' || (t.details || '').length > 2000 || !Array.isArray(t.links) || !t.links.length || t.links.length > 8 ||
         !Array.isArray(t.todos) || t.todos.length > 20 || !Array.isArray(t.after || []) || (t.after || []).length > 32) throw new Error('Add a short request and one to eight public HTTPS source links first.');
     for (const l of t.links) { const u = new URL(l.url); if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.port || /\s/.test(l.url) || l.url.length > 2000) throw new Error('Research sources must be public HTTPS links.'); }
-    return { schema: 'keeptrack.research/1', board, task: { id: t.id, project: t.project, title: t.title, details: t.details || '', todos: clone(t.todos), links: clone(t.links), after: clone(t.after || []) },
+    if (t.todos.some(x => !x || typeof x.text !== 'string' || typeof x.done !== 'boolean')) throw new Error('Research checklist entries need text and a done flag.');
+    const brief = t.title + (t.details ? '\n\n' + t.details : '') + (t.todos.length ? '\n\nChecklist:\n' + t.todos.map(x => x.text).join('\n') : '');
+    if (new TextEncoder().encode(brief).length > 4000) throw new Error('Shorten the combined request and checklist to 4000 UTF-8 bytes.');
+    return { schema: 'keeptrack.research/1', board, owner: p.owner, approval_ttl: p.approval_ttl, task: { id: t.id, project: t.project, title: t.title, details: t.details || '', todos: clone(t.todos), links: clone(t.links), after: clone(t.after || []) },
       executor: 'relay-research', profile: p.profile, policy_digest: p.policy_digest };
   }
   function revokeResearchOnEdit(before, after) {
     const old = new Map((before.tasks || []).map(t => [t.id, t]));
     for (const t of after.tasks || []) {
-      const a = t.coordination?.research?.admission; if (!a) continue;
+      const a = t.coordination?.research?.admission; if (!a || typeof a !== 'object' || Array.isArray(a)) continue;
       const previous = old.get(t.id), was = previous?.coordination?.research?.admission;
       if (!was || was.id !== a.id || was.active !== true || !['todo', 'in-progress'].includes(t.column)) a.active = false;
       if (previous && ['todo', 'in-progress'].includes(previous.column) && !['todo', 'in-progress'].includes(t.column) && t.claim) delete t.claim.unattended_approved;

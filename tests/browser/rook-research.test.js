@@ -37,6 +37,8 @@ module.exports = async function run() {
   assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
   reset(); data.tasks[0].links[0].url = 'https://user:secret@example.org';
   assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
+  reset(); data.tasks[0].details = 'é'.repeat(1999);
+  assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0); assert.match(toast, /4000/);
   const before = board(); before.tasks[0].column = 'in-progress'; before.tasks[0].claim = { unattended_approved: true };
   before.tasks[0].coordination = { research: { admission: { id: 'ra_exact', active: true } } };
   const after = clone(before); after.tasks[0].column = 'backlog';

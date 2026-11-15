@@ -93,7 +93,7 @@ class ResearchTests(unittest.TestCase):
 
     def test_dependency_requires_done_even_with_exact_owner_approval(self):
         self.ready(); data = self.read(); task = data["tasks"][0]; task["after"] = ["t_missing"]
-        fresh = self.research.proposal_input(data, task); data["proposals"][0].update(change=fresh["change"], source=fresh["source"])
+        fresh = self.research.proposal_input(data, task); data["proposals"][0].update(fresh)
         self.write(data)
         with self.assertRaisesRegex(SystemExit, "unfinished dependencies"): self.admit()
 
@@ -281,6 +281,21 @@ class ResearchTests(unittest.TestCase):
         self.ready(); self.start()
         with self.assertRaisesRegex(SystemExit, "active or unresolved"):
             self.invoke("research-note", reason="source_rejected")
+
+    def test_combined_unicode_brief_is_bounded_before_approval(self):
+        self.ready(); data = self.read(); data["tasks"][0]["details"] = "é" * 1999
+        with self.assertRaisesRegex(SystemExit, "4000 UTF-8"):
+            self.research.proposal_input(data, data["tasks"][0])
+
+    def test_an_owner_answer_to_a_different_question_does_not_admit_research(self):
+        self.ready(); data = self.read(); data["proposals"][0]["change"]["question"] = "Would you like a nicer card title?"; self.write(data)
+        with self.assertRaisesRegex(SystemExit, "exact Rook action"):
+            self.admit()
+
+    def test_owner_push_proof_includes_the_question_the_owner_saw(self):
+        self.ready(); changed = self.read()["proposals"][0]; changed["change"]["question"] = "Would you like a nicer title?"
+        with self.assertRaisesRegex(SystemExit, "did not introduce"):
+            self.provenance(current=changed)
 
 
 if __name__ == "__main__":

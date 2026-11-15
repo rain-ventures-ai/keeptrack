@@ -23,7 +23,9 @@ offline fixtures only. Leaving To do/In progress withdraws the grant, including 
 there is no claim. Browser Undo cannot revive it.
 
 The digest includes task ID, canonical project ID, title, description, checklist,
-source links and dependency IDs. Column, heartbeat, comments and host progress
+source links, dependency IDs, the owner identity and approval lifetime. The host
+checks that owner and lifetime against its own adopted configuration. Combined
+brief/checklist text is bounded to 4000 UTF-8 bytes. Column, heartbeat, comments and host progress
 are not input. A changed brief or adopted configuration needs a new owner
 action. Approval must be admitted within the configured 60–3,600 seconds; an
 already consumed grant is instead bounded by the host's run deadline. The
