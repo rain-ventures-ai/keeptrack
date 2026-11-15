@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v126 (schema 4)
+
+Disabled-by-default public research pilot. Adds the packaged `research.py` helper,
+the owner's **Hand to Rook** button, exact-content direct-owner admission, a
+receipt-bound atomic report handover and a short **Current state** section.
+`watch` includes research changes; `watch-poll` transports the same snapshot diff
+for one project. Neither a watch event nor a cursor is authority or a durable
+event history. Old writers must be fenced with `settings.min_kit: 126` before
+adding the opt-in configuration. This source release enables nothing on a board.
+
+Install the complete kit including `research.py`. Research requires a separately
+approved host/account, one board/project, private report destination and
+notification configuration. See [WORK.md](WORK.md#public-research-pilot).
+No live upgrade, runner, sender or schedule is part of this source change.
+
 ### v125 (schema 4)
 Follow-ups from the independent review of the durable Rook task owner. No data change and no migration. New coordination writes raise `settings.min_kit` to 125, so a v124 runner or CLI becomes read-only on the board and cannot skip the new checks. When upgrading a board that already has coordination, explicitly run `keeptrack.py settings-set --min-kit 125` within the upgrade PR before unattended use. Doctor reports the missing minimum. Upgrade the runner's kit first, then the board.
 - `work-start` refuses unless the card is still In progress under its approved claim. Moving the card to Backlog after the claim withdraws approval. A refused start leaves no new receipt.

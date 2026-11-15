@@ -2,6 +2,62 @@
 
 Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Kit 125+, GitHub boards only. Hosted boards explicitly refuse these commands.
 
+## Public research pilot
+
+Kit 126 adds an opt-in `relay-research` route for a single public-source research
+pilot. It needs no repository, branch or PR. The ordinary repository runner's
+readiness checks remain in place. Missing configuration is inert.
+
+The owner-only **Hand to Rook** button creates and answers an existing
+`ask.approve` in one compare-and-swap, bound to the exact task input. It does not
+start a worker. The separately configured host runs `work-research-admit` with
+the full proposal and answer IDs, its adopted configuration digest and a private
+admission receipt. Admission consumes that answer once and moves the card to
+To do. Claim and start require that private receipt as well as the normal
+exact-session run proof. Relayed answers, `confirmed`, card prose and labels
+grant no approval. The host also checks GitHub repository activity for the exact
+normal owner push introducing the answer, and compares the proposal before and
+after that push. A forged `by` field, spoofed commit author or unrelated later
+owner push is insufficient. Missing provenance means wait. File mode is for
+offline fixtures only. Leaving To do/In progress withdraws the grant, including when
+there is no claim. Browser Undo cannot revive it.
+
+The digest includes task ID, canonical project ID, title, description, checklist,
+source links and dependency IDs. Column, heartbeat, comments and host progress
+are not input. A changed brief or adopted configuration needs a new owner
+action. Approval must be admitted within the configured 60–3,600 seconds; an
+already consumed grant is instead bounded by the host's run deadline. The
+public setting `rook_research` has exactly `v: 1`, `enabled: true`, `board`,
+`owner`, `projects`, `profile: public-research`, `policy_digest` and
+`approval_ttl`. It is not a policy resolver. The owner must separately approve
+the matching private host configuration and its capabilities before activation.
+
+The host calls `work-research-handover` after publishing one immutable report.
+That single CAS records run evidence, the artifact link and a host-written
+**Current state** of at most 1 KiB, releases the exact claim, and moves to Pending
+review. No progress comments are added. Completion needs an adopted informational
+rule and no remaining owner step or unticked checklist item. Changed scope,
+successor claims and unknown-effect holds refuse a late report. A retry of an
+already saved handover returns the saved result without duplicating its link.
+`work-research-reconcile` verifies the saved payload's private host seal before
+recovery treats it as an achieved outcome; copying board fields cannot forge it.
+
+`watch` adds `research` alongside `run`. `watch-poll --project ID` reads an
+optional cursor JSON string from stdin and returns `{events,cursor,baseline,
+semantics}`. It uses the same watch projection, with a maximum 256 project cards
+and 128 KiB snapshot. The first poll is a quiet baseline. The cursor contains
+public state and hashes, never private coordination proofs, and is bound to its
+board/project. It is untrusted client data, not a durable event history; a host
+must reconcile the current task/run after a wake or restart. Hosted mode is
+unsupported. `work-research-snapshot` and `work-research-check` give the host a
+bounded request projection without activity/comment history.
+
+The existing GitHub-owner credential boundary cannot distinguish a person from
+a malicious process holding that person's full board token. The research
+worker must therefore receive neither that token, the proof nor a board clone.
+Generic chat/voice MCP confirmation is not direct owner-input proof: those
+requests still wait for the button until a verified ingress is implemented.
+
 ## Request and read
 
 `keeptrack.py request-work` reads one JSON object on stdin (at most 16 KiB): `request_id`, `title`, `project`, optional `details` and `todos`. Use a stable opaque source/message ID without private content. Copy the original key and payload across retries and front doors. The result is a Backlog card with a stable task ID and logical `rook:<project-id>` owner. It does not approve, dispatch or start anything.

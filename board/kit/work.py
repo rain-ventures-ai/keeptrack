@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import hashlib
 import json
+import importlib.util
 import os
 import re
 import secrets
@@ -110,6 +111,14 @@ def require_current_kit(data):
     settings = data.setdefault("settings", {})
     minimum = settings.get("min_kit")
     settings["min_kit"] = max(125, minimum) if type(minimum) is int else 125
+
+
+def research_module():
+    path = os.path.join(os.path.dirname(__file__), "research.py")
+    spec = importlib.util.spec_from_file_location("keeptrack_research", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def strict_archives(kt, data, base):
@@ -355,12 +364,14 @@ def run_projects(task, run, data=None, cache=None):
     return set().union(*(project_keys(data, ref, cache) for ref in projects))
 
 
-def claim_gate(kt, data, task, sid, executor, attended):
+def claim_gate(kt, data, task, sid, executor, attended, admission_receipt=None, policy_digest=None):
     if attended:
         return
     cache = {}
     scopes = project_keys(data, task.get("project"), cache)
     co = task.get("coordination")
+    if executor == "relay-research" and co is None:
+        fail("research requires an admitted coordinated task; no claim written")
     mine = None
     claim = task.get("claim") or {}
     renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
@@ -373,7 +384,12 @@ def claim_gate(kt, data, task, sid, executor, attended):
         renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
         if renewing and runs and runs[-1].get("_claim") == claim_hash(kt, claim) and not runs[-1].get("terminal"):
             mine = runs[-1]
-        if co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
+        if co.get("executor") == "relay-research":
+            if executor != "relay-research" or not admission_receipt or not policy_digest:
+                fail("research requires its selected host and private admission receipt; no claim written")
+            research = research_module()
+            research.verify(kt, data, task, research._private_receipt(admission_receipt), policy_digest)
+        elif co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
             fail("this coordinated task requires its selected relay-local host; no claim written")
         if task.get("column") != "todo" and not renewing:
             fail("unattended coordinated claims require an approved To do card; no claim written")
@@ -390,6 +406,8 @@ def renewal_gate(kt, data, task, claim):
     """A heartbeat or unwait cannot revive a different attempt through a project hold."""
     if claim.get("attended"):
         return
+    if (task.get("coordination") or {}).get("executor") == "relay-research":
+        research_module().check_active(kt, data, task)
     cache = {}
     scopes = project_keys(data, task.get("project"), cache)
     identity = claim_hash(kt, claim)
@@ -495,7 +513,7 @@ def attempt(kt, data, task, run_id, proof, *, retiring=False):
     return run
 
 
-def start(kt, ref, run_id, proof_path, host_pid=None):
+def start(kt, ref, run_id, proof_path, host_pid=None, admission_receipt=None, policy_digest=None):
     if not RUN.fullmatch(run_id):
         fail("run id must be wr_ followed by 24 lowercase hex digits")
     proof = receipt(proof_path, run_id, create=True, host_pid=host_pid, task_id=ref)
@@ -508,7 +526,12 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         except SystemExit as exc:
             raise Refused(str(exc)) from None
         co = coordinate(task)
-        if co.get("executor") != "relay-local":
+        if co.get("executor") == "relay-research":
+            if not admission_receipt or not policy_digest:
+                fail("research start requires the host's private admission receipt")
+            research = research_module()
+            research.verify(kt, data, task, research._private_receipt(admission_receipt), policy_digest)
+        elif co.get("executor") != "relay-local":
             fail("this executor is not supported by the local runner")
         bound = proof.get("task_id")
         if bound != ref:
@@ -558,6 +581,9 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
                   "unattended": True, "admission": "approved-todo", "events": [],
                   "_claim": claim_hash(kt, claim), "_proof": digest(proof["proof"])}
         co["runs"].append(record)
+        if co.get("executor") == "relay-research":
+            record["research_admission"] = co["research"]["admission"]["id"]
+            co["research"]["current"] = {"done": "Owner approval and request checked.", "remaining": "Read public sources and prepare the report.", "next_actor": "rook"}
         require_current_kit(data)
         kt.hist(task, "Rook attempt started " + run_id)
         result.update(created=True, run_id=run_id, state="recorded", launch=True)
@@ -677,6 +703,11 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             pending = task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
                 any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
             run["needs_reconciliation"] = bool(not run.get("result") and clean["launch_state"] != "not_launched")
+            co = coordinate(task)
+            if co.get("executor") == "relay-research" and co["runs"][-1] is run:
+                co["research"]["current"] = {"done": "Research attempt stopped; its evidence is retained on the host.",
+                    "remaining": "Reconcile this attempt before any retry." if run["needs_reconciliation"] else "Rook can retry within the approved limits.",
+                    "next_actor": "owner" if run["needs_reconciliation"] else "rook"}
             # Only remove this run's exact claim; never invoke ordinary release's stale/no-claim exceptions.
             if claim and claim_hash(kt, claim) == run["_claim"] and coordinate(task)["runs"][-1] is run:
                 task["claim"] = None
@@ -742,6 +773,7 @@ def resolve(kt, args):
 
 
 def parser(sub, callback):
+    research_module().parser(sub, callback)
     req = sub.add_parser("request-work", help="save one idempotent Rook request in Backlog; never approves or starts")
     req.set_defaults(f=callback, work_action="request")
     resolution = sub.add_parser("work-resolve", help="owner-authorised disposition of an uncertain attempt; never automatic")
@@ -762,6 +794,8 @@ def parser(sub, callback):
             cmd.add_argument("--receipt", required=True, help="private host-only receipt; never pass to an agent")
         if action == "start":
             cmd.add_argument("--host-pid", type=int, help="owning runner PID, used only for orphan reconciliation")
+            cmd.add_argument("--admission-receipt", help="research host's private admission proof")
+            cmd.add_argument("--policy-digest", help="research host's adopted policy digest")
         cmd.set_defaults(f=callback, work_action=action)
 
 
@@ -769,6 +803,11 @@ def command(kt, args):
     if kt.BACKEND != "github" and not kt.FILE:
         fail("this backend does not support the durable work contract")
     action = args.work_action
+    if action == "watch-poll":
+        return research_module().watch_poll(kt, args)
+    if action.startswith("research-"):
+        from types import SimpleNamespace
+        return research_module().command(kt, SimpleNamespace(**globals()), args)
     if action == "status":
         return status(kt, args.id)
     if action == "release":
@@ -776,7 +815,8 @@ def command(kt, args):
     if action == "resolve":
         return resolve(kt, args)
     if action == "start":
-        return start(kt, args.id, args.run_id, args.receipt, getattr(args, "host_pid", None))
+        return start(kt, args.id, args.run_id, args.receipt, getattr(args, "host_pid", None),
+                     getattr(args, "admission_receipt", None), getattr(args, "policy_digest", None))
     raw = kt.sys.stdin.read(MAX_INPUT + 1)
     if len(raw.encode()) > MAX_INPUT:
         fail("input exceeds 16 KiB")

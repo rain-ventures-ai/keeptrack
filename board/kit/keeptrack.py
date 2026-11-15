@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 125  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 126  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2316,6 +2316,10 @@ def min_kit_needed(data):
     if data.get("rook_request_index") is not None or (data.get("settings") or {}).get("rook_request_index") is not None or \
             any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
         needed, what = max(125, needed), "Cards carry Rook coordination and execution holds"
+    if (data.get("settings") or {}).get("rook_research") is not None or any(
+            isinstance(t, dict) and ((t.get("coordination") or {}).get("research") is not None)
+            for t in data.get("tasks", []) or []):
+        needed, what = max(126, needed), "The opt-in research pilot needs receipt-bound owner admission"
     return needed, what
 
 
@@ -3433,7 +3437,8 @@ def do_claim(a, tid, data):
     sid = session_id(a)
     if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
         from types import SimpleNamespace
-        work_module().claim_gate(SimpleNamespace(**globals()), data, t, sid, getattr(a, "executor", None), attended(a))
+        work_module().claim_gate(SimpleNamespace(**globals()), data, t, sid, getattr(a, "executor", None), attended(a),
+                                 getattr(a, "admission_receipt", None), getattr(a, "policy_digest", None))
     elif any(isinstance(x, dict) and x.get("coordination") is not None for x in data.get("tasks", [])):
         sys.exit("Rook coordination requires the complete kit including work.py; no claim written")
     assign_to_me = getattr(a, "assign_to_me", False)
@@ -3619,8 +3624,12 @@ def drop_claim_file(task_id=None):
 
 def end_approval_on_leaving(task, old, column):
     """Leaving To do or In progress ends a claim's unattended approval; coming back restores nothing (kit v125)."""
-    if old in ("todo", "in-progress") and column not in ("todo", "in-progress") and isinstance(task.get("claim"), dict):
-        task["claim"].pop("unattended_approved", None)
+    if old in ("todo", "in-progress") and column not in ("todo", "in-progress"):
+        if isinstance(task.get("claim"), dict):
+            task["claim"].pop("unattended_approved", None)
+        admission = ((task.get("coordination") or {}).get("research") or {}).get("admission")
+        if isinstance(admission, dict):
+            admission["active"] = False
 
 
 def move_task_to_column(data, task, column, a=None):
@@ -4865,7 +4874,7 @@ def _loaded_head(data):
 # does, though no commit made it. With --cursor FILE the last snapshot is kept on disk, so a change that lands between
 # two watch runs is reported by the next one: never missed (a crash between printing and saving can repeat one batch).
 WATCH_KINDS = ("new", "entered", "left", "column", "review", "claim", "blocked", "stale", "comment", "mention", "todo",
-               "wait", "chase", "overdue", "fields", "proposal", "run")
+               "wait", "chase", "overdue", "fields", "proposal", "run", "research")
 WATCH_FIELDS = ("title", "details", "priority", "due", "labels", "assignees", "links", "outcome", "project", "client")
 WATCH_CURSOR_V = 1
 
@@ -4893,6 +4902,16 @@ def _coord_digest(t):
     return out
 
 
+def _research_digest(t):
+    co = t.get("coordination") if isinstance(t.get("coordination"), dict) else {}
+    r = co.get("research") if isinstance(co.get("research"), dict) else {}
+    request = r.get("request") if isinstance(r.get("request"), dict) else {}
+    admission = r.get("admission") if isinstance(r.get("admission"), dict) else {}
+    return {"request": _wh([request.get("approval_id"), request.get("answer_id")]) if request else "",
+            "admission": _wh([admission.get("id"), admission.get("active")]) if admission else "",
+            "current": _wh(r.get("current")) if r.get("current") else ""}
+
+
 RUN_TEXT = {"running": "run started", "finished": "run finished", "held": "held for unknown effect", "resolved": "run resolved"}
 
 
@@ -4913,7 +4932,7 @@ def watch_entry(data, t, today, match):
             "todos": [[d.get("id") or _wh(d.get("text")), bool(d.get("done")), _wh(d.get("text"))]
                       for d in t.get("todos") or [] if isinstance(d, dict)],
             "comments": [x.get("id") or _wh([x.get("at"), x.get("text")]) for x in t.get("comments") or [] if isinstance(x, dict)],
-            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS}, "coord": _coord_digest(t),
+            "fields": {k: _wh(t.get(k)) for k in WATCH_FIELDS}, "coord": _coord_digest(t), "research": _research_digest(t),
             "last": max(hist_at) if hist_at else ""}
 
 
@@ -4964,6 +4983,8 @@ def watch_events(old, new, data, me=""):
         if not nm:
             ev("left", cid, o, "left the board (archived or removed)" if n is None else "no longer matches", who)
             continue
+        if o.get("research") != n.get("research") and any((n.get("research") or {}).values()):
+            ev("research", cid, n, "Rook research request or Current state changed", who)
         if o["column"] != n["column"]:
             ev("column", cid, n, f"{o['column']} -> {n['column']}", who)
             if n["column"] == REVIEW_COL:
@@ -14228,7 +14249,9 @@ def main():
     s.add_argument("id"); s.set_defaults(f=lambda a: sys.exit("capability_unavailable: approve alias requires BOARD_BACKEND=hosted"))
     s = sub.add_parser("claim"); s.add_argument("id"); cl(s)
     s.add_argument("--json", action="store_true", help="return the saved task ID and claim generation, without session credentials")
-    s.add_argument("--executor", choices=("relay-local",), help="selected host route for durable coordinated work; grants no approval")
+    s.add_argument("--executor", choices=("relay-local", "relay-research"), help="selected host route for durable coordinated work; grants no approval")
+    s.add_argument("--admission-receipt", help="research host's private admission proof")
+    s.add_argument("--policy-digest", help="research host's adopted policy digest")
     s.add_argument("--assign-to-me", action="store_true",
                    help="with --attended on a GitHub board, assign an unassigned Backlog or To do card to you in the claim")
     s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
