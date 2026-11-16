@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import test_work as fixtures
+import test_work_review as races
 kt, SOURCE = fixtures.kt, fixtures.SOURCE
 
 
@@ -17,6 +18,7 @@ class ResearchTests(unittest.TestCase):
     read = fixtures.WorkTests.read
     write = fixtures.WorkTests.write
     claim = fixtures.WorkTests.claim
+    api_cas = races.ReviewTests.api_cas
 
     def ready(self):
         self.research = kt.work_module().research_module()
@@ -51,6 +53,112 @@ class ResearchTests(unittest.TestCase):
 
     def start(self):
         self.admit(); self.claim(); return self.invoke("start")
+
+    def signed_admit(self):
+        self.ready(); key = Path(self.tmp.name) / "owner-key.json"; action = Path(self.tmp.name) / "owner-action.json"
+        self.research._private_receipt(key, {"schema": self.research.SCHEMA, "kind": "owner-action-key", "proof": "d" * 64})
+        expected = {"board": "owner/board", "owner": "owner", "project": "pr_one", "task_id": self.tid,
+            "approval_id": self.prop_id, "answer_id": self.answer_id, "policy_digest": self.policy_hash,
+            "content_hash": self.research.digest(self.research.scope(self.read(), self.read()["tasks"][0]))}
+        self.research.issue_owner_action(action, key, expected, kt.now(), 300)
+        self.invoke("research-admit", owner_action_receipt=str(action), owner_action_key=str(key))
+
+    def test_atomic_start_rechecks_a_lost_github_cas_without_an_orphan_claim(self):
+        self.signed_admit()
+        with self.api_cas() as cas, mock.patch.object(kt, "REPO", "owner/board"):
+            self.assertTrue(self.invoke("start", claim_research=True)["launch"])
+        self.assertEqual(cas["calls"], 2); self.assertEqual(cas["rechecks"], [True, True])
+        task = cas["data"]["tasks"][0]
+        self.assertIsNotNone(task.get("claim")); self.assertEqual(len(task["coordination"]["runs"]), 1)
+
+    def test_atomic_start_cas_withdrawal_preserves_no_claim_and_no_run(self):
+        self.signed_admit()
+        def withdraw(canonical, wanted):
+            task = canonical["data"]["tasks"][0]; task["column"] = "backlog"
+            task["coordination"]["research"]["admission"]["active"] = False
+        with self.api_cas(withdraw) as cas, mock.patch.object(kt, "REPO", "owner/board"):
+            with self.assertRaisesRegex(SystemExit, "withdrawn"):
+                self.invoke("start", claim_research=True)
+        task = cas["data"]["tasks"][0]
+        self.assertEqual(task["column"], "backlog"); self.assertIsNone(task.get("claim"))
+        self.assertEqual(task["coordination"]["runs"], [])
+
+    def test_atomic_start_cas_preserves_a_successor_claim(self):
+        self.signed_admit()
+        def successor(canonical, wanted):
+            task = canonical["data"]["tasks"][0]; task["column"] = "in-progress"
+            task["claim"] = {"agent": "other", "session_id": "successor", "generation": "e" * 24, "status": "running"}
+        with self.api_cas(successor) as cas, mock.patch.object(kt, "REPO", "owner/board"):
+            with self.assertRaisesRegex(SystemExit, "existing claim"):
+                self.invoke("start", claim_research=True)
+        task = cas["data"]["tasks"][0]
+        self.assertEqual(task["claim"]["generation"], "e" * 24); self.assertEqual(task["coordination"]["runs"], [])
+
+    def test_atomic_start_records_claim_and_run_in_one_save(self):
+        self.ready(); self.admit()
+        with mock.patch.object(kt, "mutate", wraps=kt.mutate) as save:
+            result = self.invoke("start", claim_research=True)
+        self.assertTrue(result["created"]); self.assertTrue(result["launch"])
+        self.assertEqual(save.call_count, 1)
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "in-progress"); self.assertIsNotNone(task["claim"])
+        self.assertEqual(len(task["coordination"]["runs"]), 1)
+        self.assertFalse(self.invoke("start", claim_research=True)["launch"])
+
+    def test_atomic_start_refusal_leaves_no_claim_or_run(self):
+        self.ready(); self.admit(); data = self.read()
+        other = {**data["tasks"][0], "id": "t_other", "num": 2, "coordination": None,
+                 "claim": {"agent": "other", "session_id": "other-session", "status": "running"}}
+        data["tasks"].append(other); self.write(data)
+        with self.assertRaisesRegex(SystemExit, "other implementation"):
+            self.invoke("start", claim_research=True)
+        task = self.read()["tasks"][0]
+        self.assertIsNone(task.get("claim")); self.assertEqual(task["column"], "todo")
+        self.assertEqual(task["coordination"]["runs"], [])
+
+    def test_uncertain_atomic_start_can_be_fenced_before_a_late_start(self):
+        self.ready(); self.admit()
+        with mock.patch.object(kt, "mutate", side_effect=OSError("offline unknown save")):
+            with self.assertRaises(OSError): self.invoke("start", claim_research=True)
+        self.assertIsNone(self.read()["tasks"][0].get("claim"))
+        terminal = {"id": "held-before-start", "kind": "interrupted", "summary": "Start response unknown; retain evidence.", "launch_state": "may_have_launched"}
+        self.invoke("finish", terminal, fence_missing_start=True)
+        task = self.read()["tasks"][0]
+        self.assertTrue(task["coordination"]["runs"][0]["needs_reconciliation"])
+        self.assertFalse(self.invoke("start", claim_research=True)["launch"])
+        self.assertIsNone(self.read()["tasks"][0].get("claim"))
+
+    def test_missing_start_fence_preserves_a_successor_claim(self):
+        self.ready(); self.admit()
+        with mock.patch.object(kt, "mutate", side_effect=OSError("offline unknown save")):
+            with self.assertRaises(OSError): self.invoke("start", claim_research=True)
+        data = self.read(); data["tasks"][0]["claim"] = {"agent": "other", "session_id": "successor", "generation": "e" * 24, "status": "running"}; self.write(data)
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "claim"):
+            self.invoke("finish", {"id": "held", "kind": "interrupted", "launch_state": "may_have_launched"}, fence_missing_start=True)
+        self.assertEqual(self.read(), before)
+
+    def test_missing_start_cancellation_does_not_restore_withdrawn_approval(self):
+        self.ready(); self.admit()
+        with mock.patch.object(kt, "mutate", side_effect=OSError("offline unknown save")):
+            with self.assertRaises(OSError): self.invoke("start", claim_research=True)
+        data = self.read(); task = data["tasks"][0]; task["column"] = "backlog"
+        task["coordination"]["research"]["admission"]["active"] = False; self.write(data)
+        self.invoke("finish", {"id": "held", "kind": "interrupted", "launch_state": "may_have_launched"}, fence_missing_start=True)
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "backlog"); self.assertFalse(task["coordination"]["research"]["admission"]["active"])
+        with self.assertRaisesRegex(SystemExit, "withdrawn"):
+            self.invoke("start", claim_research=True)
+
+    def test_missing_start_cancellation_cannot_use_another_tasks_admission(self):
+        self.ready(); self.admit()
+        with mock.patch.object(kt, "mutate", side_effect=OSError("offline unknown save")):
+            with self.assertRaises(OSError): self.invoke("start", claim_research=True)
+        private = json.loads(Path(self.admission).read_text()); private["task_id"] = "t_other"
+        Path(self.admission).write_text(json.dumps(private)); before = self.read()
+        with self.assertRaisesRegex(SystemExit, "another research admission"):
+            self.invoke("finish", {"id": "held", "kind": "interrupted", "launch_state": "may_have_launched"}, fence_missing_start=True)
+        self.assertEqual(self.read(), before)
 
     def report(self):
         return {"artifact": {"url": "https://docs.example.org/research/t_research/version.md", "sha256": "c" * 64,
@@ -183,6 +291,9 @@ class ResearchTests(unittest.TestCase):
 
     def test_watch_poll_baseline_and_changes_use_existing_projection(self):
         self.ready(); first = self.poll(); self.assertTrue(first["baseline"]); self.assertEqual(first["events"], [])
+        import base64
+        self.assertIsNone(json.loads(base64.urlsafe_b64decode(first["cursor"]))["snapshot"]["cards"][self.tid]["claim"])
+        self.assertEqual(self.poll(first["cursor"])["events"], [])
         self.admit(); second = self.poll(first["cursor"])
         self.assertIn("research", {e["kind"] for e in second["events"]})
         self.assertEqual(self.poll(second["cursor"])["events"], [])

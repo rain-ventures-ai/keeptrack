@@ -15,8 +15,11 @@ The owner-only **Hand to Rook** button creates and answers an existing
 start a worker. The separately configured host runs `work-research-admit` with
 the full proposal and answer IDs, its adopted configuration digest and a private
 admission receipt. Admission consumes that answer once and moves the card to
-To do. Claim requires the private admission receipt; start additionally binds
-the exact session/claim generation to a separate private run proof. Relayed answers, `confirmed`, card prose and labels
+To do. `work-start --claim-research` requires the private admission receipt and
+claims the task and records its run in one whole-board CAS. Its separate private
+run proof is durably written before that mutation. A refusal cannot leave only
+a claim. The browser presents the approval scope inline; one owner button remains
+the approval, without a second confirmation dialog. Relayed answers, `confirmed`, card prose and labels
 grant no approval. Before saving that answer the browser authenticates to a
 separate owner endpoint using a private capability. The endpoint persists a
 signed receipt for the exact board, owner, project, task, proposal/answer IDs,
@@ -84,6 +87,14 @@ before `work-research-retire` withdraws that exact run's grant and releases the
 host intent. A bare board resolution cannot clear the private hold. Evidence is
 retained and the old action never relaunches; another attempt needs a new button
 action. This is separate from ordinary repository-run resolution.
+
+If an atomic start response is unknown and no run was saved, the host may use
+`work-finish --fence-missing-start` with both private proofs to record an uncertain
+interruption. That CAS creates a sealed cancellation record for the same run ID,
+so a delayed start cannot acquire a launch permit. It records no result and
+does not clear a successor claim. Owner resolution can finish an interrupted
+cancellation before resolving the exact run. A missing private proof means the
+native start never reached its remote-mutation boundary and may retry safely.
 
 ## Request and read
 

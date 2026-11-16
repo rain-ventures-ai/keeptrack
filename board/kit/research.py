@@ -352,6 +352,7 @@ def admit(kt, work, args):
         else:
             fail("an independently authenticated private owner-action receipt is required; Git pushes are not approval")
         private = _private_receipt(args.admission_receipt, {"schema": SCHEMA, "task_id": task["id"],
+            "project_id": task["project"],
             "approval_id": args.approval, "answer_id": args.answer, "content_hash": hashed,
             "policy_digest": args.policy_digest, "proof": secrets.token_hex(32), "provenance": provenance,
             "approval_digest": digest(_approval_identity(item))})

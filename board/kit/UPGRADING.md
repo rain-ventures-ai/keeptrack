@@ -39,6 +39,8 @@ Install the complete kit including `research.py`. Research requires a separately
 approved host/account, one board/project, private report destination and
 notification configuration. The button also requires a separate owner endpoint,
 browser capability and host-only signing key; an owner Git push is insufficient.
+The host also checks that `work.py` has the atomic research-start/fencing
+capability; install the complete current kit, not a mixture of pilot revisions.
 These are configured only after approval, not by a kit copy. See [WORK.md](WORK.md#public-research-pilot).
 No live upgrade, runner, sender or schedule is part of this source change.
 

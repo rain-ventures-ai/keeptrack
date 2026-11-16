@@ -481,7 +481,9 @@ async function assertFits(page, where) {
       });
       await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board'); });
       await page.route('https://api.test/**', r => api.route(r)); await page.goto(base + '/board/index.html#3');
-      await page.locator('#dlgCard[open]').waitFor(); await page.locator('#cRookStart').click();
+      await page.locator('#dlgCard[open]').waitFor();
+      assert.match(await page.locator('#cRookCurrent').innerText(), /approves this saved request and its public source links/);
+      await page.locator('#cRookStart').click();
       await page.locator('.ui-toast', { hasText: 'Handed to Rook' }).waitFor();
       const request = api.card('t_research').coordination.research.request;
       const proposal = JSON.parse(api.files[`proposals/${request.approval_id}.json`]);

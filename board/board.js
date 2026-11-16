@@ -4116,6 +4116,7 @@ if (typeof window !== 'undefined') (() => {
     }
     else box.append(el('p', 'hint', r?.request ? (researchRequestPending(r, p) ? 'Handed to Rook; waiting for the configured research host.' : 'The admission window expired. You can hand this request to Rook again.') : 'Read-only research from public source links. The detailed report will be linked here.'));
     const button = $('cRookStart'); button.hidden = !!ro || HOSTED || cfg().me !== kitOwner() || t.column !== 'backlog' || !!t.claim || !!r?.admission?.active || researchRequestPending(r, p);
+    if (!button.hidden) box.append(el('p', 'hint', 'Hand to Rook approves this saved request and its public source links for read-only research and one private report, under the adopted pilot policy.'));
   }
   function buildDrawer() {
     // header: number pill (copies the link), undo, copy for agent, more actions, close
