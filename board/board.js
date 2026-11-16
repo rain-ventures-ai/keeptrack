@@ -3869,11 +3869,13 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // a card leaving Done is decided again at its next done: its outcome (and the run record's) goes, as keeptrack.py move does
+  // the owner dragging an unanswered (unsure) Backlog card to To do answers it "by an agent", as keeptrack.py move does for a person; `at` stays
+  function answerUnsure(n, t, from, to) { if (from === "backlog" && to === "todo" && t.asked && t.asked.mode === "unsure") t.asked = { ...t.asked, via: t.asked.via || "board", mode: "dispatch" }; }
   function reopenOutcome(n, t, from, to) { const d = doneColId(); if (from === d && to !== d) { delete t.outcome; delete t.finished; if (t.last_run) delete t.last_run.outcome; } }   // kit v128: finished again later is a new finish
   function place(n, id, colId, beforeId) {
     const i = n.tasks.findIndex(x => x.id === id); if (i < 0) return;
     if (isSplit(n)) {
-      const t = n.tasks[i], mode = sortMode(), from = t.column; t.column = colId; if (from !== colId) reopenOutcome(n, t, from, colId);
+      const t = n.tasks[i], mode = sortMode(), from = t.column; t.column = colId; if (from !== colId) { reopenOutcome(n, t, from, colId); answerUnsure(n, t, from, colId); }
       if (mode === 'due' || mode === 'newest') { if (from !== colId) stamp(t); return; }   // these orders ignore rank: a drop in the same column changes nothing
       const target = beforeId && n.tasks.find(x => x.id === beforeId);
       if (mode === 'smart' && target && target.priority !== t.priority) t.priority = target.priority;
@@ -3884,7 +3886,7 @@ if (typeof window !== 'undefined') (() => {
       let a = lower && validRank(lower.rank) ? lower.rank : null, b = upper && validRank(upper.rank) ? upper.rank : null; if (a !== null && b !== null && a >= b) a = peers.reduce((m, x) => validRank(x.rank) && x.rank < b && (m === null || x.rank > m) ? x.rank : m, null);   // equal neighbours: just below b, as keeptrack.py move does
       t.rank = keyBetween(a, b); stamp(t); return;
     }
-    const [t] = n.tasks.splice(i, 1); const from = t.column; t.column = colId; reopenOutcome(n, t, from, colId); stamp(t);
+    const [t] = n.tasks.splice(i, 1); const from = t.column; t.column = colId; reopenOutcome(n, t, from, colId); answerUnsure(n, t, from, colId); stamp(t);
     let at = beforeId ? n.tasks.findIndex(x => x.id === beforeId) : -1;
     if (at < 0) { let last = -1; n.tasks.forEach((x, k) => { if (x.column === colId) last = k; }); at = last + 1; }
     n.tasks.splice(at, 0, t);
@@ -7856,7 +7858,7 @@ if (typeof window !== 'undefined') (() => {
       if (moving.length) {
         if (!to || !d.columns.some(c => c.id === to && c.id !== id)) return;   // the target went away: leave the column alone
         const ranks = d.tasks.filter(t => t.column === to && validRank(t.rank)).map(t => t.rank); let last = ranks.length ? ranks.reduce((a, b) => (a > b ? a : b)) : null;
-        moving.sort((a, b) => (validRank(a.rank) && validRank(b.rank) ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : 0)).forEach(t => { reopenOutcome(d, t, id, to); t.column = to; if (isSplit(d)) { t.rank = keyBetween(last, null); last = t.rank; } stamp(t); });
+        moving.sort((a, b) => (validRank(a.rank) && validRank(b.rank) ? (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0) : 0)).forEach(t => { reopenOutcome(d, t, id, to); answerUnsure(d, t, id, to); t.column = to; if (isSplit(d)) { t.rank = keyBetween(last, null); last = t.rank; } stamp(t); });
       }
       d.columns = d.columns.filter(c => c.id !== id);
     }, `Remove column: ${col.name}`, ids);

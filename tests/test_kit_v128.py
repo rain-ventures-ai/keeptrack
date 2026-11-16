@@ -327,6 +327,47 @@ class Asked(Board):
         self.assertEqual(("backlog", "unsure"), (card["column"], card["asked"]["mode"]))
         self.assertIsNone(card["claim"])
 
+    def test_an_agent_cannot_move_an_unsure_card_out_of_backlog_by_any_route(self):
+        """Rule: an unclear request starts nothing. Not only `move ID todo` and `claim`: in-progress, release and done too."""
+        ident = self.add("Unsure all routes", "--asked", "unsure", "--asked-via", "chat")
+        env = {"BOARD_AGENT": "dispatcher"}
+        for args in (("move", ident, "in-progress"), ("move", ident, "done"), ("move", ident, "todo"),
+                     ("release", ident, "--column", "todo", "--session", "sess-0123456789abcdef"),
+                     ("done", ident, "--note", "x", "--session", "sess-0123456789abcdef")):
+            p = self.kt(*args, ok=False, **env)
+            self.assertNotEqual(0, p.returncode, args)
+            card = self.card(ident)
+            self.assertEqual(("backlog", "unsure"), (card["column"], card["asked"]["mode"]), args)
+            self.assertNotIn("finished", card)
+        # the owner's answer still works for an attended front door
+        self.kt("move", ident, "todo", "--asked", "dispatch", "--asked-via", "chat", BOARD_AGENT="connector-claude", BOARD_ATTENDED="1")
+        self.assertEqual(("todo", "dispatch"), (self.card(ident)["column"], self.card(ident)["asked"]["mode"]))
+
+    def test_an_attended_claim_with_now_answers_unsure_and_starts(self):
+        ident = self.add("Unsure then claimed here", "--asked", "unsure", "--asked-via", "chat")
+        self.claim(ident, "--attended", "--asked", "now", "--asked-via", "chat", BOARD_AGENT="claude")
+        card = self.card(ident)
+        self.assertEqual(("in-progress", "now"), (card["column"], card["asked"]["mode"]))
+
+    def test_an_unsure_card_the_owner_approved_by_a_direct_write_can_be_started_once_answered(self):
+        """The web page writes the column itself. board.js answers `unsure` as dispatch on that move (checked below); the
+        card it writes must then be claimable by an agent and give one finish record."""
+        ident = self.add("Dragged on the page", "--asked", "unsure", "--asked-via", "chat")
+        asked = self.card(ident)["asked"]
+        self.put_card(ident, column="todo", asked={**asked, "mode": "dispatch"})   # what board.js writes on the drag
+        self.assertEqual([], self.issues("ASKED"))
+        self.claim(ident, BOARD_AGENT="dispatcher")
+        self.done(ident, BOARD_AGENT="dispatcher")
+        card = self.card(ident)
+        self.assertEqual(("done", "agent", False), (card["column"], card["finished"]["by"], card["finished"]["cancelled"]))
+
+    def test_the_page_answers_unsure_when_the_owner_drags_backlog_to_todo(self):
+        js = read("board/board.js")
+        fn = re.search(r"function answerUnsure\(n, t, from, to\) \{(.*?)\n", js)[1]
+        self.assertIn('"backlog"', fn); self.assertIn('"todo"', fn); self.assertIn("mode: \"dispatch\"", fn)
+        self.assertIn("...t.asked", fn, "the first `at` stays")
+        self.assertGreaterEqual(js.count("answerUnsure("), 4, "both place() branches and the bulk move call it")
+
     def test_the_connectors_close_is_an_agents_finish(self):
         """Known case (see the connector README): a connector close is BOARD_AGENT=connector-<client>, so it records `agent`
         even when the owner said "mark it done" in chat; the owner hears of it once."""

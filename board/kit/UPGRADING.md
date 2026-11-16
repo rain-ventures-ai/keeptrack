@@ -46,9 +46,10 @@ Two optional card fields, both written only by `keeptrack.py`:
 - Who may write the mark: an agent run (BOARD_AGENT set) must also be attended (`--attended` or BOARD_ATTENDED=1: the owner
   is present, as a front door is). An unattended agent's `--asked` is refused, so a dispatcher cannot mark cards it creates.
   A second `done` on a Done card leaves `finished` as the first finish wrote it (one push per finish).
-- An `unsure` card: the owner's plain approval (`move ID todo` by a person, e.g. the board page's kit path) counts as
+- An `unsure` card: the owner's plain approval (`move ID todo` by a person; the board page does the same when the owner drags the card from Backlog to To do: it sets `mode` to `dispatch` and keeps `at`) counts as
   `dispatch`. An agent run must pass `--asked dispatch` (or `claim --attended --asked now`); without it the move or claim is
-  refused, so the question cannot be bypassed.
+  refused, so the question cannot be bypassed. The same refusal covers every other way an agent run could take the card
+  out of Backlog (`move` to any column, `release --column`, `done`).
 
 `doctor` rejects a malformed `asked` or `finished` (code ASKED, FINISHED); boards without them stay valid. The first write
 raises `settings.min_kit` to 128: an older kit would not remove `finished` when a card reopens. No migration; an upgrade

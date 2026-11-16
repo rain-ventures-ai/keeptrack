@@ -3601,10 +3601,10 @@ def do_claim(a, tid, data):
         t["claim"]["unattended_approved"] = True
     if attended(a):
         t["claim"]["attended"] = True
+    if asked:
+        set_asked(data, t, asked[0], asked[1])   # before the move: the answer must be on the card when move_task_to_column checks it
     if t["column"] != "in-progress":
         move_task_to_column(data, t, "in-progress", argparse.Namespace(session=sid))   # the new claim's own session id
-    if asked:
-        set_asked(data, t, asked[0], asked[1])
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
     uw = _unwait_before_claim(t)   # the session that cleared a wait on someone else now claims the card: flag it, whatever BOARD_AGENT said
     if uw and uw.get("other") and uw.get("session") == session_hash(sid):
@@ -3751,6 +3751,11 @@ def move_task_to_column(data, task, column, a=None):
     old = task.get("column")
     if old == column:
         return old
+    if old == "backlog" and agent_run() and (task.get("asked") or {}).get("mode") == "unsure":
+        # one place every column change passes (release, done, claim, review): an agent run never takes an unanswered
+        # request out of Backlog; only the owner's answer (--asked MODE on move or claim) does
+        sys.exit(f"refused: {task.get('id')} carries an unanswered asked mark (now or by an agent?): an agent run does not move it out of "
+                 "Backlog until the owner answers (--asked dispatch on move, or claim --attended --asked now). Nothing changed")
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
         task.pop("finished", None)   # kit v128: finished again later is a new finish
@@ -4122,13 +4127,15 @@ def cmd_move(a):
             if asked[0] == "unsure":
                 _ASKED_REFUSE.clear()
                 return asked_unsure(data, t, asked[1], "approved")
-        elif column == "todo" and t["column"] == "backlog" and (t.get("asked") or {}).get("mode") == "unsure":
+        elif column != "backlog" and t["column"] == "backlog" and (t.get("asked") or {}).get("mode") == "unsure":
             # an unanswered request: the owner's plain approval answers it as "by an agent" (dispatch); an agent run
-            # must pass the answer itself, or the question is bypassed and the done notice is lost
+            # must pass the answer itself, or the question is bypassed and the done notice is lost. Any column out of
+            # Backlog counts for an agent run (in-progress and done too), not only To do.
             if agent_run():
                 sys.exit(f"refused: {t['id']} carries an unanswered asked mark (now or by an agent?): pass --asked dispatch "
                          "--asked-via NAME once the owner says an agent should run it. Nothing changed")
-            set_asked(data, t, "dispatch", (t.get("asked") or {}).get("via") or "board")
+            if column == "todo":
+                set_asked(data, t, "dispatch", (t.get("asked") or {}).get("via") or "board")
         if getattr(a, "priority", None):
             t["priority"] = a.priority
         if data.get("layout") == "split":
