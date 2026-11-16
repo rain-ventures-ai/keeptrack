@@ -363,16 +363,17 @@ def apply_policy(kt, work, args):
             fail("owner policy action expired or has a future timestamp")
         if not isinstance(desired, dict) or set(desired) != PUBLIC_POLICY_FIELDS or type(desired.get("enabled")) is not bool or type(desired.get("v")) is not int:
             fail("unsupported desired research policy")
-        # Validate both enabled/disabled shapes using the existing strict contract.
-        checked = copy.deepcopy(data); checked.setdefault("settings", {})["rook_research"] = dict(desired, enabled=True)
-        policy(checked)
-        known = {p.get("id") for p in data.get("projects", []) if isinstance(p, dict)}
-        if desired["board"] != kt.REPO or not set(desired["projects"]) <= known or len(set(desired["projects"])) != len(desired["projects"]):
-            fail("policy board or canonical projects do not match")
         if operation == "disable":
             if not isinstance(current["current"], dict) or desired != dict(current["current"], enabled=False):
                 fail("disable may only stop intake; it cannot change policy scope")
         elif operation == "adopt" and desired["enabled"] is True:
+            # Stop never depends on mutable project/owner metadata. A new or
+            # widened authority still needs the complete current-board checks.
+            checked = copy.deepcopy(data); checked.setdefault("settings", {})["rook_research"] = dict(desired, enabled=True)
+            policy(checked)
+            known = {p.get("id") for p in data.get("projects", []) if isinstance(p, dict)}
+            if desired["board"] != kt.REPO or not set(desired["projects"]) <= known or len(set(desired["projects"])) != len(desired["projects"]):
+                fail("policy board or canonical projects do not match")
             for task in data.get("tasks", []):
                 co = task.get("coordination") or {}
                 if any(work.unresolved(run) for run in co.get("runs", [])) or \

@@ -111,3 +111,13 @@ class PolicyTests(unittest.TestCase):
                     with self.assertRaises(SystemExit): self.apply(path)
                 self.assertNotIn('rook_research', cas['data']['settings'])
                 self.assertEqual(cas['rechecks'], [True])
+
+    def test_disable_survives_deleted_project_and_later_owner_metadata_change(self):
+        self.ready(); self.apply(self.receipt())
+        data = self.read(); data['projects'] = []; data['settings']['kit_owner'] = 'changed-owner'
+        self.write(data)
+        path = self.receipt(dict(self.desired, enabled=False), 'disable')
+        self.apply(path)
+        self.assertFalse(self.read()['settings']['rook_research']['enabled'])
+        self.assertEqual(self.read()['settings']['kit_owner'], 'changed-owner')
+        self.assertEqual(self.read()['projects'], [])
