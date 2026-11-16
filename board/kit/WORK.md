@@ -48,6 +48,10 @@ must match it on every verification; retries do not restart the clock. The host
 derives its execution window from that verified private value, not mutable board
 timestamps. `work-research-check` returns the validated task snapshot, scope and
 private admission time together from one canonical read.
+`work-research-candidates` adds a bounded `actions` map of current unconsumed
+proposal/answer identities and input hashes. Stale or privacy-screened requests
+are omitted from that map. It is filtering data; the host must verify the exact
+private signed action and recheck the selected canonical request before admission.
 The public setting `rook_research` has exactly `v: 1`, `enabled: true`, `board`,
 `owner`, `projects`, `profile: public-research`, `policy_digest` and
 `approval_ttl`. It is not a policy resolver. The owner must separately approve

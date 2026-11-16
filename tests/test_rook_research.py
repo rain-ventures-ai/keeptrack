@@ -123,6 +123,8 @@ class ResearchTests(unittest.TestCase):
         self.assertFalse(run["needs_reconciliation"]); self.assertEqual(run["terminal"]["launch_state"], "not_launched")
         self.assertFalse(task["coordination"]["research"]["admission"]["active"])
         self.assertEqual(task["coordination"]["research"]["current"]["next_actor"], "owner")
+        self.assertTrue(any(h.get("text") == "labels: needs-human" for h in task["history"]),
+                        "the existing notifier needs the label occurrence timestamp")
         self.assertFalse(self.invoke("research-read-failed")["created"])
 
     def test_read_failure_cannot_release_a_successor(self):
@@ -265,6 +267,21 @@ class ResearchTests(unittest.TestCase):
         self.ready(); self.admit(); data = self.read()
         data["tasks"][0]["coordination"]["research"]["admission"]["at"] = "2099-01-01T00:00:00Z"; self.write(data)
         with self.assertRaises(SystemExit): self.invoke("research-check")
+
+    def test_candidate_projection_exposes_only_current_request_identities(self):
+        self.ready(); data = self.read(); task = data["tasks"][0]
+        request = {"approval_id": self.prop_id, "answer_id": self.answer_id,
+                   "content_hash": self.research.digest(self.research.scope(data, task)), "at": kt.now()}
+        task["coordination"] = {"v": 1, "owner": "rook:pr_one", "executor": "relay-research", "runs": [], "research": {"request": request}}
+        self.write(data)
+        expected = {k: request[k] for k in ("approval_id", "answer_id", "content_hash")}
+        self.assertEqual(self.invoke("research-candidates", project="pr_one")["actions"], {self.tid: expected})
+        data["tasks"].append({"id": "t_broken", "project": "pr_one", "column": "backlog", "coordination": {"executor": "relay-research", "runs": [None]}})
+        self.write(data)
+        self.assertEqual(self.invoke("research-candidates", project="pr_one")["actions"], {self.tid: expected},
+                         "malformed unrelated coordination must not hide valid requests")
+        data["tasks"][0]["details"] = "Edited since approval"; self.write(data)
+        self.assertEqual(self.invoke("research-candidates", project="pr_one")["actions"], {})
 
     def test_approval_rejections(self):
         for update in ({"by": "agent@owner"}, {"relayed": "owner"}, {"at": "2020-01-01T00:00:00Z"},

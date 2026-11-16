@@ -271,6 +271,8 @@ def issue_owner_action(path, key_path, expected, now, ttl):
 
 
 def owner_push(kt, item, p):
+    # Unused legacy diagnostic. Admission never calls it: Git activity is not
+    # proof of a particular owner action and grants no research authority.
     """Optional Git audit only: a push is NOT authority for a specific action.
 
     The button makes one commit. Its exact proposal answer must be new in the
@@ -536,14 +538,15 @@ def read_failed(kt, work, args):
         run["research_read_failure"] = {"reason": "source_unavailable"}
         run["_research_read_failure_seal"] = seal
         task["claim"] = None; grant["active"] = False
-        co["research"]["current"] = {"done": "Public sources could not be read; no model worker launched.",
-            "remaining": "Check the public source links, then hand this request to Rook again.", "next_actor": "owner"}
+        co["research"]["current"] = {"done": "Research stopped before the model worker launched.",
+            "remaining": "Check source availability or hand this request to Rook again when ready.", "next_actor": "owner"}
         added = "needs-human" not in task.setdefault("labels", [])
-        if added: task["labels"].append("needs-human")
+        if added:
+            task["labels"].append("needs-human"); kt.hist(task, "labels: needs-human")
         co["research"]["prelaunch_note"] = {"reason": "source_unavailable", "label_added": added}
         kt.move_task_to_column(data, task, "backlog")
         kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
-        kt.hist(task, "Rook could not read the public sources; no worker launched")
+        kt.hist(task, "Rook research stopped before model launch; a fresh owner action is needed")
         answer.update(created=True, task=work.view(kt, task, data=data))
     kt.mutate(change, "Rook: record known research read failure")
     print(json.dumps(answer, ensure_ascii=False))
@@ -734,15 +737,27 @@ def command(kt, work, args):
         data, _ = kt.load(); p = policy(data)
         project = kt.find_project(data, args.project)["id"]
         if project not in p["projects"]: fail("project is outside the research pilot")
-        candidates = []
+        candidates, actions = [], {}
         for t in data.get("tasks", []):
-            co = t.get("coordination") or {}; r = co.get("research") or {}
-            if t.get("project") == project and (r.get("request") and t.get("column") == "backlog" or
-                    (r.get("admission") or {}).get("active") is True or
-                    co.get("executor") == EXECUTOR and any(work.unresolved(x) for x in co.get("runs", []))):
+            if not isinstance(t, dict) or not re.fullmatch(r"t_[a-z0-9]{4,20}", str(t.get("id", ""))): continue
+            co = t.get("coordination") if isinstance(t.get("coordination"), dict) else {}
+            r = co.get("research") if isinstance(co.get("research"), dict) else {}
+            request = r.get("request") if isinstance(r.get("request"), dict) else {}
+            grant = r.get("admission") if isinstance(r.get("admission"), dict) else {}
+            runs = co.get("runs") if isinstance(co.get("runs"), list) else []
+            if t.get("project") == project and (request and t.get("column") == "backlog" or
+                    grant.get("active") is True or
+                    co.get("executor") == EXECUTOR and any(work.unresolved(x) for x in runs if isinstance(x, dict))):
                 candidates.append(t["id"])
+                if request and t.get("column") == "backlog" and request.get("answer_id") != grant.get("answer_id"):
+                    try:
+                        current = scope(data, t); work.safe_content(kt, current)
+                        if request.get("content_hash") == digest(current):
+                            actions[t["id"]] = {key: request.get(key) for key in ("approval_id", "answer_id", "content_hash")}
+                    except SystemExit:
+                        pass  # Invalid/stale requests are data, not admission candidates.
         if len(candidates) > 256: fail("too many research candidates for this pilot")
-        print(json.dumps({"schema": SCHEMA, "tasks": sorted(candidates)}))
+        print(json.dumps({"schema": SCHEMA, "tasks": sorted(candidates), "actions": actions}))
         return
     if action == "admit":
         return admit(kt, work, args)
