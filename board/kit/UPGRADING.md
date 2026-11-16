@@ -25,6 +25,33 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v127 (schema 4)
+
+Adds `work-research-policy-snapshot` and `work-research-policy-apply` for the
+trusted research host. The latter needs the separately authenticated owner's
+private signed action and the signing key from the host's private configuration. An agent boolean,
+`BOARD_USER`, Git commit author or generic connector token is not that action.
+The native CLI verifies against its supplied key; it does not enforce a
+machine-wide key pin or authenticate the operator. The host fixes the key path
+outside the board and accepts no replacement from an endpoint request. Workers
+must receive neither this CLI with owner write credentials nor the signing key.
+A caller controlling the operator filesystem or owner CLI is outside this
+boundary, as for research task admission. Public policy data alone never
+authorises a model call: the host still requires its private task action proof.
+
+No migration or live adoption occurs during a kit upgrade. Before using policy
+control, install the complete reviewed kit and host changes. The first control
+write adds `settings.rook_research_control` and raises `settings.min_kit` to 127.
+Do not hand-edit it. Its monotonic revision and last action digest must survive
+all upgrades. Adoption/replacement refuses active or unresolved work; disabling
+retains grant records and run evidence but pauses subsequent gated stages,
+including heartbeat and report handover. Disabled work cannot finish through
+those gates. Use checked host recovery to resolve/retire a started attempt, or
+withdraw a proven unstarted admission and reconcile it, before re-enabling.
+
+Check `work-research-policy-snapshot`, normal board edits and `doctor` after the
+approved upgrade. Merely reading that snapshot writes nothing and starts no work.
+
 ### v126 (schema 4)
 
 Disabled-by-default public research pilot. Adds the packaged `research.py` helper,

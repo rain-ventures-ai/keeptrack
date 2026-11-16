@@ -1,0 +1,34 @@
+{
+  "id": "p_acme",
+  "name": "Casey Example",
+  "github": "alex",
+  "company": "Acme",
+  "role": "Buyer",
+  "email": "casey@example.invalid",
+  "phone": "",
+  "linkedin": "",
+  "stage": "Contacted",
+  "value": "",
+  "source": "Example",
+  "notes": "",
+  "next": "Reply",
+  "next_due": "2026-10-21",
+  "links": [],
+  "comments": [
+    {
+      "id": "c_shared",
+      "at": "2026-10-10T09:00:00Z",
+      "by": "alex",
+      "channel": "email",
+      "draft": false,
+      "text": "Confirmed call",
+      "source_message_ids": [
+        "rfc822:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    }
+  ],
+  "history": [],
+  "created": "2026-10-01T08:00:00.000Z",
+  "updated": "2026-10-01T08:00:00.000Z",
+  "createdBy": "alex"
+}

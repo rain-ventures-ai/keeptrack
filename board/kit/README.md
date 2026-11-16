@@ -416,6 +416,23 @@ Each person can connect their own Claude routine so that either the **Assign to 
 **Setup.** Follow [`board/ROUTINE-SETUP.md`](ROUTINE-SETUP.md) (the routine's saved prompt is the short [`routine-loader.txt`](routine-loader.txt); its behaviour lives in [`routine-prompt.md`](routine-prompt.md), which you can edit here without touching the routine). Or ask Claude Code in this repo to "set up my board routine"; the `board-routine-setup` skill guides and verifies it without handling any secrets.
 
 ## Board kit
+Research pilot policy control (kit 127) uses the trusted host's separately
+authenticated owner endpoint. `work-research-policy-snapshot` returns public
+policy and revision only. `work-research-policy-apply --owner-action-receipt
+/private/action.json --owner-action-key /private/owner-key.json` applies that
+host-issued action through the normal native CAS. This CLI is a trusted operator
+API: it verifies against the supplied key, and does not enforce a machine-wide
+key pin or authenticate its caller. The host pins the key in private configuration,
+offers no request field to replace it, and never exposes this CLI or board-write
+credentials to research workers. CLI access with owner write credentials is
+outside that worker boundary; never offer it as an owner approval tool.
+Stale scope/revisions and unresolved adoption are refused. Disable retains grant
+records and run evidence but pauses further gated stages, including heartbeat
+and report handover. It does not let an in-flight run finish while disabled.
+Use checked host recovery to resolve/retire started work, or withdraw proven
+unstarted work and reconcile it, before re-adoption. No configuration is enabled
+by installing the kit.
+
 The tools in this folder (and `.claude/skills/board*`) are the **board kit**. Their source is `rain-ventures-ai/keeptrack` `board/kit/`; `board/KIT_VERSION` says which version this repo has. Do not edit them here: see `board/UPGRADING.md`.
 
 To upgrade, run `python3 board/upgrade.py` from the repo root (`--push` to push the branch and open a draft PR). It works in a new worktree, so this checkout does not change; after the merge, `python3 board/upgrade.py --after-merge` checks the board against the backup. Lines this repo must keep in kit files go in `board/upgrade-keep.txt` (`<path> :: <regex>`, one per line).

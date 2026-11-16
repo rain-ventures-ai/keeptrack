@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 126  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 127  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2323,6 +2323,8 @@ def min_kit_needed(data):
             isinstance(t, dict) and ((t.get("coordination") or {}).get("research") is not None)
             for t in data.get("tasks", []) or []):
         needed, what = max(126, needed), "The opt-in research pilot needs receipt-bound owner admission"
+    if (data.get("settings") or {}).get("rook_research_control") is not None:
+        needed, what = max(127, needed), "Research policy control needs owner-signed monotonic revisions"
     return needed, what
 
 
@@ -7189,7 +7191,7 @@ HELP_TOPICS = {
 }
 if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
     HELP_TOPICS["durable-work"] = ["request-work", "work-status", "work-start", "work-event", "work-finish", "work-release-owned", "work-resolve"]
-    HELP_TOPICS["public-research"] = ["watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
+    HELP_TOPICS["public-research"] = ["work-research-policy-snapshot", "work-research-policy-apply", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
         "work-research-admit", "work-research-check", "work-research-handover", "work-research-reconcile", "work-research-retire", "work-research-note", "work-research-read-failed"]
 
 
@@ -14142,7 +14144,7 @@ def _automation_parser(sub):
 def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
-    reads = {"list", "show", "work-status", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
+    reads = {"list", "show", "work-status", "work-research-policy-snapshot", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
              "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")

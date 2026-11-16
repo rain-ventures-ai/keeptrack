@@ -88,6 +88,22 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_v127_policy_control_survives_upgrade_and_ordinary_edits(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit127", "fixture.json"))
+        folder, _ = self.use_fixture("v4_kit127", meta)
+        before = kt.load_board()["settings"]
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        data = kt.load_board()
+        self.assertEqual(data["settings"]["rook_research_control"], before["rook_research_control"])
+        self.assertFalse(data["settings"]["rook_research"]["enabled"])
+        self.assertEqual(kt.min_kit_needed(data)[0], 127)
+        data["tasks"][0]["title"] = "Ordinary edit preserves policy control"
+        self.assertTrue(kt.save_changes(data, message="Fixture policy preservation"))
+        self.assertEqual(kt.load_board()["settings"]["rook_research_control"], before["rook_research_control"])
+        issues, _, code = kt.doctor_board(False)
+        self.assertEqual([], issues); self.assertEqual(0, code)
+
     def test_v123_coordination_survives_upgrade_and_ordinary_mutation(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit123", "fixture.json"))
         folder, _ = self.use_fixture("v4_kit123", meta)
