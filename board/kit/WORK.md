@@ -15,7 +15,8 @@ The owner-only **Hand to Rook** button creates and answers an existing
 start a worker. The separately configured host runs `work-research-admit` with
 the full proposal and answer IDs, its adopted configuration digest and a private
 admission receipt. Admission consumes that answer once and moves the card to
-To do. `work-start --claim-research` requires the private admission receipt and
+To do, assigning an unassigned card to the approving owner without replacing
+existing assignments. `work-start --claim-research` requires the private admission receipt and
 claims the task and records its run in one whole-board CAS. Its separate private
 run proof is durably written before that mutation. A refusal cannot leave only
 a claim. The browser presents the approval scope inline; one owner button remains
@@ -55,6 +56,13 @@ Before launch, `work-research-note` accepts only fixed host reason codes. A
 temporarily unavailable source leaves a quiet Rook wait. A rejected source or
 expired run window returns the card to Backlog, withdraws the grant and records
 one owner exception. It neither adds progress comments nor charges an attempt.
+
+After canonical start, ordinary public-read failures before the model boundary
+use `work-research-read-failed`. Its receipt-bound CAS releases only the exact
+claim, retires the grant and records `not_launched` without an unknown-effect
+hold. The host shows checked source links and a fresh owner action as the next
+step. A private seal permits an exact metadata replay after a lost response;
+it cannot clear a successor claim, existing hold or recorded result.
 
 `watch` adds `research` alongside `run`. `watch-poll --project ID` reads an
 optional cursor JSON string from stdin and returns `{events,cursor,baseline,

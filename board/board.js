@@ -4020,13 +4020,16 @@ if (typeof window !== 'undefined') (() => {
   function rookResearchScope(data, t, board) {
     const p = data.settings?.rook_research, owner = data.settings?.kit_owner || (data.people || []).find(x => x.github)?.github;
     if (!p || p.v !== 1 || p.enabled !== true || p.board !== board || p.owner !== owner || p.profile !== 'public-research' ||
-        !/^sha256:[a-f0-9]{64}$/.test(p.policy_digest || '') || !Array.isArray(p.projects) || !p.projects.includes(t.project) ||
+        Object.keys(p).sort().join(',') !== 'approval_ttl,board,enabled,owner,policy_digest,profile,projects,v' ||
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(p.board) || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(p.owner) ||
+        !/^sha256:[a-f0-9]{64}$/.test(p.policy_digest || '') || !Array.isArray(p.projects) || p.projects.length < 1 || p.projects.length > 16 ||
+        p.projects.some(x => typeof x !== 'string' || !/^[A-Za-z0-9_-]{3,80}$/.test(x)) || !p.projects.includes(t.project) ||
         !Number.isInteger(p.approval_ttl) || p.approval_ttl < 60 || p.approval_ttl > 3600 ||
         (data.projects || []).filter(x => x.id === t.project).length !== 1) throw new Error('This task has no adopted public research pilot.');
     if (!/^t_[a-z0-9]{4,20}$/.test(t.id) || typeof t.title !== 'string' || !t.title.trim() || t.title.length > 160 ||
         typeof (t.details || '') !== 'string' || (t.details || '').length > 2000 || !Array.isArray(t.links) || !t.links.length || t.links.length > 8 ||
         !Array.isArray(t.todos) || t.todos.length > 20 || !Array.isArray(t.after || []) || (t.after || []).length > 32) throw new Error('Add a short request and one to eight public HTTPS source links first.');
-    for (const l of t.links) { const u = new URL(l.url); if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.port || /\s/.test(l.url) || l.url.length > 2000) throw new Error('Research sources must be public HTTPS links.'); }
+    for (const l of t.links) { if (!l || typeof l.url !== 'string' || /[\s\x00-\x1f]/.test(l.url)) throw new Error('Research sources must be public HTTPS links.'); const u = new URL(l.url); if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.port || l.url.length > 2000) throw new Error('Research sources must be public HTTPS links.'); }
     if (t.todos.some(x => !x || typeof x.text !== 'string' || !x.text.trim() || Array.from(x.text).length > 300 || typeof x.done !== 'boolean')) throw new Error('Research checklist entries need text of at most 300 characters and a done flag.');
     const brief = t.title + (t.details ? '\n\n' + t.details : '') + (t.todos.length ? '\n\nChecklist:\n' + t.todos.map(x => x.text).join('\n') : '');
     if (new TextEncoder().encode(brief).length > 4000) throw new Error('Shorten the combined request and checklist to 4000 UTF-8 bytes.');
@@ -4073,7 +4076,8 @@ if (typeof window !== 'undefined') (() => {
   async function handResearchToRook(id) {
     if (ro || HOSTED) { toast('This pilot needs a writable GitHub board.'); return false; }
     const connection = cfg(), by = connection.me, shownTask = state.tasks.find(t => t.id === id);
-    if (!by || by !== kitOwner() || !shownTask || shownTask.column !== 'backlog' || shownTask.claim) { toast('Only the board owner can hand an unclaimed Backlog request to Rook.'); return false; }
+    const owner = state.settings?.kit_owner || (state.people || []).find(x => x.github)?.github;
+    if (!by || by !== owner || !shownTask || shownTask.column !== 'backlog' || shownTask.claim) { toast('Only the board owner can hand an unclaimed Backlog request to Rook.'); return false; }
     const previous = shownTask.coordination?.research;
     if (previous?.admission?.active || researchRequestPending(previous, state.settings?.rook_research)) return false;
     let spec; try { spec = rookResearchScope(state, shownTask, cfg().repo); } catch (e) { toast(e.message); return false; }
@@ -4115,7 +4119,8 @@ if (typeof window !== 'undefined') (() => {
       if (typeof r.current[key] === 'string' && r.current[key]) box.append(el('p', '', title + ': ' + r.current[key].slice(0, 1024)));
     }
     else box.append(el('p', 'hint', r?.request ? (researchRequestPending(r, p) ? 'Handed to Rook; waiting for the configured research host.' : 'The admission window expired. You can hand this request to Rook again.') : 'Read-only research from public source links. The detailed report will be linked here.'));
-    const button = $('cRookStart'); button.hidden = !!ro || HOSTED || cfg().me !== kitOwner() || t.column !== 'backlog' || !!t.claim || !!r?.admission?.active || researchRequestPending(r, p);
+    const owner = state.settings?.kit_owner || (state.people || []).find(x => x.github)?.github;
+    const button = $('cRookStart'); button.hidden = !!ro || HOSTED || cfg().me !== owner || t.column !== 'backlog' || !!t.claim || !!r?.admission?.active || researchRequestPending(r, p);
     if (!button.hidden) box.append(el('p', 'hint', 'Hand to Rook approves this saved request and its public source links for read-only research and one private report, under the adopted pilot policy.'));
   }
   function buildDrawer() {

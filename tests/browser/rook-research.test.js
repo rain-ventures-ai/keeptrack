@@ -41,6 +41,14 @@ module.exports = async function run() {
   assert.equal(await context.api.handResearchToRook('t_research'), false); assert.match(toast, /changed/); assert.equal(saves, 0);
   reset(); data.settings.rook_research.enabled = false;
   assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
+  for (const change of [d => { d.settings.rook_research.extra = true; },
+    d => { d.settings.rook_research.projects = Array(17).fill('pr_one'); },
+    d => { d.tasks[0].links[0].url = 'https://example.org/bad\x01path'; }]) {
+    reset(); change(data); assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
+  }
+  reset(); delete data.settings.kit_owner; data.people.unshift({ name: 'No GitHub account' }); context.kitOwner = () => '';
+  assert.equal(await context.api.handResearchToRook('t_research'), true, 'use the first person with a GitHub login, like native scope');
+  context.kitOwner = () => 'owner';
   reset(); data.tasks[0].links[0].url = 'https://user:secret@example.org';
   assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
   reset(); data.tasks[0].details = 'é'.repeat(1999);

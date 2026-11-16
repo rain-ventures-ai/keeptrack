@@ -105,6 +105,46 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(len(task["coordination"]["runs"]), 1)
         self.assertFalse(self.invoke("start", claim_research=True)["launch"])
 
+    def test_unassigned_request_is_assigned_to_approving_owner_and_starts(self):
+        self.ready(); data = self.read(); data["tasks"][0]["assignees"] = []; self.write(data)
+        self.admit(); self.assertEqual(self.read()["tasks"][0]["assignees"], ["owner"])
+        self.assertTrue(self.invoke("start", claim_research=True)["launch"])
+
+    def test_read_failure_releases_only_its_run_without_unknown_effect_and_replays(self):
+        self.ready(); self.admit(); self.invoke("start", claim_research=True)
+        self.assertTrue(self.invoke("research-read-failed")["created"])
+        task = self.read()["tasks"][0]; run = task["coordination"]["runs"][0]
+        self.assertIsNone(task.get("claim")); self.assertEqual(task["column"], "backlog")
+        self.assertFalse(run["needs_reconciliation"]); self.assertEqual(run["terminal"]["launch_state"], "not_launched")
+        self.assertFalse(task["coordination"]["research"]["admission"]["active"])
+        self.assertEqual(task["coordination"]["research"]["current"]["next_actor"], "owner")
+        self.assertFalse(self.invoke("research-read-failed")["created"])
+
+    def test_read_failure_cannot_release_a_successor(self):
+        self.ready(); self.admit(); self.invoke("start", claim_research=True)
+        data = self.read(); data["tasks"][0]["claim"]["generation"] = "f" * 24; self.write(data)
+        before = self.read()
+        with self.assertRaises(SystemExit): self.invoke("research-read-failed")
+        self.assertEqual(self.read(), before)
+
+    def test_read_failure_replay_requires_its_private_seal(self):
+        self.ready(); self.admit(); self.invoke("start", claim_research=True)
+        self.invoke("research-read-failed")
+        data = self.read(); data["tasks"][0]["coordination"]["runs"][0]["_research_read_failure_seal"] = "f" * 64; self.write(data)
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "seal"): self.invoke("research-read-failed")
+        self.assertEqual(self.read(), before)
+
+    def test_read_failure_cas_rechecks_successor_claim(self):
+        self.signed_admit(); self.invoke("start", claim_research=True)
+        def successor(canonical, wanted):
+            canonical["data"]["tasks"][0]["claim"]["generation"] = "e" * 24
+        with self.api_cas(successor) as cas, mock.patch.object(kt, "REPO", "owner/board"):
+            with self.assertRaises(SystemExit): self.invoke("research-read-failed")
+        task = cas["data"]["tasks"][0]
+        self.assertEqual(task["claim"]["generation"], "e" * 24)
+        self.assertFalse(task["coordination"]["runs"][0].get("terminal"))
+
     def test_atomic_start_refusal_leaves_no_claim_or_run(self):
         self.ready(); self.admit(); data = self.read()
         other = {**data["tasks"][0], "id": "t_other", "num": 2, "coordination": None,

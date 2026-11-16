@@ -503,6 +503,9 @@ async function assertFits(page, where) {
         const admitted = run(['work-research-admit', 't_research', '--approval', request.approval_id, '--answer', request.answer_id,
           '--admission-receipt', receipt, '--policy-digest', metadata.settings.rook_research.policy_digest]);
         assert.equal(admitted.status, 0, admitted.stderr); assert.equal(JSON.parse(admitted.stdout).created, true);
+        const started = run(['work-start', 't_research', '--claim-research', '--run-id', 'wr_' + 'a'.repeat(24),
+          '--receipt', path.join(fixture, 'run.json'), '--admission-receipt', receipt, '--policy-digest', metadata.settings.rook_research.policy_digest]);
+        assert.equal(started.status, 0, started.stderr); assert.equal(JSON.parse(started.stdout).launch, true);
       } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
       assert.equal(await page.locator('#cRookStart:visible').count(), 0);
       const updated = api.card('t_research'); updated.coordination.research.current = { done: 'Guide compared.', remaining: '<img src=x onerror=alert(1)>', next_actor: 'owner' };

@@ -386,6 +386,8 @@ def admit(kt, work, args):
         after = kt.after_links(current, card, None)
         if any(x.get("state") != "done" for x in after):
             fail("task has unfinished dependencies")
+        if not card.get("assignees"):
+            card["assignees"] = [policy(current, args.policy_digest)["owner"]]
         previous_note = (co.get("research") or {}).get("prelaunch_note") or {}
         if previous_note.get("label_added") and "needs-human" in card.get("labels", []):
             card["labels"].remove("needs-human")
@@ -497,6 +499,51 @@ def handover_seal(task_id, run_id, payload_hash, proof):
     return hmac.new(bytes.fromhex(proof["proof"]), json.dumps([task_id, run_id, payload_hash], separators=(",", ":")).encode(), hashlib.sha256).hexdigest()
 
 
+def read_failed(kt, work, args):
+    """Idempotent known failure before the model boundary; never resolves unknown effects."""
+    private = _private_receipt(args.admission_receipt)
+    proof = work.receipt(args.receipt, args.run_id)
+    payload_hash = digest({"kind": "research-read-failed", "reason": "source_unavailable"})
+    seal = handover_seal(private["task_id"], args.run_id, payload_hash, proof)
+    answer = {}
+    def change(data):
+        kt._MUT["recheck"] = kt._MUT["rerun"] = True; answer.clear()
+        task = kt.find(data, args.id); co = work.coordinate(task)
+        run = work.attempt(kt, data, task, args.run_id, proof, retiring=True)
+        grant = (co.get("research") or {}).get("admission") or {}
+        if task["id"] != private.get("task_id") or grant.get("policy_digest") != args.policy_digest or \
+                grant.get("answer_id") != private.get("answer_id") or run.get("research_admission") != grant.get("id"):
+            fail("read failure belongs to another research admission")
+        if run.get("research_read_failure"):
+            if not hmac.compare_digest(str(run.get("_research_read_failure_seal", "")), seal) or \
+                    (run.get("terminal") or {}).get("id") != "research-read-failed" or run.get("needs_reconciliation"):
+                fail("saved read failure has no valid host seal")
+            answer.update(created=False, task=work.view(kt, task, data=data)); return
+        verify(kt, data, task, private, args.policy_digest)
+        if co.get("executor") != EXECUTOR or run.get("terminal") or run.get("needs_reconciliation") or run.get("result"):
+            fail("read failure requires an active research run with no recorded effect")
+        claim = work.own_running_claim(kt, data, task)
+        if work.claim_hash(kt, claim) != run.get("_claim"):
+            fail("a newer claim supersedes this read failure")
+        run["terminal"] = {"id": "research-read-failed", "kind": "interrupted", "at": kt.now(),
+                           "launch_state": "not_launched", "coverage": "metadata_only", "exit_code": 1}
+        run["needs_reconciliation"] = False
+        run["research_read_failure"] = {"reason": "source_unavailable"}
+        run["_research_read_failure_seal"] = seal
+        task["claim"] = None; grant["active"] = False
+        co["research"]["current"] = {"done": "Public sources could not be read; no model worker launched.",
+            "remaining": "Check the public source links, then hand this request to Rook again.", "next_actor": "owner"}
+        added = "needs-human" not in task.setdefault("labels", [])
+        if added: task["labels"].append("needs-human")
+        co["research"]["prelaunch_note"] = {"reason": "source_unavailable", "label_added": added}
+        kt.move_task_to_column(data, task, "backlog")
+        kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
+        kt.hist(task, "Rook could not read the public sources; no worker launched")
+        answer.update(created=True, task=work.view(kt, task, data=data))
+    kt.mutate(change, "Rook: record known research read failure")
+    print(json.dumps(answer, ensure_ascii=False))
+
+
 def sealed_handover(task, run, proof):
     saved = run.get("research_handover") or {}
     payload_hash = digest({k: saved.get(k) for k in ("artifact", "current", "outcome")})
@@ -507,6 +554,10 @@ def sealed_handover(task, run, proof):
 
 
 def parser(sub, callback):
+    p = sub.add_parser("work-research-read-failed", help="host-only known source read failure before the model call")
+    p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
+    p.add_argument("--admission-receipt", required=True); p.add_argument("--policy-digest", required=True)
+    p.set_defaults(f=callback, work_action="research-read-failed")
     p = sub.add_parser("work-research-note", help="host-only bounded prelaunch wait or refusal; never worker-supplied prose")
     p.add_argument("id"); p.add_argument("--admission-receipt", required=True); p.add_argument("--policy-digest", required=True)
     p.add_argument("--reason", choices=("source_unavailable", "source_rejected", "admission_expired", "host_unavailable"), required=True)
@@ -612,6 +663,8 @@ def watch_poll(kt, args):
 
 def command(kt, work, args):
     action = args.work_action.removeprefix("research-")
+    if action == "read-failed":
+        return read_failed(kt, work, args)
     if action == "note":
         private = _private_receipt(args.admission_receipt); result = {}
         owner = args.reason in {"source_rejected", "admission_expired"}
