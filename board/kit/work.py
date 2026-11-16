@@ -115,12 +115,19 @@ def require_current_kit(data):
     settings["min_kit"] = max(125, minimum) if type(minimum) is int else 125
 
 
+_RESEARCH_MODULE = None
+
+
 def research_module():
-    path = os.path.join(os.path.dirname(__file__), "research.py")
-    spec = importlib.util.spec_from_file_location("keeptrack_research", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    global _RESEARCH_MODULE
+    if _RESEARCH_MODULE is None:
+        path = os.path.join(os.path.dirname(__file__), "research.py")
+        spec = importlib.util.spec_from_file_location("keeptrack_research", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.Refused = Refused
+        _RESEARCH_MODULE = module
+    return _RESEARCH_MODULE
 
 
 def strict_archives(kt, data, base):

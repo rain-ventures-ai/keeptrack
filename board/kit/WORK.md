@@ -31,6 +31,11 @@ Missing or invalid proof means wait. File mode is for
 offline fixtures only. Leaving To do/In progress withdraws the grant, including when
 there is no claim. Browser Undo cannot revive it.
 
+Research validation uses the same typed refusal as the work contract. A definite
+withdrawn/mismatched-grant refusal removes its newly created start proof only
+after a canonical read confirms no matching run was saved. Unknown save outcomes
+retain the proof. The loader caches the research module within one CLI process.
+
 The digest includes task ID, canonical project ID, title, description, checklist,
 source links, dependency IDs, the owner identity and approval lifetime. The host
 checks that owner and lifetime against its own adopted configuration. Combined
@@ -52,6 +57,9 @@ successor claims and unknown-effect holds refuse a late report. A retry of an
 already saved handover returns the saved result without duplicating its link.
 `work-research-reconcile` verifies the saved payload's private host seal before
 recovery treats it as an achieved outcome; copying board fields cannot forge it.
+The pilot never ticks unchecked work merely because a report was produced.
+With unchecked items the host selects Pending review even under the optional
+informational profile; the native completion guard is deliberately stricter.
 Before launch, `work-research-note` accepts only fixed host reason codes. A
 temporarily unavailable source leaves a quiet Rook wait. A rejected source or
 expired run window returns the card to Backlog, withdraws the grant and records

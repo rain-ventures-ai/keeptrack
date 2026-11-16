@@ -156,6 +156,13 @@ class ResearchTests(unittest.TestCase):
         self.assertIsNone(task.get("claim")); self.assertEqual(task["column"], "todo")
         self.assertEqual(task["coordination"]["runs"], [])
 
+    def test_withdrawn_research_start_is_a_typed_refusal_and_leaves_no_new_proof(self):
+        self.ready(); self.admit(); data = self.read()
+        data["tasks"][0]["coordination"]["research"]["admission"]["active"] = False; self.write(data)
+        with self.assertRaises(kt.work_module().Refused): self.invoke("start", claim_research=True)
+        self.assertFalse(Path(self.proof).exists())
+        self.assertIsNone(self.read()["tasks"][0].get("claim"))
+
     def test_uncertain_atomic_start_can_be_fenced_before_a_late_start(self):
         self.ready(); self.admit()
         with mock.patch.object(kt, "mutate", side_effect=OSError("offline unknown save")):
@@ -206,12 +213,27 @@ class ResearchTests(unittest.TestCase):
                 "current": {"done": "Public sources compared. Report attached.", "remaining": "Owner to consider the findings.",
                             "next_actor": "owner"}, "outcome": "pending_review"}
 
+    def test_unchecked_work_can_hand_over_for_review_without_claiming_completion(self):
+        self.ready(); data = self.read()
+        data["tasks"][0]["todos"] = [{"text": "Owner checks the comparison", "done": False}]
+        data["proposals"][0].update(self.research.proposal_input(data, data["tasks"][0])); self.write(data)
+        self.admit(); self.invoke("start", claim_research=True)
+        report = self.report()
+        complete = {**report, "outcome": "complete", "current": {"done": "Report ready.", "remaining": "", "next_actor": "none"}}
+        with self.assertRaises(SystemExit): self.invoke("research-handover", complete, informational=True)
+        self.assertTrue(self.invoke("research-handover", report, informational=True)["created"])
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "pending-review"); self.assertFalse(task["todos"][0]["done"])
+
     def test_module_is_packaged_and_disabled_by_default(self):
         self.ready(); data = self.read(); del data["settings"]["rook_research"]; self.write(data)
         with self.assertRaisesRegex(SystemExit, "disabled"):
             self.admit()
         self.assertFalse(Path(self.admission).exists())
         self.assertEqual(json.loads((SOURCE.parent / "manifest.json").read_text())["files"]["board/research.py"], "research.py")
+
+    def test_research_module_is_cached_within_one_cli_process(self):
+        self.assertIs(kt.work_module().research_module(), kt.work_module().research_module())
 
     def test_admission_consumes_exact_direct_answer_once_and_returns_no_proof(self):
         self.ready(); first = self.admit(); self.assertTrue(first["created"])
@@ -339,6 +361,13 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(self.poll(second["cursor"])["events"], [])
         self.claim(); self.invoke("start"); third = self.poll(second["cursor"])
         self.assertIn("run", {e["kind"] for e in third["events"]})
+
+    def test_watch_cursor_round_trip_accepts_bounded_large_card_fields(self):
+        self.ready(); data = self.read(); task = data["tasks"][0]
+        task["title"] = "a" * 1001
+        self.write(data)
+        cursor = self.poll()["cursor"]
+        self.assertEqual(self.poll(cursor)["events"], [])
 
     def test_watch_cursor_never_contains_proof_or_unrelated_task(self):
         import base64

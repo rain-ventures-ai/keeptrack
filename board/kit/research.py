@@ -25,10 +25,11 @@ HASH = re.compile(r"sha256:[a-f0-9]{64}\Z")
 PUBLIC_POLICY_FIELDS = {"v", "enabled", "board", "owner", "projects", "profile", "policy_digest", "approval_ttl"}
 ACTION_BINDINGS = {"board", "owner", "project", "task_id", "approval_id", "answer_id", "content_hash", "policy_digest"}
 ACTION_FIELDS = ACTION_BINDINGS | {"schema", "kind", "id", "proof", "issued_at", "expires_at", "mac"}
+Refused = SystemExit  # The work loader supplies its typed validation refusal.
 
 
 def fail(message):
-    raise SystemExit("research: " + message)
+    raise Refused("research: " + message)
 
 
 def digest(value):
@@ -645,8 +646,7 @@ def watch_poll(kt, args):
                     entry["claim"] is not None and (not isinstance(entry["claim"], str) or entry["claim"] not in {"running", "done", "blocked", "stale", "stuck"}) or \
                     entry["wait"] is not None and not isinstance(entry["wait"], str):
                 fail("invalid watch entry state")
-            if len(entry["title"]) > 1000 or len(entry["comments"]) > 4096 or len(entry["todos"]) > 4096 or \
-                    any(not isinstance(x, str) for x in entry["comments"]) or \
+            if any(not isinstance(x, str) for x in entry["comments"]) or \
                     any(not isinstance(x, list) or len(x) != 3 or not isinstance(x[0], str) or type(x[1]) is not bool or not isinstance(x[2], str) for x in entry["todos"]):
                 fail("invalid watch entry lists")
             if set(entry["fields"]) != set(kt.WATCH_FIELDS) or set(entry["research"]) != {"request", "admission", "current"} or \
