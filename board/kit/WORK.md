@@ -43,7 +43,12 @@ brief/checklist text is bounded to 4000 UTF-8 bytes. Column, heartbeat, comments
 are not input. A changed brief or adopted configuration needs a new owner
 action. Approval must be admitted within the configured 60–3,600 seconds; an
 already consumed grant is instead bounded by the host's run deadline. The
-public setting `rook_research` has exactly `v: 1`, `enabled: true`, `board`,
+private admission receipt fixes `admitted_at` before the CAS. Board `admission.at`
+must match it on every verification; retries do not restart the clock. The host
+derives its execution window from that verified private value, not mutable board
+timestamps. `work-research-check` returns the validated task snapshot, scope and
+private admission time together from one canonical read.
+The public setting `rook_research` has exactly `v: 1`, `enabled: true`, `board`,
 `owner`, `projects`, `profile: public-research`, `policy_digest` and
 `approval_ttl`. It is not a policy resolver. The owner must separately approve
 the matching private host configuration and its capabilities before activation.
@@ -78,7 +83,12 @@ it cannot clear a successor claim, existing hold or recorded result.
 `watch` adds `research` alongside `run`. `watch-poll --project ID` reads an
 optional cursor JSON string from stdin and returns `{events,cursor,baseline,
 semantics}`. It uses the same watch projection, with a maximum 256 project cards
-and 128 KiB snapshot. The first poll is a quiet baseline. The cursor contains
+and 128 KiB encoded snapshot. Before building each entry it also refuses more
+than 4,096 elements in a collection, 16,384 visited values, 128 Ki characters of
+relevant input text or nesting deeper than 12. Oversized activity fails before
+hashing/allocating projection lists; detailed activity belongs in linked run
+logs. These bounds do not remove the existing whole-board storage read.
+The first poll is a quiet baseline. The cursor contains
 public state and hashes, never private coordination proofs, and is bound to its
 board/project. It is untrusted client data, not a durable event history; a host
 must reconcile the current task/run after a wake or restart. Hosted mode is

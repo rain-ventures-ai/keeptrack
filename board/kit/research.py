@@ -354,6 +354,7 @@ def admit(kt, work, args):
             fail("an independently authenticated private owner-action receipt is required; Git pushes are not approval")
         private = _private_receipt(args.admission_receipt, {"schema": SCHEMA, "task_id": task["id"],
             "project_id": task["project"],
+            "admitted_at": kt.now(),
             "approval_id": args.approval, "answer_id": args.answer, "content_hash": hashed,
             "policy_digest": args.policy_digest, "proof": secrets.token_hex(32), "provenance": provenance,
             "approval_digest": digest(_approval_identity(item))})
@@ -396,7 +397,7 @@ def admit(kt, work, args):
         co["executor"] = EXECUTOR
         co["research"] = {"v": 1, "admission": {"id": "ra_" + secrets.token_hex(12), "active": True,
             "approval_id": args.approval, "answer_id": args.answer, "content_hash": content_hash,
-            "policy_digest": args.policy_digest, "at": kt.now(), "_proof": work.digest(private["proof"])},
+            "policy_digest": args.policy_digest, "at": private["admitted_at"], "_proof": work.digest(private["proof"])},
             "current": {"done": "Owner admitted this public research request.", "remaining": "Host checks and research.", "next_actor": "rook"}}
         prop["decision"]["done"] = {"at": kt.now(), "by": kt.who_am_i(), "acted": True,
                                       "research_admission": co["research"]["admission"]["id"]}
@@ -410,6 +411,9 @@ def admit(kt, work, args):
 
 def verify(kt, data, task, private, expected_policy):
     record = ((task.get("coordination") or {}).get("research") or {}).get("admission") or {}
+    _time(private.get("admitted_at"))
+    if record.get("at") != private["admitted_at"]:
+        fail("admission clock differs from the private host receipt")
     if not kt.FILE and (private.get("provenance") or {}).get("provider") != "owner-action":
         fail("this host receipt has no authenticated owner-action provenance")
     if task.get("id") != private.get("task_id") or record.get("active") is not True or \
@@ -587,6 +591,32 @@ def parser(sub, callback):
             p.add_argument("--informational", action="store_true")
 
 
+def watch_projection_bound(kt, task):
+    """Refuse oversized input before watch hashing/list construction, not afterwards."""
+    nodes, chars = 0, 0
+    def visit(value, depth=0):
+        nonlocal nodes, chars
+        nodes += 1
+        if depth > 12 or nodes > 16384:
+            fail("watch card exceeds the pilot projection bound; move detailed activity to linked run logs")
+        if isinstance(value, str):
+            chars += len(value)
+            if chars > 131072:
+                fail("watch card exceeds the pilot projection text bound")
+        elif isinstance(value, (list, dict)):
+            if len(value) > 4096:
+                fail("watch card exceeds the pilot activity bound; archive detailed activity first")
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    visit(key, depth + 1); visit(item, depth + 1)
+            else:
+                for item in value:
+                    visit(item, depth + 1)
+    keys = set(kt.WATCH_FIELDS) | {"claim", "waiting", "todos", "comments", "history", "coordination"}
+    for key in keys:
+        visit(task.get(key))
+
+
 def watch_poll(kt, args):
     """Transport for the existing watch projection, not a second event mechanism.
 
@@ -616,6 +646,7 @@ def watch_poll(kt, args):
     current = {"cards": {}, "proposals": {}}
     size = len(json.dumps({"scope": bound, "snapshot": current}, separators=(",", ":"), ensure_ascii=False).encode())
     for task in chosen:
+        watch_projection_bound(kt, task)
         entry = kt.watch_entry(data, task, today, True)
         fragment = json.dumps({task["id"]: entry}, separators=(",", ":"), ensure_ascii=False).encode()
         size += len(fragment) - 2 + bool(current["cards"])
@@ -756,4 +787,5 @@ def command(kt, work, args):
     else:
         private = _private_receipt(args.admission_receipt)
         record = verify(kt, data, task, private, args.policy_digest)
-        print(json.dumps({"schema": SCHEMA, "scope": scope(data, task), "admission": work.public(record)}, ensure_ascii=False))
+        print(json.dumps({"schema": SCHEMA, "scope": scope(data, task), "admission": work.public(record),
+            "admitted_at": private["admitted_at"], "task": work.view(kt, task, data=data)}, ensure_ascii=False))

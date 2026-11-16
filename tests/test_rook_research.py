@@ -261,6 +261,11 @@ class ResearchTests(unittest.TestCase):
         self.assertNotIn(json.loads(Path(self.admission).read_text())["proof"], output)
         self.assertEqual(os.stat(self.admission).st_mode & 0o777, 0o600)
 
+    def test_board_writer_cannot_extend_the_private_admission_clock(self):
+        self.ready(); self.admit(); data = self.read()
+        data["tasks"][0]["coordination"]["research"]["admission"]["at"] = "2099-01-01T00:00:00Z"; self.write(data)
+        with self.assertRaises(SystemExit): self.invoke("research-check")
+
     def test_approval_rejections(self):
         for update in ({"by": "agent@owner"}, {"relayed": "owner"}, {"at": "2020-01-01T00:00:00Z"},
                        {"answer": {"approved": False}}, {"id": "a_different"}, {"done": {"acted": True}}):
@@ -386,6 +391,12 @@ class ResearchTests(unittest.TestCase):
         self.write(data)
         cursor = self.poll()["cursor"]
         self.assertEqual(self.poll(cursor)["events"], [])
+
+    def test_poll_refuses_oversize_activity_before_projection_or_hashing(self):
+        self.ready(); data = self.read()
+        data["tasks"][0]["comments"] = [{"id": "comment", "text": "activity"}] * 4097; self.write(data)
+        with mock.patch.object(kt, "watch_entry", side_effect=AssertionError("unbounded projection reached")):
+            with self.assertRaises(SystemExit): self.poll()
 
     def test_watch_cursor_never_contains_proof_or_unrelated_task(self):
         import base64
