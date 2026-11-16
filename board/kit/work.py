@@ -1,9 +1,12 @@
 """Durable task ownership. Metadata never grants approval or external-effect rights."""
 import argparse
+import contextlib
 import copy
 import datetime as dt
 import hashlib
 import json
+import importlib.util
+import io
 import os
 import re
 import secrets
@@ -110,6 +113,21 @@ def require_current_kit(data):
     settings = data.setdefault("settings", {})
     minimum = settings.get("min_kit")
     settings["min_kit"] = max(125, minimum) if type(minimum) is int else 125
+
+
+_RESEARCH_MODULE = None
+
+
+def research_module():
+    global _RESEARCH_MODULE
+    if _RESEARCH_MODULE is None:
+        path = os.path.join(os.path.dirname(__file__), "research.py")
+        spec = importlib.util.spec_from_file_location("keeptrack_research", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.Refused = Refused
+        _RESEARCH_MODULE = module
+    return _RESEARCH_MODULE
 
 
 def strict_archives(kt, data, base):
@@ -355,12 +373,14 @@ def run_projects(task, run, data=None, cache=None):
     return set().union(*(project_keys(data, ref, cache) for ref in projects))
 
 
-def claim_gate(kt, data, task, sid, executor, attended):
+def claim_gate(kt, data, task, sid, executor, attended, admission_receipt=None, policy_digest=None):
     if attended:
         return
     cache = {}
     scopes = project_keys(data, task.get("project"), cache)
     co = task.get("coordination")
+    if executor == "relay-research" and co is None:
+        fail("research requires an admitted coordinated task; no claim written")
     mine = None
     claim = task.get("claim") or {}
     renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
@@ -373,7 +393,12 @@ def claim_gate(kt, data, task, sid, executor, attended):
         renewing = claim.get("session_id") == sid and not claim.get("attended") and kt.claim_state(data, claim) == "running"
         if renewing and runs and runs[-1].get("_claim") == claim_hash(kt, claim) and not runs[-1].get("terminal"):
             mine = runs[-1]
-        if co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
+        if co.get("executor") == "relay-research":
+            if executor != "relay-research" or not admission_receipt or not policy_digest:
+                fail("research requires its selected host and private admission receipt; no claim written")
+            research = research_module()
+            research.verify(kt, data, task, research._private_receipt(admission_receipt), policy_digest)
+        elif co.get("executor") != "relay-local" or (executor != "relay-local" and mine is None):
             fail("this coordinated task requires its selected relay-local host; no claim written")
         if task.get("column") != "todo" and not renewing:
             fail("unattended coordinated claims require an approved To do card; no claim written")
@@ -390,6 +415,8 @@ def renewal_gate(kt, data, task, claim):
     """A heartbeat or unwait cannot revive a different attempt through a project hold."""
     if claim.get("attended"):
         return
+    if (task.get("coordination") or {}).get("executor") == "relay-research":
+        research_module().check_active(kt, data, task)
     cache = {}
     scopes = project_keys(data, task.get("project"), cache)
     identity = claim_hash(kt, claim)
@@ -441,7 +468,7 @@ def sync_receipt_directories(path):
         parent = ancestor
 
 
-def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
+def receipt(path, run_id, *, create=False, host_pid=None, task_id=None, atomic_research=False):
     """Private host-only proof. Never returned by status, branch names or stdout."""
     path = os.path.abspath(path)
     if create:
@@ -450,6 +477,8 @@ def receipt(path, run_id, *, create=False, host_pid=None, task_id=None):
         body = {"v": 1, "run_id": run_id, "proof": secrets.token_hex(32), "task_id": task_id,
                 "host_pid": host_pid or os.getppid(), "host_start": process_identity(host_pid or os.getppid()), "phase": "prepared",
                 "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+        if atomic_research:
+            body["atomic_research"] = True
         fd, temporary = tempfile.mkstemp(prefix=".receipt-", dir=os.path.dirname(path))
         try:
             with os.fdopen(fd, "w") as stream:
@@ -495,10 +524,10 @@ def attempt(kt, data, task, run_id, proof, *, retiring=False):
     return run
 
 
-def start(kt, ref, run_id, proof_path, host_pid=None):
+def start(kt, ref, run_id, proof_path, host_pid=None, admission_receipt=None, policy_digest=None, claim_research=False):
     if not RUN.fullmatch(run_id):
         fail("run id must be wr_ followed by 24 lowercase hex digits")
-    proof = receipt(proof_path, run_id, create=True, host_pid=host_pid, task_id=ref)
+    proof = receipt(proof_path, run_id, create=True, host_pid=host_pid, task_id=ref, atomic_research=claim_research)
     result = {}
 
     def change(data):
@@ -508,7 +537,14 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
         except SystemExit as exc:
             raise Refused(str(exc)) from None
         co = coordinate(task)
-        if co.get("executor") != "relay-local":
+        if claim_research and (co.get("executor") != "relay-research" or proof.get("atomic_research") is not True or ref != task["id"]):
+            fail("atomic research start needs its canonical task and private research proof")
+        if co.get("executor") == "relay-research":
+            if not admission_receipt or not policy_digest:
+                fail("research start requires the host's private admission receipt")
+            research = research_module()
+            research.verify(kt, data, task, research._private_receipt(admission_receipt), policy_digest)
+        elif co.get("executor") != "relay-local":
             fail("this executor is not supported by the local runner")
         bound = proof.get("task_id")
         if bound != ref:
@@ -523,6 +559,19 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             attempt(kt, data, task, run_id, proof, retiring=True)
             result.update(created=False, run_id=run_id, state="already_started", launch=False)
             return
+        if claim_research:
+            # Both claim and run are committed by this same whole-board CAS.
+            # No standalone claim survives a refused or uncommitted start.
+            if task.get("claim"):
+                fail("atomic research start cannot replace an existing claim")
+            claim_args = argparse.Namespace(for_user=None, agent=None, session=session(kt), executor="relay-research",
+                attended=False, force=False, session_url=None, note="Rook atomic research start", assign_to_me=False,
+                admission_receipt=admission_receipt, policy_digest=policy_digest)
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    kt.do_claim(claim_args, task["id"], data)
+            except SystemExit as exc:
+                raise Refused(str(exc)) from None
         cache = {}
         scopes = project_keys(data, task.get("project"), cache)
         if not scopes:
@@ -558,6 +607,9 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
                   "unattended": True, "admission": "approved-todo", "events": [],
                   "_claim": claim_hash(kt, claim), "_proof": digest(proof["proof"])}
         co["runs"].append(record)
+        if co.get("executor") == "relay-research":
+            record["research_admission"] = co["research"]["admission"]["id"]
+            co["research"]["current"] = {"done": "Owner approval and request checked.", "remaining": "Read public sources and prepare the report.", "next_actor": "rook"}
         require_current_kit(data)
         kt.hist(task, "Rook attempt started " + run_id)
         result.update(created=True, run_id=run_id, state="recorded", launch=True)
@@ -576,7 +628,39 @@ def start(kt, ref, run_id, proof_path, host_pid=None):
             except (Exception, SystemExit):
                 pass  # cannot establish absence: retain proof and report the original refusal
         raise
+    finally:
+        if claim_research:
+            # This route is bounded by the research host, not a shell heartbeat
+            # hook. Do not leak a rejected callback's pending local claim record.
+            kt._PENDING_CLAIM.clear()
     print(json.dumps(result))
+
+
+def fence_missing_research_start(kt, data, task, run_id, proof, admission_receipt, policy_digest):
+    """A run-bound cancellation barrier, never evidence of worker execution.
+
+    A delayed start rechecks CAS and sees this sealed run, so it cannot claim
+    the task or obtain a fresh launch permit after an unknown response.
+    """
+    co = coordinate(task); research = research_module()
+    if proof.get("atomic_research") is not True or proof.get("task_id") != task["id"] or \
+            co.get("executor") != "relay-research" or not admission_receipt:
+        fail("missing-start fencing needs its private atomic research proof")
+    private = research._private_receipt(admission_receipt)
+    grant = (co.get("research") or {}).get("admission") or {}
+    if private.get("task_id") != task["id"] or private.get("policy_digest") != policy_digest or \
+            grant.get("_proof") != digest(private["proof"]) or any(grant.get(k) != private.get(k) for k in ("approval_id", "answer_id", "content_hash", "policy_digest")):
+        fail("missing-start proof belongs to another research admission")
+    if task.get("claim") or any(unresolved(r) for r in co["runs"]):
+        fail("cannot fence an absent start over an existing claim or unresolved attempt")
+    project = private.get("project_id")
+    if not project or not any(p.get("id") == project for p in data.get("projects", [])):
+        fail("missing-start proof has no retained canonical project")
+    if any(r.get("id") == run_id for other in data.get("tasks", []) for r in (other.get("coordination") or {}).get("runs", [])):
+        fail("run identity is already recorded")
+    co["runs"].append({"id": run_id, "started_at": kt.now(), "start_observation": "unconfirmed", "agent": "rook-research",
+        "project_id": project, "unattended": True, "admission": "approved-todo", "events": [],
+        "research_admission": grant["id"], "_claim": digest(["unobserved", proof["proof"]]), "_proof": digest(proof["proof"])})
 
 
 def release_owned(kt, ref, generation=None):
@@ -612,7 +696,7 @@ def release_owned(kt, ref, generation=None):
     print(json.dumps(answer))
 
 
-def event(kt, ref, run_id, proof_path, value, *, final=False):
+def event(kt, ref, run_id, proof_path, value, *, final=False, fence_missing_start=False, admission_receipt=None, policy_digest=None):
     if not isinstance(value, dict):
         fail("event must be an object")
     allowed = {"id", "kind", "summary", "links", "coverage", "exit_code", "launch_state"}
@@ -641,12 +725,16 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             fail("exit_code must be an integer from 0 to 255")
         clean["exit_code"] = value["exit_code"]
     safe_content(kt, clean)
+    if fence_missing_start and (not final or clean["kind"] != "interrupted" or clean["launch_state"] != "may_have_launched" or clean["links"]):
+        fail("missing-start fencing only records an uncertain interruption, never a result")
     proof = receipt(proof_path, run_id)
     result = {}
 
     def change(data):
         kt._MUT["recheck"] = kt._MUT["rerun"] = True
         task = kt.find(data, ref)
+        if fence_missing_start and not any(r.get("id") == run_id for r in coordinate(task)["runs"]):
+            fence_missing_research_start(kt, data, task, run_id, proof, admission_receipt, policy_digest)
         run = attempt(kt, data, task, run_id, proof, retiring=True)
         prior = ([run["terminal"]] if run.get("terminal") else []) + run["events"]
         existing = next((e for e in prior if e["id"] == clean["id"]), None)
@@ -677,6 +765,11 @@ def event(kt, ref, run_id, proof_path, value, *, final=False):
             pending = task.get("column") in {"done", "pending-review"} or kt.open_waiting(task) or \
                 any(PR_LINK.fullmatch(str(x.get("url", ""))) for x in task.get("links", []) if isinstance(x, dict))
             run["needs_reconciliation"] = bool(not run.get("result") and clean["launch_state"] != "not_launched")
+            co = coordinate(task)
+            if co.get("executor") == "relay-research" and co["runs"][-1] is run:
+                co["research"]["current"] = {"done": "Research attempt stopped; its evidence is retained on the host.",
+                    "remaining": "Reconcile this attempt before any retry." if run["needs_reconciliation"] else "Rook can retry within the approved limits.",
+                    "next_actor": "owner" if run["needs_reconciliation"] else "rook"}
             # Only remove this run's exact claim; never invoke ordinary release's stale/no-claim exceptions.
             if claim and claim_hash(kt, claim) == run["_claim"] and coordinate(task)["runs"][-1] is run:
                 task["claim"] = None
@@ -742,6 +835,7 @@ def resolve(kt, args):
 
 
 def parser(sub, callback):
+    research_module().parser(sub, callback)
     req = sub.add_parser("request-work", help="save one idempotent Rook request in Backlog; never approves or starts")
     req.set_defaults(f=callback, work_action="request")
     resolution = sub.add_parser("work-resolve", help="owner-authorised disposition of an uncertain attempt; never automatic")
@@ -761,7 +855,13 @@ def parser(sub, callback):
             cmd.add_argument("--run-id", required=True)
             cmd.add_argument("--receipt", required=True, help="private host-only receipt; never pass to an agent")
         if action == "start":
+            cmd.add_argument("--claim-research", action="store_true", help="claim and record admitted research atomically")
             cmd.add_argument("--host-pid", type=int, help="owning runner PID, used only for orphan reconciliation")
+            cmd.add_argument("--admission-receipt", help="research host's private admission proof")
+            cmd.add_argument("--policy-digest", help="research host's adopted policy digest")
+        if action == "finish":
+            cmd.add_argument("--fence-missing-start", action="store_true", help="seal an unobserved atomic research start against late delivery")
+            cmd.add_argument("--admission-receipt"); cmd.add_argument("--policy-digest")
         cmd.set_defaults(f=callback, work_action=action)
 
 
@@ -769,6 +869,11 @@ def command(kt, args):
     if kt.BACKEND != "github" and not kt.FILE:
         fail("this backend does not support the durable work contract")
     action = args.work_action
+    if action == "watch-poll":
+        return research_module().watch_poll(kt, args)
+    if action.startswith("research-"):
+        from types import SimpleNamespace
+        return research_module().command(kt, SimpleNamespace(**globals()), args)
     if action == "status":
         return status(kt, args.id)
     if action == "release":
@@ -776,7 +881,8 @@ def command(kt, args):
     if action == "resolve":
         return resolve(kt, args)
     if action == "start":
-        return start(kt, args.id, args.run_id, args.receipt, getattr(args, "host_pid", None))
+        return start(kt, args.id, args.run_id, args.receipt, getattr(args, "host_pid", None),
+                     getattr(args, "admission_receipt", None), getattr(args, "policy_digest", None), getattr(args, "claim_research", False))
     raw = kt.sys.stdin.read(MAX_INPUT + 1)
     if len(raw.encode()) > MAX_INPUT:
         fail("input exceeds 16 KiB")
@@ -786,4 +892,6 @@ def command(kt, args):
         fail("input must be one JSON object")
     if action == "request":
         return request(kt, value)
-    return event(kt, args.id, args.run_id, args.receipt, value, final=action == "finish")
+    return event(kt, args.id, args.run_id, args.receipt, value, final=action == "finish",
+                 fence_missing_start=getattr(args, "fence_missing_start", False),
+                 admission_receipt=getattr(args, "admission_receipt", None), policy_digest=getattr(args, "policy_digest", None))

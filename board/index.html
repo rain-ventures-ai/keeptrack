@@ -6,7 +6,7 @@
      and the blob: copies it runs. connect-src: the GitHub API, cron-job.org (the Claude relay), Open-Meteo (weather widget); api.test and
      cron.test are reserved test names (RFC 2606) that never resolve, used by the browser tests' kb_api / kb_cron_api. -->
 <!-- Policy template: activated by the asset-free selector immediately below. -->
-<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-DyKPt1nn6ahknzVaoBxZcA5eoeV8ufeda7pdkGOpYno=' 'sha256-4ZnsDWMplqliXcK8rYeYC8MhDd9EcyD6bN5qTYzR0jo='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
+<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-dbvP2J0Y6WDMow2pX0BrQ9PqAWW1Lh0GfqVgqUnH4ug=' 'sha256-4ZnsDWMplqliXcK8rYeYC8MhDd9EcyD6bN5qTYzR0jo='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
 <script>
 // Select the policy before loading any assets. Hosted phase 0 has no GitHub network access.
 (function () {
@@ -17,6 +17,18 @@
     location.replace(hosted.href);
     return;
   }
+  // Only owner-configured browser endpoints may extend this connection allowlist.
+  // Board data, URL parameters and transferable settings never supply an origin.
+  try {
+    var origins = [];
+    for (var i = 0; i < localStorage.length && origins.length < 16; i++) {
+      var key = localStorage.key(i);
+      if (!key || key.indexOf('kb_rook_owner_action:') !== 0) continue;
+      var action = JSON.parse(localStorage.getItem(key)), target = new URL(action.endpoint);
+      if (/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i.test(target.origin) && !target.username && !target.password && !target.search && !target.hash && target.pathname.endsWith('/owner-action') && origins.indexOf(target.origin) < 0) origins.push(target.origin);
+    }
+    if (origins.length) policy.content = policy.content.replace("connect-src 'self'", "connect-src 'self' " + origins.join(' '));
+  } catch (_) {}
   document.head.appendChild(policy);
 })();
 </script>
@@ -282,7 +294,16 @@
             </div></div>
           </div>
           <div id="sTokenReuse" class="hint tokenreuse" role="status"></div>
-          <p class="hint">One token per board, kept in this browser and sent only to api.github.com. <a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Make a token with the right permissions →</a></p>
+          <details class="sfold" id="sRookApproval"><summary>Rook owner approval</summary>
+            <p class="hint">For the currently connected board only. This separate owner credential stays in this browser; settings codes and task data never include it.</p>
+            <div data-props>
+              <div data-row="Owner endpoint" data-for="sRookEndpoint"><input id="sRookEndpoint" type="url" placeholder="https://your-approved-host/owner-action" autocomplete="off"></div>
+              <div data-row="Owner token" data-for="sRookToken"><input id="sRookToken" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved token"></div>
+            </div>
+            <button id="sRookSave" type="button" class="small">Save Rook owner approval</button>
+            <p class="hint">Clear the endpoint and save to forget it. This does not enable a runner or change the board.</p>
+          </details>
+          <p class="hint">One GitHub token per board, kept in this browser and sent only to api.github.com. <a id="patLink" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Make a token with the right permissions →</a></p>
           <details class="sfold"><summary>Token help</summary>
             <p class="hint">The link fills in the <b>Resource owner</b> and the <b>Contents</b> and <b>Issues</b> permissions. You still choose <b>Only select repositories</b> and pick this board repo.</p>
             <p class="hint">One token can serve every board it can access. Boards owned by different GitHub organisations may need different tokens.</p>

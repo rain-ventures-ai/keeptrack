@@ -150,6 +150,7 @@ class ProjectReferenceTests(unittest.TestCase):
         # any claim implementation runs, independently of its project handling.
         (old / "keeptrack.py").write_text(base.SOURCE.read_text().replace(f"KIT_VERSION = {kt.KIT_VERSION}", "KIT_VERSION = 123"))
         (old / "work.py").write_text((base.SOURCE.parent / "work.py").read_text())
+        (old / "research.py").write_text((base.SOURCE.parent / "research.py").read_text())
         before = self.path.read_bytes()
         result = subprocess.run([sys.executable, "-I", str(old / "keeptrack.py"), "--file", str(self.path),
                                  "claim", "t_target", "--executor", "relay-local"], capture_output=True, text=True)
@@ -164,6 +165,7 @@ class ProjectReferenceTests(unittest.TestCase):
         old = Path(self.tmp.name) / "old-kit-124"; old.mkdir()
         (old / "keeptrack.py").write_text(base.SOURCE.read_text().replace(f"KIT_VERSION = {kt.KIT_VERSION}", "KIT_VERSION = 124"))
         (old / "work.py").write_text((base.SOURCE.parent / "work.py").read_text())
+        (old / "research.py").write_text((base.SOURCE.parent / "research.py").read_text())
         before = self.path.read_bytes()
         result = subprocess.run([sys.executable, "-I", str(old / "keeptrack.py"), "--file", str(self.path),
                                  "claim", "t_target", "--executor", "relay-local"], capture_output=True, text=True)
@@ -173,7 +175,7 @@ class ProjectReferenceTests(unittest.TestCase):
 
     def test_version_probe_is_read_only(self):
         before = self.path.read_bytes()
-        self.assertEqual(self.cli("--version").stdout.strip(), "keeptrack kit 125")
+        self.assertEqual(self.cli("--version").stdout.strip(), f"keeptrack kit {kt.KIT_VERSION}")
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_empty_scope_refuses_start_without_mutation_or_receipt(self):

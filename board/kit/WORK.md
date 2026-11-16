@@ -1,6 +1,133 @@
 # Durable Rook work
 
-Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Kit 125+, GitHub boards only. Hosted boards explicitly refuse these commands.
+Rook owns the responsibility across chats. A bounded run owns an execution attempt. Keeptrack remains the task store; this is not another inbox or permission system. Repository work needs kit 125+; the separate research pilot below needs kit 126. GitHub boards only; hosted boards explicitly refuse these commands.
+
+## Public research pilot
+
+Kit 126 adds an opt-in `relay-research` route for a single public-source research
+pilot. The owner hands over an unclaimed Backlog card with one to eight explicit
+public HTTPS source links; every input card link is treated as a source. It needs
+no repository, branch or PR. The ordinary repository runner's
+readiness checks remain in place. Missing configuration is inert.
+
+The owner-only **Hand to Rook** button creates and answers an existing
+`ask.approve` in one compare-and-swap, bound to the exact task input. It does not
+start a worker. The separately configured host runs `work-research-admit` with
+the full proposal and answer IDs, its adopted configuration digest and a private
+admission receipt. Admission consumes that answer once and moves the card to
+To do, adding the approving owner to assignees without replacing existing
+assignments. `work-start --claim-research` requires the private admission receipt and
+claims the task and records its run in one whole-board CAS. Its separate private
+run proof is durably written before that mutation. A refusal cannot leave only
+a claim. The browser presents the approval scope inline; one owner button remains
+the approval, without a second confirmation dialog. Relayed answers, `confirmed`, card prose and labels
+grant no approval. Before saving that answer the browser authenticates to a
+separate owner endpoint using a private capability. The endpoint persists a
+signed receipt for the exact board, owner, project, task, proposal/answer IDs,
+input digest, policy and expiry. Admission requires `--owner-action-receipt`
+and `--owner-action-key`; the trusted host pins both private paths. Git pushes,
+including genuine owner pushes, are audit data and cannot replace that action.
+Missing or invalid proof means wait. File mode is for
+offline fixtures only. Leaving To do/In progress withdraws the grant, including when
+there is no claim. Browser Undo cannot revive it.
+
+Research validation uses the same typed refusal as the work contract. A definite
+withdrawn/mismatched-grant refusal removes its newly created start proof only
+after a canonical read confirms no matching run was saved. Unknown save outcomes
+retain the proof. The loader caches the research module within one CLI process.
+
+The digest includes task ID, canonical project ID, title, description, checklist,
+source links, dependency IDs, the owner identity and approval lifetime. The host
+checks that owner and lifetime against its own adopted configuration. Combined
+brief/checklist text is bounded to 4000 UTF-8 bytes. Column, heartbeat, comments and host progress
+are not input. A changed brief or adopted configuration needs a new owner
+action. Approval must be admitted within the configured 60–3,600 seconds; an
+already consumed grant is instead bounded by the host's run deadline. The
+private admission receipt fixes `admitted_at` before the CAS. Board `admission.at`
+must match it on every verification; retries do not restart the clock. The host
+derives its execution window from that verified private value, not mutable board
+timestamps. `work-research-check` returns the validated task snapshot, scope and
+private admission time together from one canonical read.
+`work-research-candidates` adds a bounded `actions` map of current unconsumed
+proposal/answer identities and input hashes. Stale or privacy-screened requests
+are omitted from that map. It is filtering data; the host must verify the exact
+private signed action and recheck the selected canonical request before admission.
+The public setting `rook_research` has exactly `v: 1`, `enabled: true`, `board`,
+`owner`, `projects`, `profile: public-research`, `policy_digest` and
+`approval_ttl`. It is not a policy resolver. The owner must separately approve
+the matching private host configuration and its capabilities before activation.
+
+The host calls `work-research-handover` after publishing one immutable report.
+That single CAS records run evidence, the separate research artifact and a host-written
+**Current state** of at most 1 KiB, releases the exact claim, and moves to Pending
+review. No progress comments are added. Completion needs an adopted informational
+rule and no remaining owner step or unticked checklist item. Changed scope,
+successor claims and unknown-effect holds refuse a late report. A retry of an
+already saved handover returns the saved result without duplicating its link.
+The private report link is `coordination.research.artifact`, displayed in Current
+state, and retained in the run result. It is not added to public source links,
+so reusing a card does not feed the private report to the public fetcher.
+`work-research-reconcile` verifies the saved payload's private host seal before
+recovery treats it as an achieved outcome; copying board fields cannot forge it.
+The pilot never ticks unchecked work merely because a report was produced.
+With unchecked items the host selects Pending review even under the optional
+informational profile; the native completion guard is deliberately stricter.
+Before launch, `work-research-note` accepts only fixed host reason codes. A
+temporarily unavailable source leaves a quiet Rook wait. A rejected source or
+expired run window returns the card to Backlog, withdraws the grant and records
+one owner exception. It neither adds progress comments nor charges an attempt.
+
+After canonical start, ordinary public-read failures before the model boundary
+use `work-research-read-failed`. Its receipt-bound CAS releases only the exact
+claim, retires the grant and records `not_launched` without an unknown-effect
+hold. The host shows checked source links and a fresh owner action as the next
+step. A private seal permits an exact metadata replay after a lost response;
+it cannot clear a successor claim, existing hold or recorded result.
+
+`watch` adds `research` alongside `run`. `watch-poll --project ID` reads an
+optional cursor JSON string from stdin and returns `{events,cursor,baseline,
+semantics}`. It uses the same watch projection, with a maximum 256 project cards
+and 128 KiB encoded snapshot. Before building each entry it also refuses more
+than 4,096 elements in a collection, 16,384 visited values, 128 Ki characters of
+relevant input text or nesting deeper than 12. Oversized activity fails before
+hashing/allocating projection lists; detailed activity belongs in linked run
+logs. These bounds do not remove the existing whole-board storage read.
+The first poll is a quiet baseline. The cursor contains
+public state and hashes, never private coordination proofs, and is bound to its
+board/project. It is untrusted client data, not a durable event history; a host
+must reconcile the current task/run after a wake or restart. Hosted mode is
+unsupported. `work-research-snapshot` and `work-research-check` give the host a
+bounded request projection without activity/comment history.
+
+The separate browser capability and host signing key must remain inaccessible
+to workers and other repository agents. Settings → Rook owner approval stores
+the endpoint/capability only in this browser for the connected board, outside
+settings exports. The signing key stays on the trusted host. A stolen browser
+capability or compromised owner host is outside this boundary. The research
+worker receives neither credential, admission proof nor a board clone.
+Generic chat/voice MCP confirmation is not direct owner-input proof: those
+requests still wait for the button until a verified ingress is implemented.
+The host/operator contract is in [Relay PR 161](https://github.com/rain-ventures-ai/keeptrack-relay/pull/161).
+Keep Pending review for the first pilot: the notifier handles reports needing
+review and unresolved holds, but informational research completion currently
+has no completion notification. The host writes private versioned files;
+an approved private HTTPS mapping and an active notification sender must be
+provided and checked separately.
+
+After inspecting an uncertain attempt, the owner uses the Relay host's checked
+`--resolve-run` command. It binds the canonical resolution to private evidence
+before `work-research-retire` withdraws that exact run's grant and releases the
+host intent. A bare board resolution cannot clear the private hold. Evidence is
+retained and the old action never relaunches; another attempt needs a new button
+action. This is separate from ordinary repository-run resolution.
+
+If an atomic start response is unknown and no run was saved, the host may use
+`work-finish --fence-missing-start` with both private proofs to record an uncertain
+interruption. That CAS creates a sealed cancellation record for the same run ID,
+so a delayed start cannot acquire a launch permit. It records no result and
+does not clear a successor claim. Owner resolution can finish an interrupted
+cancellation before resolving the exact run. A missing private proof means the
+native start never reached its remote-mutation boundary and may retry safely.
 
 ## Request and read
 

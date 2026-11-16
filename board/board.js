@@ -166,7 +166,7 @@ if (typeof window !== 'undefined') (() => {
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
     // another tab may have switched this browser to repo: its live keys (kb_repo, its token ...) go too, not only kb_boards
     if (rawRepo() === repo) try { ['kb_repo', ...BOARD_KEYS.map(k => 'kb_' + k)].forEach(k => localStorage.removeItem(k)); } catch {}
-    try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`) || k.startsWith(`kb_weather_location:${repo}:`)).forEach(k => localStorage.removeItem(k)); } catch {}
+    try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`) || k.startsWith(`kb_weather_location:${repo}:`) || k.startsWith(`kb_rook_owner_action:${repo}|`)).forEach(k => localStorage.removeItem(k)); } catch {}
     const pre = [`kb_snap:${repo}:`, `kb_meta:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
     try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 125;
+  const PAGE_KIT = 126;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1644,6 +1644,7 @@ if (typeof window !== 'undefined') (() => {
         if (grewName != null) { back(pre); fail(reservedSaveMsg(grewName, pre)); return false; }
         fixNums(latest, pre); ensureRanks(latest);
         base = pre; mine = clone(latest);   // from here on, "what you saw" is this revision and my change is what I am saving
+        revokeResearchOnEdit(pre, latest);
         autoLog(pre, latest); contactLog(pre, latest);
         let extra = {}, tree = !!options.recheck;   // options.extra: more files for the same commit (the Review Inbox writes the proposal with its record), checked on this revision
         if (options.extra) { const r = options.extra(pre, readSha, latest); if (r && r.abort) { back(pre); fail(r.abort); if (options.onAbort) options.onAbort(r.abort); return false; } extra = (r && r.files) || {}; tree = tree || !!(r && r.tree); }
@@ -4011,6 +4012,126 @@ if (typeof window !== 'undefined') (() => {
     if (v) btn.title = v; else btn.removeAttribute('title');
   }
   function drawerSection(id, opts) { const s = ui.section(opts); s.id = id; s.classList.add('dsec2'); return s; }
+  // Opt-in public research. This is a direct owner ask.approve, never an agent's confirmation.
+  function rookApprovalKey(c = cfg()) { return 'kb_rook_owner_action:' + [c.repo, c.branch, c.path].join('|'); }
+  function rookApprovalConfig(c = cfg()) {
+    try { const v = JSON.parse(LS.get(rookApprovalKey(c), '{}')); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
+  }
+  function rookResearchScope(data, t, board) {
+    const p = data.settings?.rook_research, owner = data.settings?.kit_owner || (data.people || []).find(x => x.github)?.github;
+    if (!p || p.v !== 1 || p.enabled !== true || p.board !== board || p.owner !== owner || p.profile !== 'public-research' ||
+        Object.keys(p).sort().join(',') !== 'approval_ttl,board,enabled,owner,policy_digest,profile,projects,v' ||
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(p.board) || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(p.owner) ||
+        !/^sha256:[a-f0-9]{64}$/.test(p.policy_digest || '') || !Array.isArray(p.projects) || p.projects.length < 1 || p.projects.length > 16 ||
+        p.projects.some(x => typeof x !== 'string' || !/^[A-Za-z0-9_-]{3,80}$/.test(x)) || !p.projects.includes(t.project) ||
+        !Number.isInteger(p.approval_ttl) || p.approval_ttl < 60 || p.approval_ttl > 3600 ||
+        (data.projects || []).filter(x => x.id === t.project).length !== 1) throw new Error('This task has no adopted public research pilot.');
+    if (!/^t_[a-z0-9]{4,20}$/.test(t.id) || typeof t.title !== 'string' || !t.title.trim() || t.title.length > 160 ||
+        typeof (t.details || '') !== 'string' || (t.details || '').length > 2000 || !Array.isArray(t.links) || !t.links.length || t.links.length > 8 ||
+        !Array.isArray(t.todos) || t.todos.length > 20 || !Array.isArray(t.after || []) || (t.after || []).length > 32) throw new Error('Add a short request and one to eight public HTTPS source links first.');
+    for (const l of t.links) { if (!l || typeof l.url !== 'string' || /[\s\x00-\x1f]/.test(l.url)) throw new Error('Research sources must be public HTTPS links.'); const u = new URL(l.url); if (u.protocol !== 'https:' || !u.hostname || u.username || u.password || u.port || l.url.length > 2000) throw new Error('Research sources must be public HTTPS links.'); }
+    if (t.todos.some(x => !x || typeof x.text !== 'string' || !x.text.trim() || Array.from(x.text).length > 300 || typeof x.done !== 'boolean')) throw new Error('Research checklist entries need text of at most 300 characters and a done flag.');
+    const brief = t.title + (t.details ? '\n\n' + t.details : '') + (t.todos.length ? '\n\nChecklist:\n' + t.todos.map(x => x.text).join('\n') : '');
+    if (new TextEncoder().encode(brief).length > 4000) throw new Error('Shorten the combined request and checklist to 4000 UTF-8 bytes.');
+    const request = { id: t.id, project: t.project, title: t.title, details: t.details || '', todos: clone(t.todos), links: clone(t.links), after: clone(t.after || []) };
+    if (new TextEncoder().encode(JSON.stringify(request, null, 1)).length > 16384) throw new Error('Shorten the research request and source metadata to 16 KiB.');
+    if (request.after.some(x => typeof x !== 'string' || !/^t_[a-z0-9]{4,20}$/.test(x))) throw new Error('Research dependencies need canonical task IDs.');
+    return { schema: 'keeptrack.research/1', board, owner: p.owner, approval_ttl: p.approval_ttl, task: request,
+      executor: 'relay-research', profile: p.profile, policy_digest: p.policy_digest };
+  }
+  function revokeResearchOnEdit(before, after) {
+    const old = new Map((before.tasks || []).map(t => [t.id, t]));
+    for (const t of after.tasks || []) {
+      const a = t.coordination?.research?.admission; if (!a || typeof a !== 'object' || Array.isArray(a)) continue;
+      const previous = old.get(t.id), was = previous?.coordination?.research?.admission;
+      if (!was || was.id !== a.id || was.active !== true || !['todo', 'in-progress'].includes(t.column)) a.active = false;
+      if (a.active === true) {
+        try {
+          if (jcanon(rookResearchScope(before, previous, cfg().repo)) !== jcanon(rookResearchScope(after, t, cfg().repo))) a.active = false;
+        } catch (_) { a.active = false; }
+      }
+      if (previous && ['todo', 'in-progress'].includes(previous.column) && !['todo', 'in-progress'].includes(t.column) && t.claim) delete t.claim.unattended_approved;
+    }
+  }
+  function researchRequestPending(r, policy) {
+    return !!r?.request && r.request.answer_id !== r.admission?.answer_id &&
+      Date.now() - Date.parse(r.request.at) <= (policy?.approval_ttl || 0) * 1000;
+  }
+  async function authoriseResearch(c, task, approval, answer, hash, policy) {
+    const a = rookApprovalConfig(c);
+    let url; try { url = new URL(a.endpoint); } catch { throw new Error('Configure the owner endpoint in Settings → Connection → Rook owner approval.'); }
+    if (!/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i.test(url.origin) || url.username || url.password || url.search || url.hash || !url.pathname.endsWith('/owner-action') ||
+        typeof a.token !== 'string' || !/^[\x21-\x7e]{32,256}$/.test(a.token)) throw new Error('The private Rook owner endpoint and token are not configured.');
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(url.href, { method: 'POST', redirect: 'error', credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller.signal,
+        headers: { Authorization: 'Bearer ' + a.token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ v: 1, board: c.repo, task_id: task, approval_id: approval, answer_id: answer, content_hash: hash, policy_digest: policy }) });
+      if (!response.ok) throw new Error('The owner endpoint refused or is unavailable. Nothing was handed to Rook.');
+      const proof = await response.json();
+      if (proof.v !== 1 || proof.task_id !== task || proof.approval_id !== approval || proof.answer_id !== answer || proof.content_hash !== hash)
+        throw new Error('The owner endpoint returned a different action. Nothing was handed to Rook.');
+    } finally { clearTimeout(timer); }
+  }
+  async function handResearchToRook(id) {
+    if (ro || HOSTED) { toast('This pilot needs a writable GitHub board.'); return false; }
+    const connection = cfg(), by = connection.me, shownTask = state.tasks.find(t => t.id === id);
+    const owner = state.settings?.kit_owner || (state.people || []).find(x => x.github)?.github;
+    if (!by || by !== owner || !shownTask || shownTask.column !== 'backlog' || shownTask.claim) { toast('Only the board owner can hand an unclaimed Backlog request to Rook.'); return false; }
+    const previous = shownTask.coordination?.research;
+    if (previous?.admission?.active || researchRequestPending(previous, state.settings?.rook_research)) return false;
+    let spec; try { spec = rookResearchScope(state, shownTask, cfg().repo); } catch (e) { toast(e.message); return false; }
+    const shown = jcanon(spec), bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(shown));
+    const hash = 'sha256:' + [...new Uint8Array(bytes)].map(x => x.toString(16).padStart(2, '0')).join('');
+    const proposalId = boardId('r_'), answerId = 'a_' + rid6() + rid6().slice(0, 4), at = nowIso();
+    try { await authoriseResearch(connection, id, proposalId, answerId, hash, spec.policy_digest); }
+    catch (_) { toast('Owner approval was not confirmed. Check the Rook owner endpoint in Settings; nothing started.'); return false; }
+    if (['repo', 'branch', 'path', 'me'].some(k => cfg()[k] !== connection[k])) { toast('The board connection changed; nothing started.'); return false; }
+    const ok = await mutate(() => {}, 'Owner: hand public research to Rook', [id], null, { recheck: true, remember: false,
+      extra: (pre, meta, latest) => {
+        const t = latest.tasks.find(x => x.id === id);
+        if (!t || cfg().me !== by || by !== (latest.settings?.kit_owner || latest.people.find(x => x.github)?.github) || t.column !== 'backlog' || t.claim || waitingOf(t)) return { abort: 'The task or owner changed; nothing started.' };
+        let fresh; try { fresh = jcanon(rookResearchScope(latest, t, cfg().repo)); } catch (e) { return { abort: e.message }; }
+        if (fresh !== shown) return { abort: 'The request or pilot policy changed. Read it again before handing it to Rook.' };
+        const existing = t.coordination?.research;
+        if (existing?.admission?.active || researchRequestPending(existing, latest.settings.rook_research)) return { abort: 'This request has already been handed to Rook. Its status will appear here.' };
+        if (proposalIn(meta, proposalId)) return { abort: 'Approval identity already exists; refresh and retry.' };
+        const p = { version: 1, id: proposalId, kind: 'ask.approve', title: 'Hand public research to Rook', decider: by,
+          source: { kind: 'other', id: 'rook.research:' + id, revision: hash }, action_key: 'rook.research:' + hash, work_key: 'rook.research:' + id,
+          reason: 'Read public sources and publish one private report under the adopted pilot policy.',
+          change: { question: 'Hand this exact public-source research request to Rook?', task: id,
+            subject: { type: 'other', summary: 'Read-only public research; no messages, purchases or repository changes.' }, content_hash: hash },
+          created: at, createdBy: by, target: null, likely_duplicates: [], status: 'answered', decision: { action: 'answer', id: answerId, by, at, answer: { approved: true }, result: null, commit: null },
+          history: [{ at, by, text: 'Owner handed this exact public research request to Rook' }] };
+        t.coordination ||= { v: 1, owner: 'rook:' + t.project, executor: 'relay-research', runs: [] };
+        t.coordination.executor = 'relay-research';
+        t.coordination.research ||= { v: 1 };
+        t.coordination.research.request = { approval_id: proposalId, answer_id: answerId, content_hash: hash, at };
+        latest.settings.min_kit = Math.max(126, latest.settings.min_kit || 0); stamp(t);
+        return { files: { [proposalPath(proposalId)]: jsonText(p) }, tree: true };
+      } });
+    if (ok) toast('Handed to Rook. Work starts when the configured research host admits it.');
+    return ok;
+  }
+  function renderRookResearch(t) {
+    const box = $('cRookCurrent'), sec = $('cRookSec'), p = state.settings?.rook_research, r = t.coordination?.research;
+    sec.hidden = !r && !(p?.enabled === true && p.projects?.includes(t.project)); box.textContent = '';
+    if (r?.current) for (const [key, title] of [['done', 'Done'], ['decisions', 'Decided'], ['remaining', 'Remaining'], ['next_actor', 'Next']]) {
+      if (typeof r.current[key] === 'string' && r.current[key]) box.append(el('p', '', title + ': ' + r.current[key].slice(0, 1024)));
+    }
+    else box.append(el('p', 'hint', r?.request ? (researchRequestPending(r, p) ? 'Handed to Rook; waiting for the configured research host.' : 'The admission window expired. You can hand this request to Rook again.') : 'Read-only research from public source links. The detailed report will be linked here.'));
+    if (typeof r?.artifact?.url === 'string') {
+      try {
+        const url = new URL(r.artifact.url);
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+          const link = el('a', '', 'Research report'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; box.append(link);
+        }
+      } catch {}
+    }
+    const owner = state.settings?.kit_owner || (state.people || []).find(x => x.github)?.github;
+    const button = $('cRookStart'); button.hidden = !!ro || HOSTED || cfg().me !== owner || t.column !== 'backlog' || !!t.claim || !!r?.admission?.active || researchRequestPending(r, p);
+    if (!button.hidden) box.append(el('p', 'hint', 'Hand to Rook approves this saved request and its public source links for read-only research and one private report, under the adopted pilot policy.'));
+  }
   function buildDrawer() {
     // header: number pill (copies the link), undo, copy for agent, more actions, close
     const num = ui.pill({ text: '#', icon: 'link', onClick: () => copyTaskLink() }); num.id = 'dNum'; num.classList.add('dnum'); roKeep(num);
@@ -4067,8 +4188,11 @@ if (typeof window !== 'undefined') (() => {
     attachContactSuggest(contactAdd);
     const histBtn = ui.button({ label: 'History', icon: 'history', variant: 'ghost', size: 'sm' }); histBtn.id = 'cmHistBtn'; roKeep(histBtn);
     const rel = el('div', 'dlist'); rel.id = 'cRelList';
+    const rookCurrent = el('div'); rookCurrent.id = 'cRookCurrent';
+    const rookStart = ui.button({ label: 'Hand to Rook', icon: 'bot', size: 'sm', onClick: () => handResearchToRook(editing) }); rookStart.id = 'cRookStart';
     const secs = [
       drawerSection('cDescSec', { title: 'Description', action: descActs, body: $('cDescParts') }),
+      drawerSection('cRookSec', { title: 'Current state', action: rookStart, body: rookCurrent }),
       drawerSection('cRelSec', { title: 'Related cards', count: '', body: rel }),
       drawerSection('cTodoSec', { title: 'Checklist', count: '', body: [todos, todoAdd] }),
       drawerSection('cLinkSec', { title: 'Links', count: '', body: [links, linkAdd, linkHint, linkImage] }),
@@ -4576,7 +4700,7 @@ if (typeof window !== 'undefined') (() => {
     $('cGoalRow').hidden = !goalList().length && !t.goal;
     const ti = $('cTitle'); if (!activeDraft.title && (force || (document.activeElement !== ti && ti.value !== t.title))) { ti.value = t.title; fieldBase.title = t.title; } autosize(ti);
     if (!editingDesc) { fieldBase.details = t.details || ''; renderDescView(t); }
-    renderWaiting(t); renderAfter(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderDlgTodos(force); renderComments(); syncSections(t); syncAgentBtn(t);
+    renderWaiting(t); renderAfter(t); renderRelated(t); renderTaskWork(t); renderPeople(t); renderLabelChips(t); renderLinkList(t); renderContactList(t); renderClaim(t); renderRookResearch(t); renderDlgTodos(force); renderComments(); syncSections(t); syncAgentBtn(t);
   }
   // Checklist / Links / Contacts are always there; when empty they show only their "+ Add" row (read-only boards hide them)
   function syncSections(t) { [['cTodoSec', t.todos], ['cLinkSec', t.links], ['cContactSec', t.contacts]].forEach(([id, xs]) => $(id).classList.toggle('is-empty', !xs.length)); }
@@ -6005,6 +6129,18 @@ if (typeof window !== 'undefined') (() => {
     runChecks(over); secTop('secHealth'); }; $('ckCopy').onclick = () => copyText(lastReport, 'Check report copied (it has no token in it)');
   $('sClose').onclick = () => $('dlgSettings').close();
   const fillConn = () => { const c = cfg(); $('sRepo').value = c.repo; $('sBranch').value = c.branch; $('sPath').value = c.path; $('sMe').value = c.me; tokenTyped = false; $('sToken').value = ''; $('sToken').placeholder = c.token ? '(token saved — leave blank to keep)' : 'github_pat_...'; $('sTokenReuse').textContent = ''; syncTokenUi(); };
+  if ($('sRookApproval')) $('sRookApproval').hidden = HOSTED;
+  if ($('sRookSave')) $('sRookSave').onclick = () => {
+    if (HOSTED) { toast('Rook owner approval needs a GitHub board.'); return; }
+    const before = rookApprovalConfig(), endpoint = $('sRookEndpoint').value.trim(), entered = $('sRookToken').value.trim();
+    if (!endpoint) { LS.del(rookApprovalKey()); $('sRookToken').value = ''; toast('Rook owner approval removed from this browser.'); return; }
+    let url; try { url = new URL(endpoint); } catch { toast('Enter the approved HTTPS owner endpoint.'); return; }
+    const token = entered || (endpoint === before.endpoint ? before.token : '');
+    if (!/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i.test(url.origin) || url.username || url.password || url.search || url.hash || !url.pathname.endsWith('/owner-action') ||
+        typeof token !== 'string' || !/^[\x21-\x7e]{32,256}$/.test(token)) { toast('Enter the approved HTTPS endpoint and its separate owner token.'); return; }
+    LS.set(rookApprovalKey(), JSON.stringify({ endpoint, token })); $('sRookToken').value = ''; toast('Saved for this connected board. Reload the board to use the owner endpoint.');
+  };
+  $('btnSettings').addEventListener('click', () => { if ($('sRookEndpoint') && $('sRookToken')) { $('sRookEndpoint').value = rookApprovalConfig().endpoint || ''; $('sRookToken').value = ''; } });
   $('btnSettings').onclick = () => { const c = cfg(); if (window.kbTheme) $('sTheme').value = window.kbTheme.get(); $('sVer').textContent = loadedVersion(); fillConn(); setPanel('prefs'); syncModeSettings(); renderColumnsBox(); renderArchiveBox(); renderLabelBox(); $('dlgSettings').showModal(); if (!c.token) reuseSavedToken(); [80, 400, 1200].forEach(ms => setTimeout(() => { if ($('dlgSettings').open) syncTokenUi(); }, ms)); };
   $('sModeTasks').onchange = $('sModeCrm').onchange = saveModeSettings;
   if ($('sResearch') && $('sResearchN')) $('sResearch').onchange = $('sResearchN').onchange = saveResearchSettings;
