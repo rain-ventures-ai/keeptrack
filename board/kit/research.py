@@ -749,6 +749,7 @@ def command(kt, work, args):
                     grant.get("active") is True or
                     co.get("executor") == EXECUTOR and any(work.unresolved(x) for x in runs if isinstance(x, dict))):
                 candidates.append(t["id"])
+                if len(candidates) > 256: fail("too many research candidates for this pilot")
                 if request and t.get("column") == "backlog" and request.get("answer_id") != grant.get("answer_id"):
                     try:
                         current = scope(data, t); work.safe_content(kt, current)

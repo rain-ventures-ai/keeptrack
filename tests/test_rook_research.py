@@ -283,6 +283,19 @@ class ResearchTests(unittest.TestCase):
         data["tasks"][0]["details"] = "Edited since approval"; self.write(data)
         self.assertEqual(self.invoke("research-candidates", project="pr_one")["actions"], {})
 
+    def test_candidate_bound_is_applied_before_hashing_the_next_card(self):
+        self.ready(); data = self.read(); task = data["tasks"][0]
+        task["coordination"] = {"v": 1, "owner": "rook:pr_one", "executor": "relay-research", "runs": [],
+            "research": {"request": {"approval_id": self.prop_id, "answer_id": self.answer_id, "content_hash": "sha256:" + "a" * 64}}}
+        data["tasks"] = [{**task, "id": "t_batch" + str(i), "num": i + 1} for i in range(257)]; self.write(data)
+        real = self.research.scope; calls = []
+        def bounded(*args):
+            calls.append(1)
+            if len(calls) > 256: raise AssertionError("hashed beyond candidate bound")
+            return real(*args)
+        with mock.patch.object(self.research, "scope", side_effect=bounded):
+            with self.assertRaises(SystemExit): self.invoke("research-candidates", project="pr_one")
+
     def test_approval_rejections(self):
         for update in ({"by": "agent@owner"}, {"relayed": "owner"}, {"at": "2020-01-01T00:00:00Z"},
                        {"answer": {"approved": False}}, {"id": "a_different"}, {"done": {"acted": True}}):
