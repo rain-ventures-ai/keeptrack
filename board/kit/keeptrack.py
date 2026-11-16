@@ -471,7 +471,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 127  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 128  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1646,6 +1646,8 @@ def hosted_dispatch(a):
         sys.exit(DOCS_HOSTED_READONLY)
     if a.cmd == "claim" and getattr(a, "assign_to_me", False):
         sys.exit("capability_unavailable: claim --assign-to-me is only available on GitHub boards")
+    if getattr(a, "asked", None) is not None or getattr(a, "asked_via", None) is not None:
+        sys.exit("capability_unavailable: the asked mark is not on hosted boards; nothing changed")
     adapter = storage_adapter()
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
@@ -2325,6 +2327,8 @@ def min_kit_needed(data):
         needed, what = max(126, needed), "The opt-in research pilot needs receipt-bound owner admission"
     if (data.get("settings") or {}).get("rook_research_control") is not None:
         needed, what = max(127, needed), "Research policy control needs owner-signed monotonic revisions"
+    if any(isinstance(t, dict) and ("asked" in t or "finished" in t) for t in data.get("tasks", []) or []):
+        needed, what = max(128, needed), "Cards record work the owner asked for (`asked`, `finished`)"
     return needed, what
 
 
@@ -2422,6 +2426,101 @@ def stale_limit(data, c):
 def attended(a):
     """A person is driving this session, so it sends no heartbeats: --attended, or BOARD_ATTENDED=1."""
     return bool(getattr(a, "attended", False)) or os.environ.get("BOARD_ATTENDED", "").strip().lower() in ("1", "true", "yes")
+
+
+# ---- work the owner asked for (kit v128) --------------------------------------------------------------------------
+# `asked` {at, via, mode} is written only by explicit flags (--asked MODE --asked-via NAME) on add, move (the approval,
+# Backlog -> To do) and claim --attended: never derived from card, comment or page text. `finished` {at, by, cancelled}
+# is written when a card that carries `asked` goes to Done, so relay can tell an agent's finish from the owner's own move.
+ASKED_KIT = 128                       # the kit that understands `asked` and `finished`; the first write raises settings.min_kit to it
+ASKED_MODES = ("now", "dispatch", "unsure")
+ASKED_VIA = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")   # a short front-door name: chat, voice, ...
+ASKED_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z")
+FINISHERS = ("agent", "person")
+ASKED_UNSURE_NOTE = "Asked for, but now or by an agent? Waiting for the owner."
+_ASKED_REFUSE = []                    # set by an `unsure` approve or claim: the card keeps the question, the command then exits
+
+
+def asked_args(a, command):
+    """(mode, via) from --asked and --asked-via, or None when neither was given. Both or neither; a mode the command
+    cannot mean is refused: an approval hands the card to an agent (dispatch), an attended claim works it here (now)."""
+    mode, via = getattr(a, "asked", None), getattr(a, "asked_via", None)
+    if mode is None and via is None:
+        return None
+    if mode is None or via is None:
+        sys.exit("refused: --asked MODE and --asked-via NAME go together (the mark says what was asked and which front door heard it)")
+    via = str(via).strip()
+    if not ASKED_VIA.fullmatch(via):
+        sys.exit("refused: --asked-via is a short name of letters, digits, . _ - (at most 40), such as chat or voice")
+    if mode not in ASKED_MODES:
+        sys.exit(f"refused: --asked is one of {', '.join(ASKED_MODES)}")
+    if agent_run() and not attended(a):
+        sys.exit("refused: the asked mark is written by a front door with the owner present (an agent run with --attended or "
+                 "BOARD_ATTENDED=1); an unattended agent never marks a card as asked for. Nothing changed")
+    if command == "move" and mode == "now":
+        sys.exit("refused: an approval hands the card to an agent (--asked dispatch); work in this conversation is claim --attended --asked now")
+    if command == "claim" and mode == "dispatch":
+        sys.exit("refused: a claim is work starting in this conversation (--asked now); an agent run starts from approve (move ID todo --asked dispatch)")
+    if command == "claim" and mode == "now" and not attended(a):
+        sys.exit("refused: --asked now needs --attended: the owner is driving this session")
+    return mode, via
+
+
+def set_asked(data, t, mode, via):
+    """Write the mark. The first `at` stays; a later approval or claim updates mode and via. A malformed old record is replaced.
+    `unsure` leaves one short comment on the card (not a second while it stays unsure)."""
+    old = t.get("asked") if isinstance(t.get("asked"), dict) else None
+    at = old["at"] if old and isinstance(old.get("at"), str) and ASKED_STAMP.fullmatch(old["at"]) else now()
+    new = {"at": at, "via": via, "mode": mode}
+    if new != old:
+        hist(t, f"asked: {mode} via {via}")
+    t["asked"] = new
+    if mode == "unsure" and not (old and old.get("mode") == "unsure"):
+        t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": ASKED_UNSURE_NOTE})
+    st = data.setdefault("settings", {})
+    if board_min_kit(data) < ASKED_KIT:
+        st["min_kit"] = ASKED_KIT   # an older kit would not drop `finished` when the card reopens: it may not write this board
+
+
+def asked_unsure(data, t, via, what):
+    """approve or claim with --asked unsure: nothing starts. A Backlog card keeps the open question (mark and comment, saved);
+    any other card is refused without a write. The command then exits non-zero (see _ASKED_REFUSE)."""
+    if t.get("column") != "backlog":
+        sys.exit(f"refused: {t['id']} is in {t.get('column')}; --asked unsure is for a Backlog card whose mode the owner has not said. Nothing changed")
+    set_asked(data, t, "unsure", via)
+    t["updated"] = now()
+    _ASKED_REFUSE[:] = [f"refused: not {what}: now or by an agent is not decided. #{t.get('num', '?')} stays in Backlog with the question "
+                        "on it; ask the owner, then retry with --asked now or --asked dispatch"]
+
+
+def finisher():
+    """Who is closing a card: an agent run (BOARD_AGENT, or a hosted agent identity), else a person."""
+    return "agent" if agent_run() else "person"
+
+
+def note_finished(t, cancelled=False):
+    """A card the owner asked for goes to Done: record when, by whom (agent or person) and whether it was dropped. Only
+    cards carrying `asked` get it, so every other card is written exactly as before. Leaving Done removes it, so a card
+    finished again gets a new `at`."""
+    if isinstance(t.get("asked"), dict):
+        t["finished"] = {"at": now(), "by": finisher(), "cancelled": bool(cancelled)}
+
+
+def check_asked(t, path, problem):
+    """doctor: `asked` and `finished` on a card are well-formed. A card without them is valid (older boards)."""
+    if "asked" in t:
+        a = t["asked"]
+        if not isinstance(a, dict) or set(a) != {"at", "via", "mode"} or not (
+                isinstance(a["at"], str) and ASKED_STAMP.fullmatch(a["at"]) and isinstance(a["via"], str)
+                and ASKED_VIA.fullmatch(a["via"]) and a["mode"] in ASKED_MODES):
+            problem("ASKED", path, "`asked` must be {at: ISO time, via: short name, mode: now|dispatch|unsure} and nothing else (kit v128).")
+    if "finished" in t:
+        f = t["finished"]
+        if not isinstance(f, dict) or set(f) != {"at", "by", "cancelled"} or not (
+                isinstance(f["at"], str) and ASKED_STAMP.fullmatch(f["at"]) and f["by"] in FINISHERS and isinstance(f["cancelled"], bool)):
+            problem("FINISHED", path, "`finished` must be {at: ISO time, by: agent|person, cancelled: true|false} and nothing else (kit v128).")
+        elif not isinstance(t.get("asked"), dict):
+            problem("FINISHED", path, "`finished` is only recorded on a card the owner asked for (no `asked` here).")
 
 
 def claim_state(data, c):
@@ -3436,6 +3535,18 @@ def _unwait_before_claim(t):
 
 def do_claim(a, tid, data):
     t = find(data, tid)
+    asked = asked_args(a, "claim")
+    if asked and agent_run():
+        c0 = t.get("claim") or {}
+        if c0 and c0.get("status") != "done" and not c0.get("attended") \
+                and c0.get("session_id") in ({session_id(a)} | my_sessions(a, t.get("id"))):
+            sys.exit(f"refused: {t['id']} is held by this session's own unattended claim; a run the dispatcher started does not "
+                     "become owner-present by its own flag, so it cannot mark the card as asked for. Nothing changed")
+    if asked and asked[0] == "unsure":
+        return asked_unsure(data, t, asked[1], "claimed")   # nothing starts; the card keeps the question
+    if not asked and (t.get("asked") or {}).get("mode") == "unsure" and agent_run():
+        sys.exit(f"refused: {t['id']} carries an unanswered asked mark (now or by an agent?): pass --attended --asked now "
+                 "--asked-via NAME once the owner says to work on it here. Nothing changed")
     refuse_waiting(t)
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
@@ -3498,6 +3609,8 @@ def do_claim(a, tid, data):
         t["claim"]["unattended_approved"] = True
     if attended(a):
         t["claim"]["attended"] = True
+    if asked:
+        set_asked(data, t, asked[0], asked[1])   # before the move: the answer must be on the card when move_task_to_column checks it
     if t["column"] != "in-progress":
         move_task_to_column(data, t, "in-progress", argparse.Namespace(session=sid))   # the new claim's own session id
     t["updated"] = ts; t["updatedBy"] = f"{agent}@{user}"
@@ -3532,13 +3645,17 @@ def cmd_claim(a):
         sys.exit("--on-behalf-of works only with BOARD_BACKEND=hosted (a hosted dispatcher); on a GitHub board, claim as BOARD_USER")
     if getattr(a, "assign_to_me", False) and (not a.attended or a.for_user or a.force):
         sys.exit("refused: --assign-to-me requires explicit --attended and cannot be used with --for or --force")
-    _PENDING_CLAIM.clear()
+    _PENDING_CLAIM.clear(); _ASKED_REFUSE.clear()
     if getattr(a, "json", False):
         with contextlib.redirect_stdout(io.StringIO()):
             with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
+        if _ASKED_REFUSE:
+            sys.exit(_ASKED_REFUSE[0])
         print(json.dumps(_PENDING_CLAIM.pop("response")))
     else:
         with_record(lambda: (mutate(lambda d: do_claim(a, a.id, d), f"Agent claim: {a.id}"), write_claim_record()))
+        if _ASKED_REFUSE:
+            sys.exit(_ASKED_REFUSE[0])
 
 
 def cmd_next(a):
@@ -3642,8 +3759,16 @@ def move_task_to_column(data, task, column, a=None):
     old = task.get("column")
     if old == column:
         return old
+    if old == "backlog" and agent_run() and (task.get("asked") or {}).get("mode") == "unsure":
+        # one place every column change passes (release, done, claim, review): an agent run never takes an unanswered
+        # request out of Backlog; only the owner's answer (--asked MODE on move or claim) does
+        sys.exit(f"refused: {task.get('id')} carries an unanswered asked mark (now or by an agent?): an agent run does not move it out of "
+                 "Backlog until the owner answers (--asked dispatch on move, or claim --attended --asked now). Nothing changed")
     if old == "done":
         task.pop("outcome", None); (task.get("last_run") or {}).pop("outcome", None)   # reopened: decided again at the next done
+        task.pop("finished", None)   # kit v128: finished again later is a new finish
+    if column == "done":
+        note_finished(task)   # kit v128: only a card with `asked`; done itself replaces this with its own cancelled flag
     end_approval_on_leaving(task, old, column)
     if "done" in (old, column):
         drop_leftover_wait(task, "reopening" if old == "done" else "move to done", data, a)
@@ -3802,7 +3927,13 @@ def cmd_done(a):
             t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
         link = (c or {}).get("session_url", "")
         hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
-        move_task_to_column(data, t, "done"); t["updated"] = now(); tid = t["id"]
+        was_done = t.get("column") == "done"
+        move_task_to_column(data, t, "done")
+        if not was_done:
+            note_finished(t, cancel)
+        # kit v128: a second done on a Done card is not a new finish: `finished` stays exactly as the first finish wrote it
+        # (relay pushes once per finish, and its event id carries the outcome kind, so a flipped `cancelled` would push twice)
+        t["updated"] = now(); tid = t["id"]
         _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked: a failed one leaves the claim provably ours
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
@@ -3990,12 +4121,29 @@ def cmd_unwait(a):
 
 
 def cmd_move(a):
+    _ASKED_REFUSE.clear()
     def fn(data):
         t = find(data, a.id)
         column = getattr(a, "column", None) or getattr(a, "column_pos", None) or t["column"]
         cols = [c["id"] for c in data.get("columns", [])]
         if column not in cols:
             sys.exit(f"unknown column '{column}'. Columns: {', '.join(cols)}")
+        asked = asked_args(a, "move")
+        if asked:   # the owner's approval, Backlog -> To do, as the front door gives it
+            if column != "todo" or t["column"] != "backlog":
+                sys.exit("refused: --asked marks an approval, a move from Backlog to To do; nothing changed")
+            if asked[0] == "unsure":
+                _ASKED_REFUSE.clear()
+                return asked_unsure(data, t, asked[1], "approved")
+        elif column != "backlog" and t["column"] == "backlog" and (t.get("asked") or {}).get("mode") == "unsure":
+            # an unanswered request: the owner's plain approval answers it as "by an agent" (dispatch); an agent run
+            # must pass the answer itself, or the question is bypassed and the done notice is lost. Any column out of
+            # Backlog counts for an agent run (in-progress and done too), not only To do.
+            if agent_run():
+                sys.exit(f"refused: {t['id']} carries an unanswered asked mark (now or by an agent?): pass --asked dispatch "
+                         "--asked-via NAME once the owner says an agent should run it. Nothing changed")
+            if column == "todo":
+                set_asked(data, t, "dispatch", (t.get("asked") or {}).get("via") or "board")
         if getattr(a, "priority", None):
             t["priority"] = a.priority
         if data.get("layout") == "split":
@@ -4035,15 +4183,22 @@ def cmd_move(a):
             close_waiting(t, a, "move to done", data)
         old = t["column"]; t["column"] = column
         end_approval_on_leaving(t, old, column)
+        if asked:
+            set_asked(data, t, asked[0], asked[1])
         if old == "done" and column != "done":
             t.pop("outcome", None); (t.get("last_run") or {}).pop("outcome", None)   # reopened (move_task_to_column does the same for release and claim)
+            t.pop("finished", None)   # kit v128: finished again later is a new finish
             drop_leftover_wait(t, "reopening", data, a)
+        if column == "done" and old != "done":
+            note_finished(t)   # a person's move, or an agent's: `by` says which
         n_open = sum(1 for d in t.get("todos") or [] if not d.get("done"))
         if column == "done" and old != "done" and n_open:
             print(f"note: {t['id']} has {n_open} open to-dos; done --cancel records that they were dropped", file=sys.stderr)
         hist(t, f"moved {old} -> {column}" + (f": {a.note}" if a.note else "")); t["updated"] = now()
         print(f"#{t['num']} {t['title']}: {old} -> {column}")
     mutate(fn, f"Agent move: {a.id}")
+    if _ASKED_REFUSE:
+        sys.exit(_ASKED_REFUSE[0])
 
 
 def cmd_assign(a):
@@ -5430,6 +5585,9 @@ def cmd_add(a):
     if not str(a.title or "").strip() or _has_break(a.title):
         sys.exit("a task needs a title on one line")
     links = add_link_args(a)
+    asked = asked_args(a, "add")
+    if asked and asked[0] == "unsure" and a.column != "backlog":
+        sys.exit("refused: --asked unsure is for a Backlog card (--column backlog): an unanswered request starts nothing")
     def fn(data):
         column = a.column or "todo"
         ranks = [t.get("rank") for t in data.get("tasks", []) if t.get("column") == column and valid_rank(t.get("rank"))]
@@ -5455,12 +5613,16 @@ def cmd_add(a):
             t["rank"] = append_rank(ranks)
         append_priority_rank(data, t)
         hist(t, "created")
+        if asked:
+            set_asked(data, t, asked[0], asked[1])
         add_links(t, links)
         data["tasks"].append(t); assign_nums(data); tid = t["id"]
         marks = [] if getattr(a, "no_check", False) else mark_similar(data, t)   # never stops the add
         _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid), tid)))   # the saved #number: a lost race renumbers ours
         _MUT["after"].append(lambda d: print_marks(marks))
     mutate(fn, f"Add task: {a.title}")
+    if asked and asked[0] == "unsure":
+        print("asked: unsure; the card stays in Backlog with the question on it and nothing starts until the owner answers")
 
 
 # ---- similar cards: add first, then mark close cards as possibly related (kit v52) --------------------------------
@@ -6268,6 +6430,7 @@ def doctor_board(fix=False):
                     "which is not on the board; link it to another goal or clear it (task-set ID --goal none).")
     for t in tasks:
         path = f"card {t.get('id', '?')}"
+        check_asked(t, path, problem)
         w, claim = open_waiting(t), t.get("claim") or {}
         if w and (not str(w.get("on") or "").strip() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(w.get("since") or ""))):
             problem("WAITING", path, "The wait needs `on` and a `since` date (YYYY-MM-DD).")
@@ -14203,6 +14366,14 @@ def main():
         sp.add_argument("--attended", action="store_true",
                         help="a person drives this session: no automatic heartbeats, stale only after 12 hours (or BOARD_ATTENDED=1)")
 
+    def asked_flags(sp, command="add"):
+        what = {"add": "now, dispatch or unsure", "move": "dispatch (the approval, Backlog to To do) or unsure",
+                "claim": "now (with --attended) or unsure"}[command]
+        sp.add_argument("--asked", choices=ASKED_MODES, metavar="MODE",
+                        help="kit v128: the owner asked for this work in a front-door conversation: " + what + ". "
+                             "Only this flag writes the mark, never card text; unsure keeps a Backlog card and starts nothing")
+        sp.add_argument("--asked-via", metavar="NAME", help="with --asked: the short front-door name (chat, voice, ...)")
+
     s = sub.add_parser("list"); s.add_argument("-q", help="find text anywhere in a current task"); s.add_argument("--column"); s.add_argument("--assignee")
     s.add_argument("--unclaimed", action="store_true")
     s.add_argument("--running", action="store_true", help="only cards with a live claim: an agent working now (kit v117)")
@@ -14262,7 +14433,7 @@ def main():
     s.add_argument("--policy-digest", help="research host's adopted policy digest")
     s.add_argument("--assign-to-me", action="store_true",
                    help="with --attended on a GitHub board, assign an unassigned Backlog or To do card to you in the claim")
-    s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); s.set_defaults(f=cmd_claim)
+    s.add_argument("--on-behalf-of", help="hosted dispatcher: served assignee user UUID"); asked_flags(s, "claim"); s.set_defaults(f=cmd_claim)
     s = sub.add_parser("next", help="claim the first claimable To do card of yours (this repo's project by default)"); cl(s)
     s.add_argument("--project"); s.add_argument("--all", action="store_true", help="ignore this repo's default project"); s.set_defaults(f=cmd_next)
     s = sub.add_parser("heartbeat"); s.add_argument("id"); s.add_argument("--note")
@@ -14307,7 +14478,7 @@ def main():
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column"); s.add_argument("--session")
     s.add_argument("--force", action="store_true", help="move a card another session holds to done (a person told you to)")
     s.add_argument("--before"); s.add_argument("--after"); s.add_argument("--top", action="store_true")
-    s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); s.set_defaults(f=cmd_move)
+    s.add_argument("--priority", choices=["high", "medium", "low"]); s.add_argument("--note"); asked_flags(s, "move"); s.set_defaults(f=cmd_move)
     s = sub.add_parser("assign"); s.add_argument("id"); s.add_argument("users", nargs="+"); s.add_argument("--add", action="store_true")
     s.add_argument("--remove", action="store_true"); s.add_argument("--note"); s.set_defaults(f=cmd_assign)
     s = sub.add_parser("link", help="add a link to a card; - reads one per line from stdin (URL, tab, title) in one save")
@@ -14334,6 +14505,7 @@ def main():
     s.add_argument("--no-check", action="store_true", help="do not mark close cards as possible duplicates")
     s.add_argument("--after", action="append", metavar="REF", help="runs after this card, '#62' or an id (repeatable); a hint and a gate, never a trigger")
     s.add_argument("--goal", help="the goal this card works towards: goal id, id prefix or title")
+    asked_flags(s)
     s.set_defaults(f=cmd_add)
     s = sub.add_parser("similar", help="open cards and Inbox items with a close title (before or after an add)")
     s.add_argument("title"); s.add_argument("--client"); s.add_argument("--project"); s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_similar)

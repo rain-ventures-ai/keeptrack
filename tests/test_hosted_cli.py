@@ -420,6 +420,14 @@ class HostedCLITest(unittest.TestCase):
         self.assertEqual(self.server.files, before)
         self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
 
+    def test_asked_mark_is_refused_on_a_hosted_board_before_any_request(self):
+        for args in (('move', '#17', 'todo', '--asked', 'unsure', '--asked-via', 'chat'),
+                     ('claim', '#17', '--asked', 'unsure', '--asked-via', 'chat'),
+                     ('add', 'Synthetic asked', '--asked', 'unsure', '--asked-via', 'chat')):
+            p = self.run_cli(*args, code=1)
+            self.assertIn('capability_unavailable', p.stderr)
+        self.assertFalse(any(c[0] == 'POST' for c in self.server.calls))
+
     def test_agent_attended_claim_is_refused(self):
         p = self.run_cli('claim', '#17', '--attended', code=1)
         self.assertIn('attended_forbidden', p.stderr)

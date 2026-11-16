@@ -25,6 +25,40 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v128 (schema 4)
+
+Records work the owner asked for, so a finished request can be told to the owner once.
+Two optional card fields, both written only by `keeptrack.py`:
+
+- `asked` `{at, via, mode}`: `mode` is `now`, `dispatch` or `unsure`; `via` is a short front-door name (`chat`, `voice`);
+  `at` is the first time (kept by later writes). Only explicit flags write it: `add --asked MODE --asked-via NAME`,
+  the approval `move ID todo --asked dispatch --asked-via NAME` (Backlog to To do) and `claim ID --attended --asked now
+  --asked-via NAME`. Nothing derives it from card, comment or page text. A later approval or claim keeps `at` and updates
+  `mode` and `via`.
+- `--asked unsure` means the owner asked but the mode was not clear and not answered: the card stays in Backlog with one
+  comment ("Asked for, but now or by an agent? Waiting for the owner."); `move` and `claim` with `unsure` keep that
+  question on a Backlog card, start nothing and exit non-zero.
+- `finished` `{at, by, cancelled}`: written when a card that has `asked` goes to Done. `by` is `agent` (a run with
+  BOARD_AGENT, or a hosted agent identity) or `person`; `cancelled` is true for `done --cancel`. A card the owner moves to
+  Done on the web page carries no `finished`. Leaving Done removes it (the page too), so a card finished again has a new `at`.
+  Cards without `asked` never get it.
+
+- Who may write the mark: an agent run (BOARD_AGENT set) must also be attended (`--attended` or BOARD_ATTENDED=1: the owner
+  is present, as a front door is). An unattended agent's `--asked` is refused, and so is `--asked` from a run holding its own unattended claim. This stops accidental marks; it does not stop a worker that passes `--attended` or sets BOARD_ATTENDED itself (the same trust level as an attended claim). On a hosted board `--asked` is refused (`capability_unavailable`).
+  A second `done` on a Done card leaves `finished` as the first finish wrote it (one push per finish).
+- An `unsure` card: the owner's plain approval (`move ID todo` by a person; the board page does the same when the owner drags the card from Backlog to To do: it sets `mode` to `dispatch` and keeps `at`) counts as
+  `dispatch`. An agent run must pass `--asked dispatch` (or `claim --attended --asked now`); without it the move or claim is
+  refused, so the question cannot be bypassed. The same refusal covers every other way an agent run could take the card
+  out of Backlog (`move` to any column, `release --column`, `done`).
+
+`doctor` rejects a malformed `asked` or `finished` (code ASKED, FINISHED); boards without them stay valid. The first write
+raises `settings.min_kit` to 128: an older kit would not remove `finished` when a card reopens. No migration; an upgrade
+changes no card.
+
+Rollout order: the first `--asked` write comes from a chat sentence, not an upgrade step, and from then on every kit older
+than 128 refuses all writes to that board ("this board needs kit v128"). Upgrade every kit copy that writes the board (the
+board repo, the runner and dispatcher checkouts, code-repo plugins) to 128 before deploying a connector that passes `mode`.
+
 ### v127 (schema 4)
 
 Adds `work-research-policy-snapshot` and `work-research-policy-apply` for the
