@@ -296,6 +296,21 @@ class ResearchTests(unittest.TestCase):
         with mock.patch.object(self.research, "scope", side_effect=bounded):
             with self.assertRaises(SystemExit): self.invoke("research-candidates", project="pr_one")
 
+    def test_scope_rejects_oversize_original_before_copy_or_serialization(self):
+        self.ready(); data = self.read(); task = data["tasks"][0]
+        for field, value in (("todos", [{}] * 21), ("links", [{"url": "https://example.org", "extra": "x" * 20000}])):
+            with self.subTest(field=field):
+                candidate = dict(task, **{field: value})
+                with mock.patch.object(self.research.copy, "deepcopy", side_effect=AssertionError("copied oversized input")):
+                    with self.assertRaises(SystemExit): self.research.scope(data, candidate)
+
+    def test_scope_refuses_worker_incompatible_control_text_before_admission(self):
+        self.ready(); data = self.read()
+        for text in ("Windows\r\ntext", "A\u202etext", "Null\x00text"):
+            with self.subTest(text=repr(text)):
+                task = dict(data["tasks"][0], details=text)
+                with self.assertRaises(SystemExit): self.research.scope(data, task)
+
     def test_approval_rejections(self):
         for update in ({"by": "agent@owner"}, {"relayed": "owner"}, {"at": "2020-01-01T00:00:00Z"},
                        {"answer": {"approved": False}}, {"id": "a_different"}, {"done": {"acted": True}}):

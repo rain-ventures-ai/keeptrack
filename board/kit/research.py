@@ -64,8 +64,8 @@ def projection(data, task):
     if len(projects) != 1 or task.get("project") not in p["projects"]:
         fail("task is outside the pilot's canonical project")
     value = {"id": task.get("id"), "project": task.get("project"), "title": task.get("title", ""),
-             "details": task.get("details", ""), "todos": copy.deepcopy(task.get("todos") or []),
-             "links": copy.deepcopy(task.get("links") or []), "after": copy.deepcopy(task.get("after") or [])}
+             "details": task.get("details", ""), "todos": task.get("todos") or [],
+             "links": task.get("links") or [], "after": task.get("after") or []}
     if not isinstance(value["id"], str) or not re.fullmatch(r"t_[a-z0-9]{4,20}", value["id"]) or \
             not isinstance(value["title"], str) or not value["title"].strip() or len(value["title"]) > 160 or \
             not isinstance(value["details"], str) or len(value["details"]) > 2000:
@@ -74,6 +74,28 @@ def projection(data, task):
             not isinstance(value["links"], list) or not 1 <= len(value["links"]) <= 8 or \
             not isinstance(value["after"], list) or len(value["after"]) > 32:
         fail("research needs one to eight explicit public source links and a bounded checklist")
+    # Validate the original graph before either deepcopy or json encoding.
+    # Unknown nested metadata is still part of the signed scope and is bounded.
+    nodes, chars = 0, 0
+    def bounded(item, depth=0):
+        nonlocal nodes, chars
+        nodes += 1
+        if nodes > 2048 or depth > 8:
+            fail("research input exceeds the structural bound")
+        if isinstance(item, str):
+            chars += len(item)
+            if chars > 16384: fail("research brief exceeds 16 KiB")
+            if any(ord(c) < 32 and c not in "\n\t" or ord(c) in {0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069} for c in item):
+                fail("research input contains unsupported control text")
+        elif isinstance(item, (dict, list)):
+            if len(item) > 128: fail("research input exceeds the structural bound")
+            if isinstance(item, dict):
+                for key, child in item.items(): bounded(key, depth + 1); bounded(child, depth + 1)
+            else:
+                for child in item: bounded(child, depth + 1)
+        elif item is not None and type(item) not in (bool, int, float):
+            fail("research input needs JSON data")
+    bounded(value)
     for link in value["links"]:
         if not isinstance(link, dict) or not isinstance(link.get("url"), str) or len(link["url"]) > 2000:
             fail("invalid research source link")
@@ -97,7 +119,7 @@ def projection(data, task):
     if value["todos"]: brief += "\n\nChecklist:\n" + "\n".join(t["text"] for t in value["todos"])
     if len(brief.encode()) > 4000:
         fail("combined research brief and checklist exceed 4000 UTF-8 bytes")
-    return value
+    return copy.deepcopy(value)
 
 
 def scope(data, task):
@@ -568,7 +590,7 @@ def parser(sub, callback):
     p.set_defaults(f=callback, work_action="research-read-failed")
     p = sub.add_parser("work-research-note", help="host-only bounded prelaunch wait or refusal; never worker-supplied prose")
     p.add_argument("id"); p.add_argument("--admission-receipt", required=True); p.add_argument("--policy-digest", required=True)
-    p.add_argument("--reason", choices=("source_unavailable", "source_rejected", "admission_expired", "host_unavailable"), required=True)
+    p.add_argument("--reason", choices=("source_unavailable", "source_rejected", "admission_expired", "host_unavailable", "request_rejected"), required=True)
     p.set_defaults(f=callback, work_action="research-note")
     p = sub.add_parser("work-research-reconcile", help="authenticate a saved research outcome with its private run receipt")
     p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
@@ -701,7 +723,7 @@ def command(kt, work, args):
         return read_failed(kt, work, args)
     if action == "note":
         private = _private_receipt(args.admission_receipt); result = {}
-        owner = args.reason in {"source_rejected", "admission_expired"}
+        owner = args.reason in {"source_rejected", "admission_expired", "request_rejected"}
         def change(data):
             kt._MUT["recheck"] = kt._MUT["rerun"] = True; result.clear()
             task = kt.find(data, args.id); co = work.coordinate(task)
@@ -711,6 +733,7 @@ def command(kt, work, args):
             text = {"source_unavailable": "A public source is temporarily unavailable; Rook can retry within the admission window.",
                     "source_rejected": "Use public HTTPS source links, then hand this request to Rook again.",
                     "admission_expired": "The run window ended before launch. Hand this request to Rook again if it is still wanted.",
+                    "request_rejected": "The request did not pass execution checks. Check the brief and adopted host configuration, then hand it to Rook again.",
                     "host_unavailable": "Configured research execution is not available yet; no worker started. Rook will recheck."}[args.reason]
             current = {"done": "Owner request saved; no research worker launched.", "remaining": text, "next_actor": "owner" if owner else "rook"}
             if co["research"].get("current") != current:
