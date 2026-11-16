@@ -44,7 +44,7 @@ Two optional card fields, both written only by `keeptrack.py`:
   Cards without `asked` never get it.
 
 - Who may write the mark: an agent run (BOARD_AGENT set) must also be attended (`--attended` or BOARD_ATTENDED=1: the owner
-  is present, as a front door is). An unattended agent's `--asked` is refused, so a dispatcher cannot mark cards it creates.
+  is present, as a front door is). An unattended agent's `--asked` is refused, and so is `--asked` from a run holding its own unattended claim. This stops accidental marks; it does not stop a worker that passes `--attended` or sets BOARD_ATTENDED itself (the same trust level as an attended claim). On a hosted board `--asked` is refused (`capability_unavailable`).
   A second `done` on a Done card leaves `finished` as the first finish wrote it (one push per finish).
 - An `unsure` card: the owner's plain approval (`move ID todo` by a person; the board page does the same when the owner drags the card from Backlog to To do: it sets `mode` to `dispatch` and keeps `at`) counts as
   `dispatch`. An agent run must pass `--asked dispatch` (or `claim --attended --asked now`); without it the move or claim is

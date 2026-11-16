@@ -305,6 +305,16 @@ class Asked(Board):
         self.assertNotEqual(0, p.returncode)
         self.assertNotIn("asked", self.card(ident))
 
+    def test_a_run_holding_its_own_unattended_claim_cannot_mark_the_card(self):
+        ident = self.add("Dispatched")
+        self.kt("move", ident, "todo")
+        self.claim(ident, BOARD_AGENT="claude")   # the dispatcher's own unattended claim
+        self.assertNotIn("asked", self.card(ident))
+        p = self.claim(ident, "--attended", "--asked", "now", "--asked-via", "chat", ok=False, BOARD_AGENT="claude")
+        self.assertNotEqual(0, p.returncode)
+        self.assertIn("own unattended claim", p.stderr + p.stdout)
+        self.assertNotIn("asked", self.card(ident))
+
     def test_an_attended_agent_front_door_can_write_the_mark(self):
         ident = self.add("Front door", "--asked", "dispatch", "--asked-via", "chat", BOARD_AGENT="connector-claude", BOARD_ATTENDED="1")
         self.assertEqual("dispatch", self.card(ident)["asked"]["mode"])

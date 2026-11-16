@@ -1646,6 +1646,8 @@ def hosted_dispatch(a):
         sys.exit(DOCS_HOSTED_READONLY)
     if a.cmd == "claim" and getattr(a, "assign_to_me", False):
         sys.exit("capability_unavailable: claim --assign-to-me is only available on GitHub boards")
+    if getattr(a, "asked", None) is not None or getattr(a, "asked_via", None) is not None:
+        sys.exit("capability_unavailable: the asked mark is not on hosted boards; nothing changed")
     adapter = storage_adapter()
     renamed = None   # unarchive --client/--company: (field, old, new), saved right after the restore
     try:
@@ -3534,6 +3536,12 @@ def _unwait_before_claim(t):
 def do_claim(a, tid, data):
     t = find(data, tid)
     asked = asked_args(a, "claim")
+    if asked and agent_run():
+        c0 = t.get("claim") or {}
+        if c0 and c0.get("status") != "done" and not c0.get("attended") \
+                and c0.get("session_id") in ({session_id(a)} | my_sessions(a, t.get("id"))):
+            sys.exit(f"refused: {t['id']} is held by this session's own unattended claim; a run the dispatcher started does not "
+                     "become owner-present by its own flag, so it cannot mark the card as asked for. Nothing changed")
     if asked and asked[0] == "unsure":
         return asked_unsure(data, t, asked[1], "claimed")   # nothing starts; the card keeps the question
     if not asked and (t.get("asked") or {}).get("mode") == "unsure" and agent_run():
