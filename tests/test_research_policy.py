@@ -69,6 +69,8 @@ class PolicyTests(unittest.TestCase):
         self.apply(self.receipt(disabled, 'disable'))
         self.assertFalse(self.read()['settings']['rook_research']['enabled'])
         self.assertEqual(self.read()['tasks'], before)
+        with self.assertRaisesRegex(SystemExit, 'disabled'):
+            self.r.policy(self.read())
         kt.mutate(lambda current: current['settings'].update(title='Ordinary later edit'), 'Unrelated fixture edit')
         self.assertEqual(self.read()['tasks'], before, 'later writes must preserve disabled grants too')
         kt.mutate(lambda current: current['tasks'][0].update(details='Changed request'), 'Changed fixture input')
