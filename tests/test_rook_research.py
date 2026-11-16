@@ -110,6 +110,11 @@ class ResearchTests(unittest.TestCase):
         self.admit(); self.assertEqual(self.read()["tasks"][0]["assignees"], ["owner"])
         self.assertTrue(self.invoke("start", claim_research=True)["launch"])
 
+    def test_research_admission_adds_owner_without_replacing_teammate_assignment(self):
+        self.ready(); data = self.read(); data["tasks"][0]["assignees"] = ["teammate"]; self.write(data)
+        self.admit(); self.assertEqual(self.read()["tasks"][0]["assignees"], ["teammate", "owner"])
+        self.assertTrue(self.invoke("start", claim_research=True)["launch"])
+
     def test_read_failure_releases_only_its_run_without_unknown_effect_and_replays(self):
         self.ready(); self.admit(); self.invoke("start", claim_research=True)
         self.assertTrue(self.invoke("research-read-failed")["created"])
@@ -213,6 +218,18 @@ class ResearchTests(unittest.TestCase):
                 "current": {"done": "Public sources compared. Report attached.", "remaining": "Owner to consider the findings.",
                             "next_actor": "owner"}, "outcome": "pending_review"}
 
+    def test_report_artifact_does_not_become_a_source_for_the_next_request(self):
+        self.ready(); data = self.read(); task = data["tasks"][0]
+        task["links"] = [{"url": "https://example.org/page" + str(i), "title": "Public guide"} for i in range(8)]
+        data["proposals"][0].update(self.research.proposal_input(data, task)); self.write(data)
+        self.admit(); self.invoke("start", claim_research=True)
+        report = self.report(); self.invoke("research-handover", report)
+        task = self.read()["tasks"][0]
+        self.assertEqual(len(task["links"]), 8)
+        self.assertEqual(task["coordination"]["research"]["artifact"], report["artifact"])
+        data = self.read(); data["tasks"][0]["column"] = "backlog"; self.write(data)
+        self.assertEqual(len(self.research.proposal_input(data, data["tasks"][0])["change"]["content_hash"]), 71)
+
     def test_unchecked_work_can_hand_over_for_review_without_claiming_completion(self):
         self.ready(); data = self.read()
         data["tasks"][0]["todos"] = [{"text": "Owner checks the comparison", "done": False}]
@@ -296,7 +313,8 @@ class ResearchTests(unittest.TestCase):
         task = self.read()["tasks"][0]
         self.assertEqual(task["column"], "pending-review"); self.assertIsNone(task["claim"])
         self.assertEqual(task["comments"], [])
-        self.assertEqual(len(task["links"]), 2)
+        self.assertEqual(len(task["links"]), 1)
+        self.assertEqual(task["coordination"]["research"]["artifact"], self.report()["artifact"])
         self.assertFalse(task["coordination"]["research"]["admission"]["active"])
         self.assertFalse(self.invoke("research-handover", self.report())["created"])
         changed = self.report(); changed["artifact"]["sha256"] = "d" * 64

@@ -4103,7 +4103,8 @@ if (typeof window !== 'undefined') (() => {
             subject: { type: 'other', summary: 'Read-only public research; no messages, purchases or repository changes.' }, content_hash: hash },
           created: at, createdBy: by, target: null, likely_duplicates: [], status: 'answered', decision: { action: 'answer', id: answerId, by, at, answer: { approved: true }, result: null, commit: null },
           history: [{ at, by, text: 'Owner handed this exact public research request to Rook' }] };
-        t.coordination ||= { v: 1, owner: 'rook:' + t.project, executor: 'relay-local', runs: [] };
+        t.coordination ||= { v: 1, owner: 'rook:' + t.project, executor: 'relay-research', runs: [] };
+        t.coordination.executor = 'relay-research';
         t.coordination.research ||= { v: 1 };
         t.coordination.research.request = { approval_id: proposalId, answer_id: answerId, content_hash: hash, at };
         latest.settings.min_kit = Math.max(126, latest.settings.min_kit || 0); stamp(t);
@@ -4119,6 +4120,14 @@ if (typeof window !== 'undefined') (() => {
       if (typeof r.current[key] === 'string' && r.current[key]) box.append(el('p', '', title + ': ' + r.current[key].slice(0, 1024)));
     }
     else box.append(el('p', 'hint', r?.request ? (researchRequestPending(r, p) ? 'Handed to Rook; waiting for the configured research host.' : 'The admission window expired. You can hand this request to Rook again.') : 'Read-only research from public source links. The detailed report will be linked here.'));
+    if (typeof r?.artifact?.url === 'string') {
+      try {
+        const url = new URL(r.artifact.url);
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+          const link = el('a', '', 'Research report'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer'; box.append(link);
+        }
+      } catch {}
+    }
     const owner = state.settings?.kit_owner || (state.people || []).find(x => x.github)?.github;
     const button = $('cRookStart'); button.hidden = !!ro || HOSTED || cfg().me !== owner || t.column !== 'backlog' || !!t.claim || !!r?.admission?.active || researchRequestPending(r, p);
     if (!button.hidden) box.append(el('p', 'hint', 'Hand to Rook approves this saved request and its public source links for read-only research and one private report, under the adopted pilot policy.'));

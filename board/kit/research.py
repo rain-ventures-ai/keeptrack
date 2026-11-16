@@ -387,8 +387,9 @@ def admit(kt, work, args):
         after = kt.after_links(current, card, None)
         if any(x.get("state") != "done" for x in after):
             fail("task has unfinished dependencies")
-        if not card.get("assignees"):
-            card["assignees"] = [policy(current, args.policy_digest)["owner"]]
+        owner = policy(current, args.policy_digest)["owner"]
+        if owner not in card.setdefault("assignees", []):
+            card["assignees"].append(owner)
         previous_note = (co.get("research") or {}).get("prelaunch_note") or {}
         if previous_note.get("label_added") and "needs-human" in card.get("labels", []):
             card["labels"].remove("needs-human")
@@ -485,8 +486,7 @@ def handover(kt, work, args, value):
         run["research_handover"] = {"digest": payload_hash, "artifact": copy.deepcopy(artifact), "current": copy.deepcopy(current), "outcome": value["outcome"]}
         run["_research_seal"] = handover_seal(task["id"], run["id"], payload_hash, proof)
         co["research"]["current"] = copy.deepcopy(current)
-        if not any(x.get("url") == artifact["url"] for x in task.get("links", []) if isinstance(x, dict)):
-            task.setdefault("links", []).append({"url": artifact["url"], "title": "Research report"})
+        co["research"]["artifact"] = copy.deepcopy(artifact)
         task["claim"] = None
         kt.move_task_to_column(data, task, "done" if value["outcome"] == "complete" else "pending-review")
         kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))

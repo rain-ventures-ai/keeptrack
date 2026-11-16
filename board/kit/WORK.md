@@ -15,8 +15,8 @@ The owner-only **Hand to Rook** button creates and answers an existing
 start a worker. The separately configured host runs `work-research-admit` with
 the full proposal and answer IDs, its adopted configuration digest and a private
 admission receipt. Admission consumes that answer once and moves the card to
-To do, assigning an unassigned card to the approving owner without replacing
-existing assignments. `work-start --claim-research` requires the private admission receipt and
+To do, adding the approving owner to assignees without replacing existing
+assignments. `work-start --claim-research` requires the private admission receipt and
 claims the task and records its run in one whole-board CAS. Its separate private
 run proof is durably written before that mutation. A refusal cannot leave only
 a claim. The browser presents the approval scope inline; one owner button remains
@@ -49,12 +49,15 @@ public setting `rook_research` has exactly `v: 1`, `enabled: true`, `board`,
 the matching private host configuration and its capabilities before activation.
 
 The host calls `work-research-handover` after publishing one immutable report.
-That single CAS records run evidence, the artifact link and a host-written
+That single CAS records run evidence, the separate research artifact and a host-written
 **Current state** of at most 1 KiB, releases the exact claim, and moves to Pending
 review. No progress comments are added. Completion needs an adopted informational
 rule and no remaining owner step or unticked checklist item. Changed scope,
 successor claims and unknown-effect holds refuse a late report. A retry of an
 already saved handover returns the saved result without duplicating its link.
+The private report link is `coordination.research.artifact`, displayed in Current
+state, and retained in the run result. It is not added to public source links,
+so reusing a card does not feed the private report to the public fetcher.
 `work-research-reconcile` verifies the saved payload's private host seal before
 recovery treats it as an achieved outcome; copying board fields cannot forge it.
 The pilot never ticks unchecked work merely because a report was produced.

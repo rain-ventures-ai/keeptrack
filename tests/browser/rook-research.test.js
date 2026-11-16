@@ -33,6 +33,7 @@ module.exports = async function run() {
   assert.equal(p.decision.by, 'owner'); assert.equal(p.decision.answer.approved, true);
   assert.equal(p.change.content_hash, 'sha256:' + Buffer.from(await webcrypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical(context.api.rookResearchScope(board(), board().tasks[0], 'owner/board'))))).toString('hex'));
   assert.equal(data.tasks[0].column, 'backlog', 'only the private host may admit/start');
+  assert.equal(data.tasks[0].coordination.executor, 'relay-research', 'the button cannot opt a research card into the repository runner');
   assert.equal(data.tasks[0].coordination.research.request.answer_id, p.decision.id);
   assert.equal(await context.api.handResearchToRook('t_research'), false, 'duplicate click does not create another approval');
   reset(); user = 'other'; assert.equal(await context.api.handResearchToRook('t_research'), false); assert.equal(saves, 0);
