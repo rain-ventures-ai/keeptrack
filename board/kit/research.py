@@ -135,12 +135,16 @@ def revoke_changed_inputs(before, after):
     grants are created only by admission; this retires an existing identity.
     """
     old = {t.get("id"): t for t in before.get("tasks", []) if isinstance(t, dict)}
-    compared = after
+    compared, compared_before = after, before
     previous_policy = (before.get("settings") or {}).get("rook_research")
     next_policy = (after.get("settings") or {}).get("rook_research")
-    if isinstance(previous_policy, dict) and previous_policy.get("enabled") is True and next_policy == dict(previous_policy, enabled=False):
+    if isinstance(previous_policy, dict) and type(previous_policy.get("enabled")) is bool and \
+            isinstance(next_policy, dict) and next_policy.get("enabled") is False and \
+            next_policy == dict(previous_policy, enabled=False):
         # Stop intake without rewriting outstanding grants or run evidence.
-        compared = dict(after, settings=dict(after["settings"], rook_research=previous_policy))
+        enabled = dict(previous_policy, enabled=True)
+        compared_before = dict(before, settings=dict(before["settings"], rook_research=enabled))
+        compared = dict(after, settings=dict(after["settings"], rook_research=enabled))
     for task in after.get("tasks", []):
         grant = ((task.get("coordination") or {}).get("research") or {}).get("admission")
         previous = old.get(task.get("id"))
@@ -151,7 +155,7 @@ def revoke_changed_inputs(before, after):
             grant["active"] = False
         elif grant.get("active") is True:
             try:
-                if scope(before, previous) != scope(compared, task):
+                if scope(compared_before, previous) != scope(compared, task):
                     grant["active"] = False
             except SystemExit:
                 grant["active"] = False
@@ -377,6 +381,8 @@ def apply_policy(kt, work, args):
         else:
             fail("unsupported policy action operation")
         settings = data.setdefault("settings", {})
+        minimum = settings.get("min_kit")
+        settings["min_kit"] = max(127, minimum if type(minimum) is int else 0)
         settings["rook_research"] = copy.deepcopy(desired)
         settings["rook_research_control"] = {"revision": current["revision"] + 1,
             "action_id": value["id"], "action_digest": digest(value)}

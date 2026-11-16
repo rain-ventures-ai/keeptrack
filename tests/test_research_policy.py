@@ -40,6 +40,7 @@ class PolicyTests(unittest.TestCase):
         self.ready(); path = self.receipt()
         first = self.apply(path); self.assertTrue(first['changed'])
         self.assertEqual(self.read()['settings']['rook_research'], self.desired)
+        self.assertEqual(self.read()['settings']['min_kit'], 127)
         self.assertFalse(self.apply(path)['changed'])
         self.assertEqual(self.read()['settings']['rook_research_control']['revision'], 1)
 
@@ -68,6 +69,10 @@ class PolicyTests(unittest.TestCase):
         self.apply(self.receipt(disabled, 'disable'))
         self.assertFalse(self.read()['settings']['rook_research']['enabled'])
         self.assertEqual(self.read()['tasks'], before)
+        kt.mutate(lambda current: current['settings'].update(title='Ordinary later edit'), 'Unrelated fixture edit')
+        self.assertEqual(self.read()['tasks'], before, 'later writes must preserve disabled grants too')
+        kt.mutate(lambda current: current['tasks'][0].update(details='Changed request'), 'Changed fixture input')
+        self.assertFalse(self.read()['tasks'][0]['coordination']['research']['admission']['active'])
 
     def test_old_enable_cannot_be_replayed_after_disable(self):
         self.ready(); old = self.receipt(); self.apply(old)
