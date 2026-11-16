@@ -43,9 +43,20 @@ Two optional card fields, both written only by `keeptrack.py`:
   Done on the web page carries no `finished`. Leaving Done removes it (the page too), so a card finished again has a new `at`.
   Cards without `asked` never get it.
 
+- Who may write the mark: an agent run (BOARD_AGENT set) must also be attended (`--attended` or BOARD_ATTENDED=1: the owner
+  is present, as a front door is). An unattended agent's `--asked` is refused, so a dispatcher cannot mark cards it creates.
+  A second `done` on a Done card leaves `finished` as the first finish wrote it (one push per finish).
+- An `unsure` card: the owner's plain approval (`move ID todo` by a person, e.g. the board page's kit path) counts as
+  `dispatch`. An agent run must pass `--asked dispatch` (or `claim --attended --asked now`); without it the move or claim is
+  refused, so the question cannot be bypassed.
+
 `doctor` rejects a malformed `asked` or `finished` (code ASKED, FINISHED); boards without them stay valid. The first write
 raises `settings.min_kit` to 128: an older kit would not remove `finished` when a card reopens. No migration; an upgrade
 changes no card.
+
+Rollout order: the first `--asked` write comes from a chat sentence, not an upgrade step, and from then on every kit older
+than 128 refuses all writes to that board ("this board needs kit v128"). Upgrade every kit copy that writes the board (the
+board repo, the runner and dispatcher checkouts, code-repo plugins) to 128 before deploying a connector that passes `mode`.
 
 ### v127 (schema 4)
 

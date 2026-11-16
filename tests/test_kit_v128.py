@@ -281,6 +281,59 @@ class Asked(Board):
         self.done(ident, BOARD_AGENT="claude")
         self.assertEqual(first, self.finished(ident))
 
+    def test_a_second_done_with_cancel_keeps_the_first_finish_whole(self):
+        """One finish is one push: relay's event id carries the outcome kind, so a flipped `cancelled` would push twice."""
+        ident = self.add("Flip", "--asked", "dispatch", "--asked-via", "chat")
+        self.done(ident, BOARD_AGENT="claude")
+        first = self.finished(ident)
+        self.kt("done", ident, "--cancel", "--note", "changed my mind", BOARD_AGENT="claude")
+        self.assertEqual(first, self.finished(ident))
+        self.assertFalse(self.finished(ident)["cancelled"])
+
+    # ---- who may write the mark ------------------------------------------------------------------------------------
+    def test_an_unattended_agent_cannot_write_the_mark(self):
+        for flags in (("add", "--column", "todo", "--asked", "dispatch", "--asked-via", "chat", "--", "Sneaky"),):
+            p = self.kt(*flags, ok=False, BOARD_AGENT="dispatcher")
+            self.assertNotEqual(0, p.returncode)
+            self.assertIn("owner present", p.stderr + p.stdout)
+        self.assertEqual([], [c for c in self.folder("cards").values() if c.get("title") == "Sneaky"])
+        ident = self.add("Plain backlog card")
+        p = self.kt("move", ident, "todo", "--asked", "dispatch", "--asked-via", "chat", ok=False, BOARD_AGENT="dispatcher")
+        self.assertNotEqual(0, p.returncode)
+        self.assertEqual(("backlog", False), (self.card(ident)["column"], "asked" in self.card(ident)))
+        p = self.claim(ident, "--asked", "unsure", "--asked-via", "chat", ok=False, BOARD_AGENT="dispatcher")
+        self.assertNotEqual(0, p.returncode)
+        self.assertNotIn("asked", self.card(ident))
+
+    def test_an_attended_agent_front_door_can_write_the_mark(self):
+        ident = self.add("Front door", "--asked", "dispatch", "--asked-via", "chat", BOARD_AGENT="connector-claude", BOARD_ATTENDED="1")
+        self.assertEqual("dispatch", self.card(ident)["asked"]["mode"])
+        self.kt("move", ident, "todo", "--asked", "dispatch", "--asked-via", "chat", BOARD_AGENT="connector-claude", BOARD_ATTENDED="1")
+        self.assertEqual("todo", self.card(ident)["column"])
+
+    # ---- an unanswered mark is not bypassed ------------------------------------------------------------------------
+    def test_a_persons_plain_approval_answers_unsure_as_dispatch(self):
+        ident = self.add("Unsure then approved", "--asked", "unsure", "--asked-via", "chat")
+        self.kt("move", ident, "todo")   # no BOARD_AGENT: the owner's own move
+        self.assertEqual(("todo", "dispatch"), (self.card(ident)["column"], self.card(ident)["asked"]["mode"]))
+
+    def test_an_agents_plain_approval_or_claim_of_an_unsure_card_is_refused(self):
+        ident = self.add("Unsure stays", "--asked", "unsure", "--asked-via", "chat")
+        p = self.kt("move", ident, "todo", ok=False, BOARD_AGENT="connector-claude")
+        self.assertNotEqual(0, p.returncode)
+        p = self.claim(ident, "--attended", ok=False, BOARD_AGENT="connector-claude")
+        self.assertNotEqual(0, p.returncode)
+        card = self.card(ident)
+        self.assertEqual(("backlog", "unsure"), (card["column"], card["asked"]["mode"]))
+        self.assertIsNone(card["claim"])
+
+    def test_the_connectors_close_is_an_agents_finish(self):
+        """Known case (see the connector README): a connector close is BOARD_AGENT=connector-<client>, so it records `agent`
+        even when the owner said "mark it done" in chat; the owner hears of it once."""
+        ident = self.add("Closed in chat", "--asked", "dispatch", "--asked-via", "chat")
+        self.done(ident, BOARD_AGENT="connector-claude")
+        self.assertEqual("agent", self.finished(ident)["by"])
+
     def test_release_to_done_is_recorded_too(self):
         ident = self.add("Release done", "--asked", "now", "--asked-via", "chat")
         self.claim(ident, "--attended", "--asked", "now", "--asked-via", "chat", BOARD_AGENT="claude")

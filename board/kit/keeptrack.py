@@ -2452,6 +2452,9 @@ def asked_args(a, command):
         sys.exit("refused: --asked-via is a short name of letters, digits, . _ - (at most 40), such as chat or voice")
     if mode not in ASKED_MODES:
         sys.exit(f"refused: --asked is one of {', '.join(ASKED_MODES)}")
+    if agent_run() and not attended(a):
+        sys.exit("refused: the asked mark is written by a front door with the owner present (an agent run with --attended or "
+                 "BOARD_ATTENDED=1); an unattended agent never marks a card as asked for. Nothing changed")
     if command == "move" and mode == "now":
         sys.exit("refused: an approval hands the card to an agent (--asked dispatch); work in this conversation is claim --attended --asked now")
     if command == "claim" and mode == "dispatch":
@@ -3533,6 +3536,9 @@ def do_claim(a, tid, data):
     asked = asked_args(a, "claim")
     if asked and asked[0] == "unsure":
         return asked_unsure(data, t, asked[1], "claimed")   # nothing starts; the card keeps the question
+    if not asked and (t.get("asked") or {}).get("mode") == "unsure" and agent_run():
+        sys.exit(f"refused: {t['id']} carries an unanswered asked mark (now or by an agent?): pass --attended --asked now "
+                 "--asked-via NAME once the owner says to work on it here. Nothing changed")
     refuse_waiting(t)
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
@@ -3912,8 +3918,8 @@ def cmd_done(a):
         move_task_to_column(data, t, "done")
         if not was_done:
             note_finished(t, cancel)
-        elif isinstance(t.get("finished"), dict):
-            t["finished"]["cancelled"] = cancel   # kit v128: a second done on a Done card is not a new finish; `at` stays
+        # kit v128: a second done on a Done card is not a new finish: `finished` stays exactly as the first finish wrote it
+        # (relay pushes once per finish, and its event id carries the outcome kind, so a flipped `cancelled` would push twice)
         t["updated"] = now(); tid = t["id"]
         _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked: a failed one leaves the claim provably ours
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
@@ -4116,6 +4122,13 @@ def cmd_move(a):
             if asked[0] == "unsure":
                 _ASKED_REFUSE.clear()
                 return asked_unsure(data, t, asked[1], "approved")
+        elif column == "todo" and t["column"] == "backlog" and (t.get("asked") or {}).get("mode") == "unsure":
+            # an unanswered request: the owner's plain approval answers it as "by an agent" (dispatch); an agent run
+            # must pass the answer itself, or the question is bypassed and the done notice is lost
+            if agent_run():
+                sys.exit(f"refused: {t['id']} carries an unanswered asked mark (now or by an agent?): pass --asked dispatch "
+                         "--asked-via NAME once the owner says an agent should run it. Nothing changed")
+            set_asked(data, t, "dispatch", (t.get("asked") or {}).get("via") or "board")
         if getattr(a, "priority", None):
             t["priority"] = a.priority
         if data.get("layout") == "split":
