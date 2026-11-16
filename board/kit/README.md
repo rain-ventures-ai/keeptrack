@@ -416,6 +416,12 @@ Each person can connect their own Claude routine so that either the **Assign to 
 **Setup.** Follow [`board/ROUTINE-SETUP.md`](ROUTINE-SETUP.md) (the routine's saved prompt is the short [`routine-loader.txt`](routine-loader.txt); its behaviour lives in [`routine-prompt.md`](routine-prompt.md), which you can edit here without touching the routine). Or ask Claude Code in this repo to "set up my board routine"; the `board-routine-setup` skill guides and verifies it without handling any secrets.
 
 ## Board kit
+Work the owner asked for (kit 128): a front door marks a card with `--asked now|dispatch|unsure --asked-via NAME` on
+`add`, on the approval (`move ID todo`, dispatch or unsure only) and on `claim --attended` (now or unsure only). Only the
+flags write the `asked` record `{at, via, mode}`; a later approval or claim keeps the first `at`. `unsure` leaves a Backlog
+card with a comment and starts nothing. `done`, `done --cancel` and a move to Done record `finished` `{at, by, cancelled}`
+on such a card, so relay can tell an agent's finish from the owner's own. See `board/UPGRADING.md` v128.
+
 Research pilot policy control (kit 127) uses the trusted host's separately
 authenticated owner endpoint. `work-research-policy-snapshot` returns public
 policy and revision only. `work-research-policy-apply --owner-action-receipt

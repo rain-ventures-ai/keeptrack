@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v128: work the owner asked for. New optional card fields `asked` `{at, via, mode: now|dispatch|unsure}` and
+`finished` `{at, by: agent|person, cancelled}`. `add`, the approval (`move ID todo`) and `claim --attended` take
+`--asked MODE --asked-via NAME`; only those flags write `asked`, and a later approval or claim keeps the first `at`.
+`unsure` keeps a Backlog card with one comment and starts nothing. `done`, `done --cancel` and a move to Done record
+`finished` on an asked card; leaving Done clears it. `doctor` rejects malformed fields; older boards stay valid.
+
 Kit v127: owner-authenticated research-policy adoption and disable. The native
 CAS verifies a private signed action binding board, branch, path, owner, policy
 and control revision. A monotonic revision prevents old enable actions being

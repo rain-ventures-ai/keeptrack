@@ -25,6 +25,28 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v128 (schema 4)
+
+Records work the owner asked for, so a finished request can be told to the owner once.
+Two optional card fields, both written only by `keeptrack.py`:
+
+- `asked` `{at, via, mode}`: `mode` is `now`, `dispatch` or `unsure`; `via` is a short front-door name (`chat`, `voice`);
+  `at` is the first time (kept by later writes). Only explicit flags write it: `add --asked MODE --asked-via NAME`,
+  the approval `move ID todo --asked dispatch --asked-via NAME` (Backlog to To do) and `claim ID --attended --asked now
+  --asked-via NAME`. Nothing derives it from card, comment or page text. A later approval or claim keeps `at` and updates
+  `mode` and `via`.
+- `--asked unsure` means the owner asked but the mode was not clear and not answered: the card stays in Backlog with one
+  comment ("Asked for, but now or by an agent? Waiting for the owner."); `move` and `claim` with `unsure` keep that
+  question on a Backlog card, start nothing and exit non-zero.
+- `finished` `{at, by, cancelled}`: written when a card that has `asked` goes to Done. `by` is `agent` (a run with
+  BOARD_AGENT, or a hosted agent identity) or `person`; `cancelled` is true for `done --cancel`. A card the owner moves to
+  Done on the web page carries no `finished`. Leaving Done removes it (the page too), so a card finished again has a new `at`.
+  Cards without `asked` never get it.
+
+`doctor` rejects a malformed `asked` or `finished` (code ASKED, FINISHED); boards without them stay valid. The first write
+raises `settings.min_kit` to 128: an older kit would not remove `finished` when a card reopens. No migration; an upgrade
+changes no card.
+
 ### v127 (schema 4)
 
 Adds `work-research-policy-snapshot` and `work-research-policy-apply` for the

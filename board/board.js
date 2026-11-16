@@ -240,7 +240,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 127;
+  const PAGE_KIT = 128;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -3869,7 +3869,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // a card leaving Done is decided again at its next done: its outcome (and the run record's) goes, as keeptrack.py move does
-  function reopenOutcome(n, t, from, to) { const d = doneColId(); if (from === d && to !== d) { delete t.outcome; if (t.last_run) delete t.last_run.outcome; } }
+  function reopenOutcome(n, t, from, to) { const d = doneColId(); if (from === d && to !== d) { delete t.outcome; delete t.finished; if (t.last_run) delete t.last_run.outcome; } }   // kit v128: finished again later is a new finish
   function place(n, id, colId, beforeId) {
     const i = n.tasks.findIndex(x => x.id === id); if (i < 0) return;
     if (isSplit(n)) {
