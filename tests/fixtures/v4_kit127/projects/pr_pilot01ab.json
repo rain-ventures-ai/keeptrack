@@ -1,0 +1,13 @@
+{
+  "id": "pr_pilot01ab",
+  "client": "Acme",
+  "name": "Pilot rollout",
+  "north_star": "Go live in one region",
+  "status": "active",
+  "links": [],
+  "people": [
+    "p_acme"
+  ],
+  "created": "2026-10-01T08:00:00.000Z",
+  "updated": "2026-10-01T08:00:00.000Z"
+}

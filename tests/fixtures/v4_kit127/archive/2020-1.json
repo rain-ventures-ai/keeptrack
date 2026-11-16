@@ -1,0 +1,27 @@
+{
+  "version": 3,
+  "archive": true,
+  "year": "2020",
+  "tasks": [
+    {
+      "id": "t_archived102",
+      "num": 70,
+      "title": "Synthetic archived task",
+      "column": "done",
+      "updated": "2020-01-01T00:00:00Z",
+      "history": []
+    }
+  ],
+  "contacts": [],
+  "history": {
+    "t_archived102": [
+      {
+        "at": "2019-01-01T00:00:00Z",
+        "text": "Older synthetic history"
+      }
+    ]
+  },
+  "unknownEnvelope": {
+    "keep": true
+  }
+}

@@ -135,6 +135,12 @@ def revoke_changed_inputs(before, after):
     grants are created only by admission; this retires an existing identity.
     """
     old = {t.get("id"): t for t in before.get("tasks", []) if isinstance(t, dict)}
+    compared = after
+    previous_policy = (before.get("settings") or {}).get("rook_research")
+    next_policy = (after.get("settings") or {}).get("rook_research")
+    if isinstance(previous_policy, dict) and previous_policy.get("enabled") is True and next_policy == dict(previous_policy, enabled=False):
+        # Stop intake without rewriting outstanding grants or run evidence.
+        compared = dict(after, settings=dict(after["settings"], rook_research=previous_policy))
     for task in after.get("tasks", []):
         grant = ((task.get("coordination") or {}).get("research") or {}).get("admission")
         previous = old.get(task.get("id"))
@@ -145,7 +151,7 @@ def revoke_changed_inputs(before, after):
             grant["active"] = False
         elif grant.get("active") is True:
             try:
-                if scope(before, previous) != scope(after, task):
+                if scope(before, previous) != scope(compared, task):
                     grant["active"] = False
             except SystemExit:
                 grant["active"] = False
@@ -290,6 +296,93 @@ def issue_owner_action(path, key_path, expected, now, ttl):
         value["mac"] = action_mac(value, owner_action_key(key_path))
         _private_receipt(path, value)
     return verify_owner_action(path, key_path, expected, now, ttl)
+
+
+def policy_snapshot(kt, data):
+    """Public control state only; never return claims, proofs or task content."""
+    settings = data.get("settings") or {}
+    control = settings.get("rook_research_control", {})
+    if not isinstance(control, dict) or type(control.get("revision", 0)) is not int or not 0 <= control.get("revision", 0) < 2 ** 53:
+        fail("invalid research policy control revision")
+    owner = settings.get("kit_owner") or next((p.get("github") for p in data.get("people", []) if p.get("github")), None)
+    current = settings.get("rook_research")
+    if current is not None and (not isinstance(current, dict) or set(current) != PUBLIC_POLICY_FIELDS):
+        fail("unsupported existing research policy; owner repair required")
+    return {"v": 1, "board": kt.REPO, "branch": kt.BRANCH, "path": kt.PATH, "owner": owner,
+            "revision": control.get("revision", 0), "current": copy.deepcopy(current), "setting_digest": digest(current)}
+
+
+def issue_policy_action(path, key_path, snapshot, desired, operation, now, ttl):
+    """Trusted owner endpoint only, after its separate capability authenticated."""
+    if operation not in {"adopt", "disable"} or type(ttl) is not int or not 60 <= ttl <= 600:
+        fail("unsupported policy action")
+    if not Path(path).exists() and not Path(path).is_symlink():
+        value = {"schema": SCHEMA, "kind": "owner-policy-action", "id": "pa_" + secrets.token_hex(12),
+                 "proof": secrets.token_hex(32), "scope": snapshot, "policy": desired, "operation": operation,
+                 "issued_at": now, "expires_at": (_time(now) + dt.timedelta(seconds=ttl)).isoformat().replace("+00:00", "Z")}
+        value["mac"] = action_mac(value, owner_action_key(key_path))
+        _private_receipt(path, value)
+    saved = _private_receipt(path)
+    if saved.get("scope") != snapshot or saved.get("policy") != desired or saved.get("operation") != operation:
+        fail("policy action identity was already used for another request")
+    return saved
+
+
+def apply_policy(kt, work, args):
+    """A signed, compare-and-swap-bound owner action. No boolean bypass."""
+    value = _private_receipt(args.owner_action_receipt)
+    fields = {"schema", "kind", "id", "proof", "scope", "policy", "operation", "issued_at", "expires_at", "mac"}
+    if set(value) != fields or value.get("kind") != "owner-policy-action" or \
+            not re.fullmatch(r"pa_[a-f0-9]{24}", str(value.get("id", ""))) or \
+            not hmac.compare_digest(str(value.get("mac", "")), action_mac(value, owner_action_key(args.owner_action_key))):
+        fail("invalid owner policy action signature")
+    scope, desired, operation = value["scope"], value["policy"], value["operation"]
+    if not isinstance(scope, dict) or set(scope) != {"v", "board", "branch", "path", "owner", "revision", "current", "setting_digest"}:
+        fail("invalid owner policy action scope")
+    issued, expiry = _time(value["issued_at"]), _time(value["expires_at"])
+    if not 0 < (expiry - issued).total_seconds() <= 600:
+        fail("invalid owner policy action lifetime")
+    result = {}
+    def change(data):
+        kt._MUT["recheck"] = kt._MUT["rerun"] = True; result.clear()
+        current = policy_snapshot(kt, data)
+        if any(scope[k] != current[k] for k in ("board", "branch", "path", "owner")):
+            fail("policy board, branch, path or owner changed")
+        control = data.get("settings", {}).get("rook_research_control", {})
+        if control.get("action_id") == value["id"] and control.get("action_digest") == digest(value) and \
+                current["revision"] == scope["revision"] + 1 and current["current"] == desired:
+            result.update(changed=False, state=current); return
+        if current != scope:
+            fail("stale policy action: canonical configuration changed")
+        now = _time(kt.now())
+        if now > expiry or (issued - now).total_seconds() > 5:
+            fail("owner policy action expired or has a future timestamp")
+        if not isinstance(desired, dict) or set(desired) != PUBLIC_POLICY_FIELDS or type(desired.get("enabled")) is not bool or type(desired.get("v")) is not int:
+            fail("unsupported desired research policy")
+        # Validate both enabled/disabled shapes using the existing strict contract.
+        checked = copy.deepcopy(data); checked.setdefault("settings", {})["rook_research"] = dict(desired, enabled=True)
+        policy(checked)
+        known = {p.get("id") for p in data.get("projects", []) if isinstance(p, dict)}
+        if desired["board"] != kt.REPO or not set(desired["projects"]) <= known or len(set(desired["projects"])) != len(desired["projects"]):
+            fail("policy board or canonical projects do not match")
+        if operation == "disable":
+            if not isinstance(current["current"], dict) or desired != dict(current["current"], enabled=False):
+                fail("disable may only stop intake; it cannot change policy scope")
+        elif operation == "adopt" and desired["enabled"] is True:
+            for task in data.get("tasks", []):
+                co = task.get("coordination") or {}
+                if any(work.unresolved(run) for run in co.get("runs", [])) or \
+                        co.get("executor") == EXECUTOR and (task.get("claim") or ((co.get("research") or {}).get("admission") or {}).get("active")):
+                    fail("policy adoption waits for unresolved or active research work")
+        else:
+            fail("unsupported policy action operation")
+        settings = data.setdefault("settings", {})
+        settings["rook_research"] = copy.deepcopy(desired)
+        settings["rook_research_control"] = {"revision": current["revision"] + 1,
+            "action_id": value["id"], "action_digest": digest(value)}
+        result.update(changed=True, state=policy_snapshot(kt, data))
+    kt.mutate(change, "Rook: owner research policy control")
+    return result
 
 
 def owner_push(kt, item, p):
@@ -584,6 +677,12 @@ def sealed_handover(task, run, proof):
 
 
 def parser(sub, callback):
+    for operation in ("snapshot", "apply"):
+        p = sub.add_parser("work-research-policy-" + operation, help="signed owner research policy control")
+        if operation == "apply":
+            p.add_argument("--owner-action-receipt", required=True)
+            p.add_argument("--owner-action-key", required=True)
+        p.set_defaults(f=callback, work_action="research-policy-" + operation)
     p = sub.add_parser("work-research-read-failed", help="host-only known source read failure before the model call")
     p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
     p.add_argument("--admission-receipt", required=True); p.add_argument("--policy-digest", required=True)
@@ -719,6 +818,10 @@ def watch_poll(kt, args):
 
 def command(kt, work, args):
     action = args.work_action.removeprefix("research-")
+    if action == "policy-snapshot":
+        data, _ = kt.load(); print(json.dumps(policy_snapshot(kt, data))); return
+    if action == "policy-apply":
+        print(json.dumps(apply_policy(kt, work, args))); return
     if action == "read-failed":
         return read_failed(kt, work, args)
     if action == "note":

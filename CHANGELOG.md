@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v127: owner-authenticated research-policy adoption and disable. The native
+CAS verifies a private signed action binding board, branch, path, owner, policy
+and control revision. A monotonic revision prevents old enable actions being
+replayed after disable. Adoption waits for outstanding work; disable preserves
+run evidence and grants. No boolean confirmation or card text substitutes for
+the separate owner capability. Installing the kit activates nothing.
+
 Kit v126: disabled-by-default public research pilot. An owner-only card button
 binds the existing `ask.approve` to the exact request. Admission verifies a
 signed private action from a separate authenticated owner endpoint, consumes it once and

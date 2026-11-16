@@ -25,6 +25,26 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v127 (schema 4)
+
+Adds `work-research-policy-snapshot` and `work-research-policy-apply` for the
+trusted research host. The latter needs the separately authenticated owner's
+private signed action and the operator-pinned signing key. An agent boolean,
+`BOARD_USER`, Git commit author or generic connector token is not that action.
+The host validates the configured key independently; a caller controlling that
+host filesystem is outside this boundary, as for research task admission.
+
+No migration or live adoption occurs during a kit upgrade. Before using policy
+control, install the complete reviewed kit and host changes. The first control
+write adds `settings.rook_research_control` and raises `settings.min_kit` to 127.
+Do not hand-edit it. Its monotonic revision and last action digest must survive
+all upgrades. Adoption/replacement refuses active or unresolved work; disabling
+only stops the existing intake policy and preserves outstanding grants and runs.
+Use the host's checked recovery before re-enabling after an interruption.
+
+Check `work-research-policy-snapshot`, normal board edits and `doctor` after the
+approved upgrade. Merely reading that snapshot writes nothing and starts no work.
+
 ### v126 (schema 4)
 
 Disabled-by-default public research pilot. Adds the packaged `research.py` helper,
