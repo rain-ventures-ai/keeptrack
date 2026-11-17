@@ -2703,8 +2703,8 @@ if (typeof window !== 'undefined') (() => {
     // Never query the parent directory: it can contain other boards.
     const paths = [c.path];
     if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
-    const commitDue = Date.now() - (flowMeta.commitsChecked || 0) >= 60000;
-    if (commitDue) publish({ commitsChecked: Date.now(), commitsPending: paths.length });
+    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute;
+    if (commitDue) publish({ commitsMinute: minute, commitsPending: paths.length });
     const commitReads = !commitDue ? [] : paths.map(async path => {
       try {
         const old = flowMeta.commitParts?.get(path);
