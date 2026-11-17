@@ -1178,7 +1178,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
+  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (!ok) resetFlowMeta(); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -2584,7 +2584,7 @@ if (typeof window !== 'undefined') (() => {
     applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox(); if ($('dlgSettings').open) syncDocsHome(undefined, !!$('secDocsHome')?.contains(document.activeElement));
     if (view !== 'board') {
       const listPos = listPosition();
-      const flowScroll = view === 'flow' ? [...$('board').querySelectorAll('.flow-graph-scroll, .flow-lanes')].map(n => [n.scrollLeft, n.scrollTop]) : [];
+      const flowScroll = Object.fromEntries(view === 'flow' ? [...$('board').querySelectorAll('.flow-graph-scroll, .flow-lanes')].map(n => [n.className, [n.scrollLeft, n.scrollTop]]) : []);
       const flowFocus = view === 'flow' ? document.activeElement?.dataset.card : null;
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
@@ -2592,7 +2592,7 @@ if (typeof window !== 'undefined') (() => {
       ({ flow: renderFlow, list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, archive: renderArchiveView, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
-      if (flowScroll.length) $('board').querySelectorAll('.flow-graph-scroll, .flow-lanes').forEach((n, i) => { if (flowScroll[i]) { n.scrollLeft = flowScroll[i][0]; n.scrollTop = flowScroll[i][1]; } });
+      $('board').querySelectorAll('.flow-graph-scroll, .flow-lanes').forEach(n => { const pos = flowScroll[n.className]; if (pos) { n.scrollLeft = pos[0]; n.scrollTop = pos[1]; } });
       if (flowFocus) [...$('board').querySelectorAll('.flow-card')].find(n => n.dataset.card === flowFocus)?.focus({ preventScroll: true });
       if ($('dlgCard').open) refreshDrawer(); return;
     }
@@ -2632,7 +2632,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
-  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '';
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowLimit = 500;
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
   const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta() {
@@ -2650,9 +2650,11 @@ if (typeof window !== 'undefined') (() => {
       if (r.status === 304) return { unchanged: true };
       if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
       if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
-      return { data: endpoint.startsWith('/contents/') ? (await fileJson(r, 'automation/local-runner.json', c)).raw : await r.json(), tag: r.headers.get('ETag') };
+      let data = await r.json();
+      if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
+      return { data, tag: r.headers.get('ETag') };
     };
-    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : c.path;
+    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
     const results = await Promise.allSettled([
       previous.runnerMissingUntil > Date.now() ? Promise.resolve({ unchanged: true }) : read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, previous.runnerTag),
       read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(dir)}&per_page=20`, previous.commitsTag)
@@ -2661,7 +2663,7 @@ if (typeof window !== 'undefined') (() => {
     const next = { ...previous, checked: Date.now() };
     results.forEach((r, i) => {
       const name = i ? 'commits' : 'runner';
-      if (r.status === 'rejected') { next[name + 'Error'] = 'Could not refresh ' + (i ? 'activity' : 'runner status'); if ([401, 403].includes(r.reason?.status)) { delete next[name]; delete next[name + 'Tag']; } }
+      if (r.status === 'rejected') { next[name + 'Error'] = 'Could not refresh ' + (i ? 'activity' : 'runner status'); if ([401, 403, 404].includes(r.reason?.status)) { delete next[name]; delete next[name + 'Tag']; } }
       else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; if (!i) next.runnerMissingUntil = r.value.data === null ? Date.now() + 300000 : 0; } }
     });
     flowMeta = next; flowRequest = null;
@@ -2672,10 +2674,10 @@ if (typeof window !== 'undefined') (() => {
     }
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
-  function flowLayout(tasks) {
-    const byId = new Map(tasks.map(t => [t.id, t])), edges = [], next = new Map(tasks.map(t => [t.id, []]));
+  function flowComponents(tasks) {
+    const byId = new Map(tasks.map(t => [t.id, t])), edges = [], next = new Map(tasks.map(t => [t.id, []])), linkedIds = new Set();
     const reverse = new Map(tasks.map(t => [t.id, []]));
-    tasks.forEach(t => afterIds(t).forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); } }));
+    tasks.forEach(t => { const ids = afterIds(t); if (ids.length) { linkedIds.add(t.id); ids.forEach(id => linkedIds.add(id)); } ids.forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); } }); });
     const visited = new Set(), order = [], groups = [], groupOf = new Map();
     // Iterative Kosaraju traversal: deep chains use heap storage rather than the browser call stack.
     tasks.forEach(t => {
@@ -2689,12 +2691,21 @@ if (typeof window !== 'undefined') (() => {
       while (stack.length) { const at = stack.pop(); group.push(at); reverse.get(at).forEach(to => { if (!groupOf.has(to)) { groupOf.set(to, groups.length); stack.push(to); } }); }
       groups.push(group);
     });
+    const cycles = new Set(); groups.forEach(g => { if (g.length > 1 || afterIds(byId.get(g[0])).includes(g[0])) g.forEach(id => cycles.add(id)); });
+    return { byId, edges, groups, groupOf, cycles, linkedIds };
+  }
+  function flowBoardGraph() {
+    if (!flowGraphCache || flowGraphCache.tasks !== state.tasks) flowGraphCache = { tasks: state.tasks, ...flowComponents(state.tasks) };
+    return flowGraphCache;
+  }
+  function flowLayout(tasks) {
+    const { edges, groups, groupOf, cycles } = flowComponents(tasks);
     const incoming = groups.map(() => new Set()), outgoing = groups.map(() => new Set()), ranks = groups.map(() => 0);
     edges.forEach(([a, b]) => { const x = groupOf.get(a), y = groupOf.get(b); if (x !== y) { incoming[y].add(x); outgoing[x].add(y); } });
     const degree = incoming.map(s => s.size), queue = degree.flatMap((n, i) => n ? [] : [i]);
     for (let i = 0; i < queue.length; i++) { const x = queue[i]; outgoing[x].forEach(y => { ranks[y] = Math.max(ranks[y], ranks[x] + 1); if (!--degree[y]) queue.push(y); }); }
     const rows = new Map(), positions = new Map();
-    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 170, cycle: groups[groupOf.get(t.id)].length > 1 || afterIds(t).includes(t.id) }); });
+    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 170, cycle: cycles.has(t.id) }); });
     return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 170 + 24 };
   }
   function flowCard(t, position) {
@@ -2705,7 +2716,7 @@ if (typeof window !== 'undefined') (() => {
     node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
     if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
     else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
-    const deps = afterLinks(t);
+    const deps = afterLinks(t, flowBoardGraph().byId);
     if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', '); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
     if (position && position.cycle) node.append(el('span', 'flow-cycle', 'Dependency cycle'));
     if (waitingOf(t)) node.append(el('span', 'flow-cycle', 'Waiting'));
@@ -2732,10 +2743,13 @@ if (typeof window !== 'undefined') (() => {
   function renderFlow() {
     const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading'), meta = flowCurrentMeta();
     top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
-    const doneVisible = flowDone && !$('fHideDone').checked;
-    const toggle = ui.button({ label: doneVisible ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !doneVisible; if (flowDone) { $('fHideDone').checked = false; if ($('fStatus').value === '__open') $('fStatus').value = ''; } render(); } }); top.append(toggle); shell.append(top, flowStatus(meta));
-    const content = el('div', 'flow-content'), main = el('div', 'flow-main'), all = state.tasks.filter(t => filtered(t) && (flowDone || !isDoneTask(t)) && (!$('fHideDone').checked || !isDoneTask(t)));
-    const linkedIds = new Set(state.tasks.flatMap(t => afterIds(t).length ? [t.id, ...afterIds(t)] : []));
+    const toggle = ui.button({ label: flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); top.append(toggle); shell.append(top, flowStatus(meta));
+    const content = el('div', 'flow-content'), main = el('div', 'flow-main'), status = $('fStatus').value;
+    let matching;
+    try { if (flowDone && status === '__open') $('fStatus').value = ''; matching = state.tasks.filter(t => filtered(t) && (flowDone || !isDoneTask(t))); } finally { $('fStatus').value = status; }
+    const all = matching.slice(0, flowLimit);
+    if (matching.length > all.length) { const limit = el('div', 'flow-limit', `Showing ${all.length} of ${matching.length} matching cards. Filter by project or label, or show more.`); limit.append(ui.button({ label: 'Show 500 more', size: 'sm', onClick: () => { flowLimit += 500; render(); } })); main.append(limit); }
+    const linkedIds = flowBoardGraph().linkedIds;
     const linked = all.filter(t => linkedIds.has(t.id)), free = all.filter(t => !linkedIds.has(t.id));
     main.append(el('h3', '', `Dependency chains · ${linked.length}`));
     if (linked.length) {
@@ -2745,10 +2759,15 @@ if (typeof window !== 'undefined') (() => {
       const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('width', layout.width); svg.setAttribute('height', layout.height); svg.setAttribute('aria-hidden', 'true');
       const defs = document.createElementNS(ns, 'defs'), marker = document.createElementNS(ns, 'marker'); marker.id = 'flow-arrow'; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto');
       const arrow = document.createElementNS(ns, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); marker.append(arrow); defs.append(marker); svg.append(defs);
-      layout.edges.forEach(([a, b]) => { const x = layout.positions.get(a), y = layout.positions.get(b), path = document.createElementNS(ns, 'path'), sx = x.x + 264, sy = x.y + 72, tx = y.x, ty = y.y + 72, bend = Math.max(24, (tx - sx) / 2); path.setAttribute('d', `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`); path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (x.cycle && y.cycle) path.classList.add('flow-edge-cycle'); svg.append(path); });
-      const full = flowLayout(state.tasks); // Detect cycles before project/label/Done filters hide an edge.
-      canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, { ...layout.positions.get(t.id), cycle: full.positions.get(t.id)?.cycle }))); graphScroll.append(canvas); main.append(graphScroll);
-      main.append(el('p', 'hint', 'Dependencies outside the current filters or collapsed Done remain listed on each card. Cycles are marked; they cannot become ready.'));
+      layout.edges.forEach(([a, b]) => {
+        const x = layout.positions.get(a), y = layout.positions.get(b), path = document.createElementNS(ns, 'path'), sx = x.x + 264, sy = x.y + (a === b ? 40 : 72), tx = x.x === y.x ? y.x + 264 : y.x, ty = y.y + (a === b ? 104 : 72), bend = Math.max(24, (tx - sx) / 2);
+        // Same-rank cycles and self-links enter from the right-hand gutter, outside the boxes.
+        path.setAttribute('d', x.x === y.x ? `M${sx},${sy} C${sx + 24},${sy} ${tx + 24},${ty} ${tx},${ty}` : `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
+        path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (x.cycle && y.cycle) path.classList.add('flow-edge-cycle'); svg.append(path);
+      });
+      const full = flowBoardGraph(); // Cached cycle membership survives project/label/Done filters.
+      canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, { ...layout.positions.get(t.id), cycle: full.cycles.has(t.id) }))); graphScroll.append(canvas); main.append(graphScroll);
+      main.append(el('p', 'hint', 'Dependencies outside this view remain listed on each card. Cycles are marked; they cannot become ready.'));
     } else main.append(el('p', 'hint', 'No dependency chains match these filters.'));
     main.append(el('h3', '', `No dependency links · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
     const lanes = el('div', 'flow-lanes');
@@ -3608,12 +3627,12 @@ if (typeof window !== 'undefined') (() => {
   // loaded it is unknown, and once loaded it is cancelled, archived without Done or missing.
   const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
   const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
-  function afterLinks(t) {
+  function afterLinks(t, byId) {
     const ids = afterIds(t); if (!ids.length) return [];   // most cards: nothing to look up
     let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }   // declared further down this file; a stale copy counts as not loaded
     let arch = null; try { arch = loaded ? archIdMap() : null; } catch { arch = null; } arch = arch || new Map();
     return ids.map(id => {
-      const live = state.tasks.find(x => x.id === id);
+      const live = byId ? byId.get(id) : state.tasks.find(x => x.id === id);
       if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
       const old = arch.get(id);   // the archive not loaded yet (and the board has one): unknown, not missing
       let years = 0; try { years = archYears().length; } catch { years = 0; }   // also declared further down

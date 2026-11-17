@@ -78,7 +78,7 @@ let base;
     await page.locator('#listPrioritise').waitFor();
     // Client and all selected filter controls are bookmarkable, including an explicit
     // clear snapshot. Reloads/asset upgrades and browser history restore the same scope.
-    await page.locator('.cpill').filter({ hasText: 'Acme' }).click({ position: { x: 25, y: 15 } });
+    await page.locator('#fClient').selectOption('Acme', { force: true });
     await page.waitForFunction(() => new URL(location.href).searchParams.get('client') === 'Acme');
     await page.reload();
     await page.waitForFunction(() => document.getElementById('fClient').selectedOptions[0]?.value === 'Acme');

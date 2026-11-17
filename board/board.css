@@ -4,7 +4,7 @@
 .flow-heading, .flow-status { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .flow-heading h2 { margin: 0; font-size: 22px; }
 .flow-heading .ui-btn { margin-left: auto; }
-.flow-status { margin: 16px 0 24px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card); font-size: 12px; }
+.flow-status, .flow-limit { margin: 16px 0 24px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card); font-size: 12px; }
 .flow-content { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 24px; }
 .flow-main { min-width: 0; }
 .flow-main h3, .flow-feed h3 { margin: 0 0 12px; font-size: 14px; }
