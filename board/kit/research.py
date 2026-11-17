@@ -841,17 +841,20 @@ def watch_poll_history(kt, args):
     if not isinstance(prior["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", prior["commit"]):
         fail("invalid watch cursor commit")
     page = kt.board_history(prior["commit"], project=prior["project"])   # each watched project keeps its own cache
+    def resolve(board_data):
+        return kt.find_project(board_data, args.project)["id"], kt.board_today(board_data).isoformat()
     try:
         data = kt.load_board_at(prior["commit"])
+        project, today = resolve(data)
         loaded = {prior["commit"]: data}
-    except (kt.BoardDecodeError, kt.BoardMissingError):   # the cursor sits on a commit without a readable board,
-        # already reported: resolve the project at head
-        data, loaded = kt.load_board_at(page["head"]), {}   # a corrupt head stops loudly
-    project = kt.find_project(data, args.project)["id"]
+    except (kt.BoardDecodeError, kt.BoardMissingError, Exception):   # the cursor sits on a commit whose board can't
+        # be read or has the wrong shape, already reported: resolve the project at head, which stops loudly if bad
+        data, loaded = kt.load_board_at(page["head"]), {}
+        project, today = resolve(data)
     if project != prior["project"]:
         fail("watch cursor belongs to another board, project or version")
     scope = {"v": 2, "board": board, "project": project}
-    today = kt.board_today(data).isoformat()   # feeds only chase and overdue, which history projections drop
+    # `today` feeds only chase and overdue, which history projections drop.
     projected = {}
 
     def project_at(commit):   # (projection, board) at one commit; a past commit is never registered for a save
@@ -886,6 +889,11 @@ def watch_poll_history(kt, args):
                 projected.clear()
                 problem = ("a board file at this commit or its first parent is not valid JSON"
                            if isinstance(unreadable, kt.BoardDecodeError) else "there is no board at this commit or its first parent")
+            except Exception as error:   # a past board of the wrong shape; never SystemExit or KeyboardInterrupt
+                if at == page["head"]:   # at head it still stops loudly
+                    raise
+                projected.clear()
+                problem = f"the board at this commit or its first parent has the wrong shape ({type(error).__name__})"
         if problem:
             # One loud event instead of a watcher stuck on this commit forever; the consumer reconciles the board.
             found = [{"board": board, "kind": "unreplayable", "text": f"cannot replay commit {commit}: {problem}; "

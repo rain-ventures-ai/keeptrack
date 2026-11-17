@@ -534,6 +534,34 @@ class Probe:
         self.no_board_then_back("board/tasks.json")
 
 
+    def wrong_shape_then_fixed(self, bad_text):
+        self.build()
+        cursor = self.poll()["cursor"]
+        path = Path(self.writer) / "board" / "cards" / "t_alpha.json"
+        good = path.read_text()
+        path.write_text(bad_text); self.run_git(self.writer, "commit", "-qam", "wrong shape")
+        bad = self.run_git(self.writer, "rev-parse", "HEAD")
+        path.write_text(good); self.run_git(self.writer, "commit", "-qam", "fixed")
+        fixed = self.run_git(self.writer, "rev-parse", "HEAD")
+        moved = self.split_card("t_alpha", 1, "Alpha after the fix")
+        self.push()
+        with mock.patch.object(kt, "WATCH_HISTORY_PAGE", 1):   # the page ends on the wrong-shaped commit
+            first = self.poll(cursor)
+        self.assertEqual([("unreplayable", bad)], [(e["kind"], e["commit"]) for e in first["events"]])
+        self.assertIn("wrong shape", first["events"][0]["text"])
+        self.assertEqual(bad, decode(first["cursor"])["commit"])
+        second = self.poll(first["cursor"])   # the cursor sits on it, and the next poll moves past it
+        self.assertEqual([("unreplayable", fixed), ("fields", moved)], [(e["kind"], e["commit"]) for e in second["events"]])
+        self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
+
+    def test_a_card_file_of_the_wrong_shape_is_one_loud_event(self):
+        self.wrong_shape_then_fixed("[]")
+
+    def test_a_claim_with_neither_time_is_one_loud_event(self):
+        bad = card("t_alpha", 1, "Alpha"); bad["claim"] = {"agent": "codex", "status": "running"}
+        self.wrong_shape_then_fixed(json.dumps(bad, indent=1))
+
+
 class ProbeGit(Probe, GitBoard):
     pass
 
@@ -623,6 +651,14 @@ class ApiCost(GitBoard):
             if not result["more"]:
                 break
         self.assertEqual(made, [e["commit"] for e in events])
+
+    def test_blobs_of_past_commits_are_not_written_to_disk(self):
+        cursor = self.poll()["cursor"]
+        past = self.change(lambda d: self.alpha(d).update(title="deleted later " + os.urandom(4).hex()), push=False)
+        self.change(lambda d: self.alpha(d).update(title="Alpha"))
+        blob = self.run_git(self.remote, "rev-parse", f"{past}:board/tasks.json")
+        self.assertEqual(2, len(self.poll(cursor)["events"]))
+        self.assertEqual([], list(Path(kt.CACHE_DIR).rglob(blob + ".json")))
 
     def test_old_and_surplus_cache_files_are_pruned(self):
         folder = Path(kt._history_cache_file("pr_one")).parent

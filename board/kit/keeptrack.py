@@ -1103,18 +1103,28 @@ def _blob_cache_file(sha):
     return os.path.join(CACHE_DIR, *REPO.split("/"), sha + ".json")
 
 
-def _api_blob(sha):
+_API_BLOB_MEMO = {}   # kit v133 history: blobs of past commits, kept in memory for this run only
+
+
+def _api_blob(sha, persist=True):
+    """persist=False (kit v133 history): a blob read for a past commit is used but not written to the local cache, so
+    board data deleted since then is not copied to disk; it is kept in memory for the rest of this run."""
     cache = _blob_cache_file(sha)
     try:
         with open(cache, encoding="utf-8") as f:
             return f.read()
     except OSError:
         pass
+    if not persist and sha in _API_BLOB_MEMO:
+        return _API_BLOB_MEMO[sha]
     rc, out, err = gh(f"repos/{REPO}/git/blobs/{sha}")
     if rc:
         sys.exit(f"cannot read board blob {sha}: {err.strip() or out.strip()}")
     d = json.loads(out)
     text = base64.b64decode(d.get("content", "")).decode() if d.get("encoding") == "base64" else d.get("content", "")
+    if not persist:
+        _API_BLOB_MEMO[sha] = text
+        return text
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
@@ -1327,7 +1337,7 @@ def _api_snapshot(include_archive=False, ref=None):
             continue
         files[rel] = {"sha": item["sha"], "size": item.get("size", 0)}
         if not rel.startswith("archive/") or include_archive:
-            text = _api_blob(item["sha"])
+            text = _api_blob(item["sha"]) if ref is None else _api_blob(item["sha"], persist=False)
             files[rel]["text"] = text
             files[rel]["size"] = item.get("size", len(text.encode()))
     if "tasks.json" not in files:

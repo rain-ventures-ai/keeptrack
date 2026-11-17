@@ -46,8 +46,8 @@ own commits; there is no new event store. No new card field, no migration, no `m
   own commit and again at the merge (with a different `id`). Nothing is skipped silently: a side branch longer than the 200-commit
   scan cap is not replayed commit by commit; it gives one `unreplayable` event naming the merge and how many side-branch commits
   were not replayed, and the merge itself is still diffed.
-- A commit that cannot be projected (over the 256-card or 128 KiB bound, with no board folder, or with a board file that is not
-  valid JSON) gives one `unreplayable` event for that commit (`card: null`) and the replay moves on; reconcile the board when you
+- A commit that cannot be projected (over the 256-card or 128 KiB bound, with no board folder, with a board file that is not
+  valid JSON, or with board data of the wrong shape, named by the error type only) gives one `unreplayable` event for that commit (`card: null`) and the replay moves on; reconcile the board when you
   see one. A call stops loudly only when it must read an unreadable board at head (head itself changed the board, or the cursor
   sits on an unreadable commit); a cursor left on a past commit without a readable board moves on.
 - API transport: commit parents (which never change) are cached under the kit's cache folder (`history/` next to the blob
@@ -57,7 +57,8 @@ own commits; there is no new event store. No new card field, no migration, no `m
   files unused for 14 days or past 32 per repo are removed. The cache only saves requests: each poll checks its range against
   GitHub's commit count for cursor..head (one small compare, which also checks ancestry) and that every commit is reached from
   head, and falls back to a full compare otherwise. Board folder trees are not kept on disk. A rewritten branch drops it.
-- Blobs read for past commits stay in the blob cache until the next ordinary read of the board at head prunes them.
+- Blobs read for past commits are kept in memory for the run only, never written to the blob cache, so board data deleted since
+  is not copied to disk. The history cache file name is a hash of branch, board path and project, never a cursor's text.
 - If the head's first-parent line differs from the old cursor's (a merge whose first parent is another branch), the cursor moves
   to the new line and commits already delivered can be replayed again: a repeat, never a gap.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently
