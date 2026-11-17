@@ -841,11 +841,14 @@ def watch_poll_history(kt, args):
     if not isinstance(prior["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", prior["commit"]):
         fail("invalid watch cursor commit")
     page = kt.board_history(prior["commit"], project=prior["project"])   # each watched project keeps its own cache
-    def resolve(board_data):
-        return kt.find_project(board_data, args.project)["id"], kt.board_today(board_data).isoformat()
+    def resolve(board_data, past=False):
+        found = kt.find_project(board_data, args.project, allow_missing=past)
+        if found is None:   # not on the cursor's own commit: ask head, which stops loudly if it is gone
+            raise LookupError("project not found")
+        return found["id"], kt.board_today(board_data).isoformat()
     try:
         data = kt.load_board_at(prior["commit"])
-        project, today = resolve(data)
+        project, today = resolve(data, past=True)
         loaded = {prior["commit"]: data}
     except (kt.BoardDecodeError, kt.BoardMissingError, Exception):   # the cursor sits on a commit whose board can't
         # be read or has the wrong shape, already reported: resolve the project at head, which stops loudly if bad

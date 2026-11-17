@@ -57,8 +57,9 @@ own commits; there is no new event store. No new card field, no migration, no `m
   files unused for 14 days or past 32 per repo are removed. The cache only saves requests: each poll checks its range against
   GitHub's commit count for cursor..head (one small compare, which also checks ancestry) and that every commit is reached from
   head, and falls back to a full compare otherwise. Board folder trees are not kept on disk. A rewritten branch drops it.
-- Blobs read for past commits are kept in memory for the run only, never written to the blob cache, so board data deleted since
-  is not copied to disk. The history cache file name is a hash of branch, board path and project, never a cursor's text.
+- Blobs read for the head commit go to the blob cache as usual, so an idle poll reads no blobs however big the board. Blobs read
+  only for past commits are kept in memory for the run (bounded, per process), never written to disk, so board data deleted since
+  is not copied there. A cursor on a commit without its project resolves the project at head. The history cache file name is a hash of branch, board path and project, never a cursor's text.
 - If the head's first-parent line differs from the old cursor's (a merge whose first parent is another branch), the cursor moves
   to the new line and commits already delivered can be replayed again: a repeat, never a gap.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently

@@ -1103,7 +1103,9 @@ def _blob_cache_file(sha):
     return os.path.join(CACHE_DIR, *REPO.split("/"), sha + ".json")
 
 
-_API_BLOB_MEMO = {}   # kit v133 history: blobs of past commits, kept in memory for this run only
+_API_BLOB_MEMO = {}   # kit v133 history: blobs of past commits, kept in memory for this run only (bounded)
+_API_MEMO_CHARS = 32 * 1024 * 1024
+_HISTORY_HEAD = [None]   # kit v133: the branch head this run's history read; its blobs are current data, cached on disk
 
 
 def _api_blob(sha, persist=True):
@@ -1123,6 +1125,8 @@ def _api_blob(sha, persist=True):
     d = json.loads(out)
     text = base64.b64decode(d.get("content", "")).decode() if d.get("encoding") == "base64" else d.get("content", "")
     if not persist:
+        if sum(map(len, _API_BLOB_MEMO.values())) + len(text) > _API_MEMO_CHARS:
+            _API_BLOB_MEMO.clear()   # bounded: past blobs are read again rather than held without limit
         _API_BLOB_MEMO[sha] = text
         return text
     try:
@@ -1288,6 +1292,8 @@ def _api_board_tree(head, missing_ok=False):
         return _API_TREE_MEMO[(head, PATH)]
     found = _api_board_tree_read(head, missing_ok)
     if missing_ok:
+        if len(_API_TREE_MEMO) >= 10000:
+            _API_TREE_MEMO.clear()   # bounded per process
         _API_TREE_MEMO[(head, PATH)] = found
     return found
 
@@ -1337,7 +1343,7 @@ def _api_snapshot(include_archive=False, ref=None):
             continue
         files[rel] = {"sha": item["sha"], "size": item.get("size", 0)}
         if not rel.startswith("archive/") or include_archive:
-            text = _api_blob(item["sha"]) if ref is None else _api_blob(item["sha"], persist=False)
+            text = _api_blob(item["sha"]) if ref is None else _api_blob(item["sha"], persist=ref == _HISTORY_HEAD[0])
             files[rel]["text"] = text
             files[rel]["size"] = item.get("size", len(text.encode()))
     if "tasks.json" not in files:
@@ -1461,8 +1467,10 @@ def board_history_head():
     _history_transport()
     if WRITE == "git":
         _check_git_clone()
-        return _git_fetch_head()
-    return _api_head()
+        _HISTORY_HEAD[0] = _git_fetch_head()
+    else:
+        _HISTORY_HEAD[0] = _api_head()
+    return _HISTORY_HEAD[0]
 
 
 def _git_history(since):
@@ -1721,6 +1729,7 @@ def board_history(since, limit=None, project=""):
         sys.exit("invalid watch cursor commit")
     limit = WATCH_HISTORY_PAGE if limit is None else limit
     head, _order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since, project)
+    _HISTORY_HEAD[0] = head
     picked, last, examined, known = [], since, 0, {None: None}
     for tip, unit in _history_units(head, parents):
         if len(unit) > WATCH_HISTORY_SCAN:

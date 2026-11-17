@@ -562,12 +562,46 @@ class Probe:
         self.wrong_shape_then_fixed(json.dumps(bad, indent=1))
 
 
+    def test_a_cursor_on_a_commit_without_the_project_moves_on(self):
+        self.build()
+        cursor = self.poll()["cursor"]
+        self.run_git(self.writer, "rm", "-q", "board/projects/pr_one.json")
+        self.run_git(self.writer, "commit", "-qm", "project gone")
+        gone = self.run_git(self.writer, "rev-parse", "HEAD")
+        self.run_git(self.writer, "revert", "--no-edit", "HEAD")
+        moved = self.split_card("t_alpha", 1, "Alpha with its project back")
+        self.push()
+        with mock.patch.object(kt, "WATCH_HISTORY_PAGE", 1):
+            first = self.poll(cursor)
+        self.assertEqual(gone, decode(first["cursor"])["commit"])
+        second = self.poll(first["cursor"])
+        self.assertEqual([("fields", moved)], [(e["kind"], e["commit"]) for e in second["events"]])
+        self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
+
+
 class ProbeGit(Probe, GitBoard):
     pass
 
 
 class ProbeApi(Probe, GitBoard):
     WRITE = "api"
+
+    def test_an_idle_poll_reads_no_blobs_however_big_the_board(self):
+        self.build()
+        for n in range(20):   # a board of about 25 files
+            self.split_card(f"t_more{n:02d}", 10 + n, f"More {n}")
+        self.push()
+        calls, real = [], self.fake_gh
+        counted = lambda *a, body=None: (calls.append(a[0]), real(*a, body=body))[1]
+        cursor = self.poll()["cursor"]
+        blobs = []
+        for _ in range(2):   # each poll is a new process: no memory carried over
+            calls.clear()
+            with mock.patch.object(kt, "gh", counted), mock.patch.object(kt, "_API_BLOB_MEMO", {}), \
+                    mock.patch.object(kt, "_API_TREE_MEMO", {}):
+                cursor = self.poll(cursor)["cursor"]
+            blobs.append(sum(1 for c in calls if "/git/blobs/" in c))
+        self.assertEqual(0, blobs[1], f"blob reads on two idle polls: {blobs}")
 
 
 class ApiCost(GitBoard):
