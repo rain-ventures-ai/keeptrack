@@ -141,6 +141,7 @@ class BacklogResearch(unittest.TestCase):
         self.settings_set(backlog_research="on")
         self.assertIn("locked", lock())
         self.assertIn("researching", self.read()["tasks"][0]["labels"])
+        self.assertEqual("labels: researching", self.read()["tasks"][0]["history"][-1]["text"])   # kit v132: the label change is on the card
         with self.assertRaises(SystemExit) as e:
             lock()   # a second dispatcher: refused, nothing written
         self.assertIn("refused", str(e.exception))

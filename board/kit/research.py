@@ -677,7 +677,7 @@ def read_failed(kt, work, args):
             "remaining": "Check source availability or hand this request to Rook again when ready.", "next_actor": "owner"}
         added = "needs-human" not in task.setdefault("labels", [])
         if added:
-            task["labels"].append("needs-human"); kt.hist(task, "labels: needs-human")
+            task["labels"].append("needs-human"); kt.hist_labels(task)
         co["research"]["prelaunch_note"] = {"reason": "source_unavailable", "label_added": added}
         kt.move_task_to_column(data, task, "backlog")
         kt._MUT["after"].append(lambda d: kt.drop_claim_file(task["id"]))
@@ -874,7 +874,7 @@ def command(kt, work, args):
                 kt.move_task_to_column(data, task, "backlog")
                 added = "needs-human" not in task.setdefault("labels", [])
                 if added:
-                    task["labels"].append("needs-human"); kt.hist(task, "labels: needs-human")
+                    task["labels"].append("needs-human"); kt.hist_labels(task)
                 co["research"]["prelaunch_note"] = {"reason": args.reason, "label_added": added}
             result.update(task=work.view(kt, task, data=data))
         kt.mutate(change, "Rook: research prelaunch status")

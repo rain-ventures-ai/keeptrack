@@ -11,6 +11,12 @@ fine-grained token paste. New optional setting `settings.github_app_signin` `{cl
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code
 exchange. See `docs/help/github-signin.md`.
 
+Kit v132: every label change on a card now leaves a `labels: a, b` history line with the full resulting list (or `labels: none`),
+so a reader can prove from history alone who placed a label. New writers of that line: `research-lock`, `label-set --rename`,
+`label-rm --force` (one line per card, written just before the existing "label X renamed/removed" line), `merge-card` when the target gains
+labels, and `add --label`. Rook research writes the full list for needs-human (it wrote the literal `labels: needs-human`).
+Existing lines and boards are unchanged. No schema change.
+
 Kit v131: a browser signed in with GitHub learns its username from `GET /user` when `kb_me` is empty (after sign-in, and once
 at start-up), so comments no longer show as "someone"; a typed username is never replaced. The "Sign in again" failure counters
 are kept per board. `settings-set --github-app-signin` refuses a client id with a trailing newline, as the page does.

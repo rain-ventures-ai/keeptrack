@@ -25,6 +25,18 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v132 (schema 4)
+
+Every change to a card's label set now leaves a `labels:` history line carrying the full resulting list (`labels: a, b`, or
+`labels: none`). No new card field, no migration, no `min_kit` change; an upgrade changes no card.
+
+- New writers of the line: `research-lock` (adds `researching`), `label-set --rename` and `label-rm --force` (one line per
+  affected card, just before the existing "label X renamed to Y" / "label X removed" line), `merge-card` (only when the target card
+  gains labels) and `add --label` (a card created with labels). `task-set --label/--unlabel` and the web page already wrote it.
+- Rook research writes the full list when it adds `needs-human`, not the literal `labels: needs-human`; the two agree when
+  that is the card's only label.
+- Not yet covered: proposal merge, inbound create and web-page board-wide rename/delete or create.
+
 ### v131 (schema 4)
 
 Two small fixes, one in each tool. No new card field, no migration, no `min_kit` change; an upgrade changes no card.
