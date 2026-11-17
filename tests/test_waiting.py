@@ -118,6 +118,29 @@ class Waiting(unittest.TestCase):
         self.edit(lambda d: d["tasks"][n - 1]["claim"].update(changes))
 
     # --- wait ------------------------------------------------------------------------------------------------------
+    def test_until_stores_a_condition_and_does_not_record_approval(self):
+        text = self.wait(1, on="the pull request", until=" pr:acme/app#09:merged ")
+        waiting = self.card(1)["waiting"]
+        self.assertEqual("pr:acme/app#9:merged", waiting["until"])
+        self.assertNotIn("authority", waiting)
+        self.assertNotIn("approved", json.dumps(self.card(1)))
+        self.assertIn("until pr:acme/app#9:merged; not an approval", text)
+        self.assertIn("until pr:acme/app#9:merged", self.card(1)["history"][-1]["text"])
+        self.wait(2, until="date:2026-11-17")
+        self.assertEqual("date:2026-11-17", self.card(2)["waiting"]["until"])
+        self.wait(3, until="release:acme/app@v1.2.3")
+        self.assertEqual("release:acme/app@v1.2.3", self.card(3)["waiting"]["until"])
+        with open(self.file, encoding="utf-8") as stream:
+            before = stream.read()
+        message = self.refusal(kt.cmd_wait, Args(id="t_c4", on="the pull request", who=None, nudge=None, note=None,
+                                                 session=None, until="pr:acme/app#9:approved"))
+        self.assertIn("not an approval", message)
+        with open(self.file, encoding="utf-8") as stream:
+            self.assertEqual(before, stream.read())
+        self.assertIsNone(self.card(4).get("waiting"))
+        self.wait(2, on="a person")
+        self.assertNotIn("until", self.card(2)["waiting"])
+
     def test_wait_records_who_since_nudge_by_and_a_hashed_session(self):
         with self.agent():
             self.wait(1, who="jezhub", nudge="2026-12-01", note="asked by email", session="s1")

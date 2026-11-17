@@ -7,7 +7,7 @@ local file with --file for testing. Every write re-reads the latest file and ret
 SHA conflict, so a human editing the board in the browser never gets overwritten.
 
   keeptrack.py list [-q "text"] [--column todo] [--assignee osouthgate] [--unclaimed] [--attention] [--waiting] [--waiting-on me]
-  keeptrack.py reconcile --dry-run   # one row per open card older than a day: close, ask, leave or park (writes nothing)
+  keeptrack.py reconcile --dry-run   # one row per open card older than a day, plus a wait audit or a quiet-claim row (writes nothing)
   keeptrack.py show ID
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
@@ -473,7 +473,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 135  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 136  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -3440,6 +3440,53 @@ def waiting_text(w, limit=80):
     return clean(w.get("on") or "?", limit)
 
 
+# A checkable wait (`wait --until`) is a condition, never an owner-authority wait and never an approval.
+# pr: is merged state only. date: is a calendar day. release: is owner/repo@tag, published and not a draft.
+_WAIT_UNTIL_PR = re.compile(r"^pr:((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)#([0-9]+):merged$")
+_WAIT_UNTIL_DATE = re.compile(r"^date:(\d{4}-\d{2}-\d{2})$")
+_WAIT_UNTIL_RELEASE = re.compile(r"^release:((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)@([A-Za-z0-9._+-]{1,64})$")
+
+
+def wait_condition(until):
+    """('pr', owner, repo, number), ('date', day) or ('release', owner, repo, tag), else None.
+    Anything that is not one of those three forms is not a condition, including a condition with extra words."""
+    text = " ".join(str(until or "").split())
+    match = _WAIT_UNTIL_PR.fullmatch(text)
+    if match:
+        number = int(match.group(3))
+        if 1 <= number <= 2147483647:
+            return ("pr", match.group(1), match.group(2), number)
+        return None
+    match = _WAIT_UNTIL_DATE.fullmatch(text)
+    if match:
+        try:
+            dt.date.fromisoformat(match.group(1))
+        except ValueError:
+            return None
+        return ("date", match.group(1))
+    match = _WAIT_UNTIL_RELEASE.fullmatch(text)
+    if match:
+        return ("release", match.group(1), match.group(2), match.group(3))
+    return None
+
+
+def wait_condition_text(cond):
+    """The condition in the form a dry run prints and `wait --until` stores."""
+    if cond[0] == "pr":
+        return f"pr:{cond[1]}/{cond[2]}#{cond[3]}:merged"
+    if cond[0] == "date":
+        return f"date:{cond[1]}"
+    return f"release:{cond[1]}/{cond[2]}@{cond[3]}"
+
+
+def wait_owner_authority(waiting):
+    """True only when the wait says it is owner-authority and it has no checkable condition.
+    A condition is never owner-authority, even if the same object also says authority owner."""
+    if not isinstance(waiting, dict) or wait_condition(waiting.get("until")):
+        return False
+    return waiting.get("authority") == "owner"
+
+
 def check_who(data, who):
     """--who: a CRM person id (p_...), a board member's GitHub login or an agent name; '' for nobody in particular."""
     who = (who or "").strip().lstrip("@")
@@ -4436,6 +4483,13 @@ def cmd_wait(a):
     if len(on) > 200:
         sys.exit("--on is at most 200 characters; put the detail in --note or a comment")
     note = " ".join(str(a.note or "").split())
+    until = ""
+    if getattr(a, "until", None):
+        cond = wait_condition(a.until)
+        if not cond:
+            sys.exit("refused: --until must be pr:<owner>/<repo>#<n>:merged, date:<YYYY-MM-DD> or "
+                     "release:<owner>/<repo>@<tag>. A condition is not an approval.")
+        until = wait_condition_text(cond)
 
     def fn(data):
         t = find(data, a.id)
@@ -4454,12 +4508,15 @@ def cmd_wait(a):
         _MUT["rerun"] = True   # the claim rules read this card's claim: a lost race re-runs on the newer board, never a merge
         w = {"on": on, "who": who, "since": (old or {}).get("since") or board_today(data).isoformat(), "nudge": nudge,
              "note": note, "by": who_am_i(None), "by_session": mine}
+        if until:
+            w["until"] = until   # a checkable condition; not owner-authority and not an approval
         t["waiting"] = w
         st = data.setdefault("settings", {})
         if not (isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) and st["min_kit"] >= WAITING_KIT):
             st["min_kit"] = WAITING_KIT   # older kits don't refuse a waiting card: doctor and relay check this from v43
         c = t.get("claim")
-        hist(t, f"waiting on {on}" + (f" ({who})" if who else "") + (f", chase {nudge}" if nudge else "") + (f": {note}" if note else ""))
+        hist(t, f"waiting on {on}" + (f" ({who})" if who else "") + (f", chase {nudge}" if nudge else "")
+             + (f", until {until}" if until else "") + (f": {note}" if note else ""))
         if c and c.get("status") in ("running", "blocked", "stuck"):   # stuck too: else doctor's CLAIM_BLOCKED fires at once
             own = bool(c.get("session_id")) and not is_placeholder_claim(c) and c["session_id"] in my_sessions(a, t.get("id"))
             if own or not agent_run():
@@ -4471,7 +4528,8 @@ def cmd_wait(a):
             elif claim_state(data, c) in ("running", "blocked"):
                 note_agent_cleared(t, "wait on a live claim", sid)   # (d): left alone, but recorded for review
         t["updated"] = now()
-        print(f"#{t.get('num', '?')} waiting on {on}" + (f" ({who})" if who else "") + f"; chase {chase_date(data, w) or 'off'}")
+        print(f"#{t.get('num', '?')} waiting on {on}" + (f" ({who})" if who else "") + f"; chase {chase_date(data, w) or 'off'}"
+              + (f"; until {until}; not an approval" if until else ""))
     mutate(fn, f"Waiting: {a.id}")
 
 
@@ -13469,8 +13527,9 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
             return held, warnings, files
 
 
-# Dry-run reconcile: one stdout row per open card older than a day. The model reads these rows and nothing else.
-# Pull-request evidence is one GraphQL read of state and mergedAt. This release never writes the board.
+# Dry-run reconcile: one stdout row per open card older than a day, then a wait audit or a quiet-claim row.
+# The model reads these rows and nothing else. Pull-request evidence is one GraphQL read of state and mergedAt.
+# A release condition is one read of isDraft and publishedAt. This release never writes the board.
 _RECONCILE_PR = re.compile(r"^https://github\.com/((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)/pull/([0-9]+)$")
 _RECONCILE_DAY = 86400
 
@@ -13584,8 +13643,9 @@ def _reconcile_merged_day(info):
 
 
 def _reconcile_park_since(waiting, clock):
-    """The wait's start date when it has no chase date and is older than 7 days, else ''."""
-    if not waiting:
+    """The wait's start date when it has no condition, no chase date and is older than 7 days, else ''.
+    A checkable condition is not this park: its audit line says whether the condition is met."""
+    if not waiting or wait_condition(waiting.get("until")):
         return ""
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(waiting.get("nudge") or "")):
         return ""
@@ -13650,28 +13710,154 @@ def _reconcile_row(data, task, prs, states, questions, clock):
     return f"leave {label} still open"
 
 
+def _reconcile_condition_targets(task):
+    """Pull requests and releases named by a checkable wait. Other waits name neither."""
+    waiting = open_waiting(task)
+    cond = wait_condition(waiting.get("until")) if waiting else None
+    if not cond:
+        return [], []
+    if cond[0] == "pr":
+        return [(cond[1], cond[2], cond[3])], []
+    if cond[0] == "release":
+        return [], [(cond[1], cond[2], cond[3])]
+    return [], []
+
+
+def _reconcile_read_releases(releases):
+    """One batched read of isDraft and publishedAt. None means that release could not be read."""
+    ordered, seen = [], set()
+    for owner, repo, tag in releases:
+        low = (owner.lower(), repo.lower(), tag)
+        if low in seen:
+            continue
+        seen.add(low)
+        ordered.append((owner, repo, tag))
+    ordered.sort(key=lambda item: (item[0].lower(), item[1].lower(), item[2]))
+    if not ordered:
+        return {}
+    parts = []
+    for i, (owner, repo, tag) in enumerate(ordered):
+        parts.append(f"r{i}: repository(owner: {json.dumps(owner)}, name: {json.dumps(repo)}) "
+                     f"{{ release(tagName: {json.dumps(tag)}) {{ isDraft publishedAt }} }}")
+    rc, out, _err = gh("-X", "POST", "graphql", "--input", "-", body={"query": "query { " + " ".join(parts) + " }"})
+    if rc != 0:
+        sys.exit("reconcile: could not read release state (isDraft and publishedAt only); wrote nothing")
+    try:
+        payload = json.loads(out)
+    except ValueError:
+        sys.exit("reconcile: release state was not JSON; wrote nothing")
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        sys.exit("reconcile: release state had no data; wrote nothing")
+    states = {}
+    for i, (owner, repo, tag) in enumerate(ordered):
+        node = data.get(f"r{i}")
+        release = node.get("release") if isinstance(node, dict) else None
+        low = (owner.lower(), repo.lower(), tag)
+        if not isinstance(release, dict):
+            states[low] = None
+        else:
+            states[low] = (release.get("isDraft"), release.get("publishedAt"))
+    return states
+
+
+def _reconcile_release_day(info):
+    """The publish date when the release exists, is not a draft, and publishedAt is a date. A draft is not proof."""
+    if not info or info[0] is not False:
+        return ""
+    day = str(info[1] or "")[:10]
+    return day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else ""
+
+
+def _reconcile_expired_since(waiting, clock):
+    """The start date when a wait has no checkable condition and that date is at least 7 days ago, else ''.
+    Expiry is not an approval. A condition wait does not expire this way."""
+    if not waiting or wait_condition(waiting.get("until")):
+        return ""
+    try:
+        since = dt.date.fromisoformat(str(waiting.get("since") or ""))
+    except ValueError:
+        return ""
+    return since.isoformat() if (clock.date() - since).days >= 7 else ""
+
+
+def _reconcile_unattended_quiet(claim, clock):
+    """A UTC timestamp when an unattended claim has had no heartbeat for 24 hours.
+    An attended claim, a finished claim, a live claim and a missing time are not this.
+    The timestamp is the clock reading, never the stored text, so the row cannot carry extra words."""
+    if not isinstance(claim, dict) or not claim or claim.get("status") == "done" or claim.get("attended") is True:
+        return ""
+    raw = claim.get("heartbeat_at") or claim.get("claimed_at")
+    try:
+        last = parse(str(raw))
+    except (TypeError, ValueError):
+        return ""
+    if (clock - last).total_seconds() < 24 * 3600:
+        return ""
+    return last.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _reconcile_extra(data, task, states, releases, clock):
+    """Audit and quiet-claim lines after the verb row. They describe evidence. They do not clear or release."""
+    label = _reconcile_label(task)
+    lines = []
+    waiting = open_waiting(task)
+    if waiting:
+        cond = wait_condition(waiting.get("until"))
+        if cond:
+            text = wait_condition_text(cond)
+            if cond[0] == "pr":
+                day = _reconcile_merged_day(states.get((cond[1].lower(), cond[2].lower(), cond[3])))
+            elif cond[0] == "date":
+                day = cond[1] if cond[1] <= clock.date().isoformat() else ""
+            else:
+                day = _reconcile_release_day(releases.get((cond[1].lower(), cond[2].lower(), cond[3])))
+            state = f"met {day}" if day else "unresolved"
+            lines.append(f"audit {label} condition {text} {state}; not owner-authority; not an approval")
+        else:
+            since = _reconcile_expired_since(waiting, clock)
+            if since:
+                kind = "owner-authority" if wait_owner_authority(waiting) else "no condition"
+                lines.append(f"audit {label} wait expired since {since}; {kind}; not an approval")
+    if not _reconcile_claim_live(data, task.get("claim"), clock):
+        quiet = _reconcile_unattended_quiet(task.get("claim"), clock)
+        if quiet:
+            lines.append(f"release {label} unattended claim, no heartbeat since {quiet}")
+    return lines
+
+
 def reconcile_rows(data, clock=None):
-    """Rows for open cards older than a day, lowest number first. Done cards and newer cards are absent."""
+    """Rows for open cards older than a day, lowest number first. Done cards and newer cards are absent.
+    A verb row may be followed by one wait audit and one quiet-claim row. Nothing here writes the board."""
     clock = clock or reconcile_clock()
     questions = _reconcile_questions(data)
     chosen = [task for task in (data.get("tasks") or [])
               if isinstance(task, dict) and task.get("column") != "done" and _reconcile_older(task.get("updated"), clock)]
-    by_id, prs = {}, []
+    by_id, prs, releases = {}, [], []
     for task in chosen:
         found = _reconcile_prs(task)
+        more, rel = _reconcile_condition_targets(task)
         by_id[id(task)] = found
         prs.extend(found)
+        prs.extend(more)
+        releases.extend(rel)
     states = _reconcile_read_prs(prs)
+    rel_states = _reconcile_read_releases(releases)
     chosen.sort(key=lambda task: (task.get("num") if isinstance(task.get("num"), int) and not isinstance(task.get("num"), bool) else 10 ** 12,
                                   str(task.get("id") or "")))
-    return [_line_guard(_reconcile_row(data, task, by_id[id(task)], states, questions, clock)) for task in chosen]
+    rows = []
+    for task in chosen:
+        rows.append(_line_guard(_reconcile_row(data, task, by_id[id(task)], states, questions, clock)))
+        rows.extend(_line_guard(line) for line in _reconcile_extra(data, task, states, rel_states, clock))
+    return rows
 
 
 def cmd_reconcile(a):
-    """Print one row per open card older than a day. This release only dry-runs: it never closes, merges, deploys or writes."""
+    """Print one row per open card older than a day, then any wait audit or quiet-claim row.
+    This release only dry-runs: it never closes, clears a wait, releases a claim, merges, deploys or writes."""
     if not getattr(a, "dry_run", False):
         sys.exit("refused: reconcile only prints a dry run in this release (pass --dry-run). "
-                 "It does not close a card, merge, deploy or write a rule.")
+                 "It does not close a card, clear a wait, release a claim, merge, deploy or write a rule.")
     data, _base = load()
     for row in reconcile_rows(data):
         print(row)
@@ -15186,10 +15372,11 @@ def main():
     s.add_argument("--who", help="the GitHub login who decides (default: the first assignee, else you)"); s.add_argument("--session")
     s.add_argument("--force", action="store_true", help="act on a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_review)
     s = sub.add_parser("auto-heartbeat"); s.set_defaults(f=cmd_auto_heartbeat)
-    s = sub.add_parser("wait", help="park a card on a person or an event: --on text [--who p_id|login] [--nudge +3|date] [--note ..]")
+    s = sub.add_parser("wait", help="park a card on a person or an event: --on text [--who p_id|login] [--nudge +3|date] [--until condition] [--note ..]")
     s.add_argument("id"); s.add_argument("--on", required=True, help="what or whom the card waits for (always shown)")
     s.add_argument("--who", help="a CRM person id (p_...), a board member's GitHub login or an agent name")
     s.add_argument("--nudge", help="the day to chase: YYYY-MM-DD, today or +N (default: settings.waiting_days after today)")
+    s.add_argument("--until", help="a checkable condition, not an approval: pr:<owner>/<repo>#<n>:merged, date:<YYYY-MM-DD> or release:<owner>/<repo>@<tag>")
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
     s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
     s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
@@ -15307,7 +15494,7 @@ def main():
     s = sub.add_parser("touch-url", help="set or clear (\"\") a contact log entry's source link, such as its Gmail thread"); s.add_argument("ref"); s.add_argument("url")
     s.add_argument("--touch", help="log entry id (default: the latest)"); s.set_defaults(f=cmd_touch_url)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
-    s = sub.add_parser("reconcile", help="one row per open card older than a day (close, ask, leave or park); --dry-run writes nothing")
+    s = sub.add_parser("reconcile", help="one row per open card older than a day (close, ask, leave or park), plus a wait audit or a quiet-claim row; --dry-run writes nothing")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_reconcile)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
