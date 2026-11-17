@@ -25,6 +25,18 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v131 (schema 4)
+
+Two small fixes, one in each tool. No new card field, no migration, no `min_kit` change; an upgrade changes no card.
+
+- `keeptrack.py settings-set --github-app-signin` now refuses a `client_id` with a trailing newline. The check used a regex
+  ending in `$`, which accepts one; the web page rejects it, so a value that passed the CLI could be ignored by the page. It
+  now matches the whole string, like the page.
+- Web page: a browser signed in with GitHub fills an empty username (`kb_me`) from GitHub's `GET /user`, right after sign-in
+  and once at start-up for a browser already signed in, so its comments and edits no longer show as "someone". A username the
+  person typed in Settings is never replaced. The "Sign in again" failure counters are now kept per board, so one board's
+  failed renewals never prompt on another board open in the same tab.
+
 ### v130 (schema 4)
 
 `keeptrack.py settings-set` can set and clear `settings.github_app_signin`, the board's own Sign in with GitHub setting

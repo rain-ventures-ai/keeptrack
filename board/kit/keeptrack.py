@@ -472,7 +472,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 130  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 131  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -9664,7 +9664,7 @@ DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "ma
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
                      "card_contact_details", "github_app_signin")
 
-SIGNIN_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,64}$")   # the same shape board.js parseSigninConfig accepts
+SIGNIN_CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{8,64}")   # used with fullmatch (a "$" would accept a trailing newline the page rejects); the same shape board.js parseSigninConfig accepts
 
 
 def parse_github_app_signin(text):
@@ -9675,7 +9675,7 @@ def parse_github_app_signin(text):
     if not isinstance(raw, dict) or set(raw) != {"client_id", "exchange_url"}:
         raise ValueError("github_app_signin must be an object with exactly client_id and exchange_url")
     cid, ex = raw["client_id"], raw["exchange_url"]
-    if not isinstance(cid, str) or not SIGNIN_CLIENT_ID_RE.match(cid):
+    if not isinstance(cid, str) or not SIGNIN_CLIENT_ID_RE.fullmatch(cid):
         raise ValueError("client_id is not a GitHub App client id (8 to 64 letters, digits, . _ -)")
     if not isinstance(ex, str) or not ex or any(ord(c) <= 32 or ord(c) == 127 for c in ex):
         raise ValueError("exchange_url must be a web address with no spaces")
