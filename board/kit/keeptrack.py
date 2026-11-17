@@ -472,7 +472,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 132  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 133  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -12942,15 +12942,46 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     return out
 
 
+def archive_split_board(data):
+    """Only a split board that owns its folder may write archive part files: one-file boards can share a folder and its
+    archive/, and repacking would move another board's records into parts its index never lists. Unknown counts as shared."""
+    return data.get("version") == 4 and data.get("layout") == "split" \
+        and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False
+
+
+def archive_oversize_years(data, plan, base):
+    """Logical years the plan does not touch whose indexed archive files already include one over ARCHIVE_FILE_MAX (kit v133).
+    An archive run re-splits them, so no archive file is left over the limit. Only a split board that owns its folder."""
+    if not archive_split_board(data):
+        return []
+    indexed, out = archive_years(data), []
+    for key in indexed:
+        year = key[:4]   # an indexed part whose base year is not indexed still counts: the re-split creates the base file
+        if year in plan or year in out or not valid_year(year):
+            continue
+        cur, _ = read_archive(key, base)
+        if not isinstance(cur, dict):
+            continue
+        size = max(getattr(cur, "stored_bytes", None) or 0, len(_json_text(cur).encode()))
+        if size > ARCHIVE_FILE_MAX:
+            out.append(year)
+    return out
+
+
 def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_history=0):
     """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
     back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
     other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
     the years to write, so the size checked is the text written. History lines of a held year go back to their items (on the
     board, or in another planned year, which is then measured again)."""
-    held, blocked_years = [], set()
+    held, blocked_years, kept_warnings = [], set(), []
+    # kit v133: a year already over the limit is re-split, never appended to. One card (archive <ref>, merge-card) only
+    # moves that card and leaves unrelated years alone: it plans no re-split, so it never reads or rewrites other years.
+    resplit = set() if ref_orig is not None else set(archive_oversize_years(data, plan, base))
+    for y in resplit:
+        plan[y] = {"tasks": [], "contacts": [], "proposals": [], "history": {}}
     while True:
-        warnings, files, again = [], {}, False
+        warnings, files, again = list(kept_warnings), {}, False
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
@@ -12964,12 +12995,18 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
             size = len(_json_text(cur).encode())
             # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
             # and repacking would move another board's records into parts its index never lists. They hold the year back.
-            split = data.get("version") == 4 and data.get("layout") == "split" \
-                and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False   # unknown or shared: archive/ may hold another board's records
+            split = archive_split_board(data)
             if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
                 except ArchiveUnpackable as exc:
+                    # only while the part is still empty: once a held entity's old history was added to this year (the held path
+                    # below), deleting the plan would drop those lines, so it falls through to the held / lines-back path instead
+                    if y in resplit and not (part["tasks"] or part["contacts"] or part.get("proposals") or part["history"]):   # nothing of this year's own is being archived: leave the files as they are and say so
+                        note = f"warning: {rel} is over its {ARCHIVE_FILE_MAX // 1024} KB limit and cannot be re-split ({exc}). " + ARCHIVE_NEXT_STEP
+                        warnings.append(note); kept_warnings.append(note)   # kept: the year leaves the plan and the loop may run again
+                        del plan[y]
+                        continue
                     if any(key.startswith(y + "-") for key in archive_years(data)):
                         sys.exit(f"not saved: archive parts for {y} cannot be repacked ({exc}); nothing changed")
                     packed = None   # preserve the original year and all live records when one unit cannot fit
@@ -13079,6 +13116,7 @@ def _cmd_archive(a):
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
         summary = f"task #{task.get('num')} ({clean(task['title'], 80)}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
         if not plan:
+            for line in size_warnings: print(line, file=sys.stderr)   # a year left alone with a warning must still be said
             if not ref and slimmed:
                 if a.dry_run:
                     print(f"would slim {slimmed} decided proposal(s); nothing was saved")

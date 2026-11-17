@@ -25,6 +25,24 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v133 (schema 4)
+
+`keeptrack.py archive` now re-splits archive files that are already over the doctor limit (900 KB) into bounded parts, and never
+appends to a file that is over it. No new card field, no migration; an upgrade changes no card.
+
+- Before this, a year was repacked only when the run had something new to put in it. A year file or part already over the limit
+  (for example one written by an older kit, or edited by hand) stayed over it until the year next received records, and doctor
+  kept failing it. Now every `archive` run measures each indexed year and repacks any year with a file over the limit, even when
+  nothing is due for that year.
+- The invariant: no archive file is over the limit after an archive run, and an archive run never grows a file already over it.
+- Same boundary as before: only a split board that owns its folder writes part files (it needs kit v107 to read them; the board's
+  `min_kit` is raised to 107 as for any split). A one-file or shared-folder board is left unchanged, as is a year whose single
+  record cannot fit a part: the run warns and leaves those files as they are.
+- Cost: each bulk `archive` run reads every indexed archive file once to measure it (before, only the years being written); on API or
+  hosted backends each read is a network call. `archive <card>` and `merge-card` (which archives the merged card) do not re-split:
+  they move that one card and never read or rewrite other years for this purpose.
+- A year that cannot be re-split is left as it is and the warning is printed on stderr, also when nothing else is due.
+
 ### v132 (schema 4)
 
 Every change to a card's label set now leaves a `labels:` history line carrying the full resulting list (`labels: a, b`, or
