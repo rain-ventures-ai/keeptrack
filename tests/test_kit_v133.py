@@ -579,17 +579,65 @@ class ApiCost(GitBoard):
                 if not result["more"]:
                     break
         self.assertEqual((20, self.head()), (polls, decode(cursor)["commit"]))
-        self.assertLessEqual(self.compares(), 11, f"{self.compares()} compare calls for a 1000-commit catch-up")
-        self.empty_commits(5)   # a newer head: only its new commits are compared
+        # The range is read once (10 pages); every later poll adds one small count check.
+        self.assertLessEqual(self.compares(), 10 + polls, f"{self.compares()} compare calls for a 1000-commit catch-up")
+        self.empty_commits(5)   # a newer head: only its new commits are compared, plus the count check
         self.calls.clear()
         self.poll(cursor)
-        self.assertEqual(1, self.compares())
+        self.assertEqual(2, self.compares())
 
-    def cache(self):
+    def cache(self, project="pr_one"):
         try:
-            return json.loads(Path(kt._history_cache_file()).read_text())
+            return json.loads(Path(kt._history_cache_file(project)).read_text())
         except FileNotFoundError:
             return None
+
+    def test_two_watchers_keep_their_own_backlogs(self):
+        ahead = self.poll()["cursor"]
+        behind = self.poll(project="pr_two")["cursor"]
+        self.empty_commits(1000)
+        ahead = self.poll(ahead)["cursor"]   # watcher A catches up to head at once (no board change)
+        self.calls.clear()
+        with mock.patch.object(kt, "WATCH_HISTORY_SCAN", 50):
+            for _ in range(20):   # A polls at head between each of B's catch-up polls
+                ahead = self.poll(ahead)["cursor"]
+                result = self.poll(behind, project="pr_two"); behind = result["cursor"]
+        self.assertFalse(result["more"]); self.assertEqual(self.head(), decode(behind)["commit"])
+        # A: one count check per poll. B: the range once (10 pages), then one count check per poll.
+        self.assertLessEqual(self.compares(), 20 + 10 + 20, f"{self.compares()} compare calls for two watchers")
+
+    def test_a_tampered_cache_costs_requests_never_commits(self):
+        cursor = self.poll()["cursor"]
+        made = [self.change(lambda d, n=n: self.alpha(d).update(title=f"Alpha {n}"), push=False) for n in range(6)]
+        self.push()
+        with mock.patch.object(kt, "WATCH_HISTORY_PAGE", 2):
+            first = self.poll(cursor)
+        path = Path(kt._history_cache_file("pr_one"))
+        cache = json.loads(path.read_text())
+        hidden = next(c for c in made[2:] if c in cache["parents"])
+        cache["parents"].pop(hidden)   # a commit taken out of the local cache
+        path.write_text(json.dumps(cache))
+        events, cursor = list(first["events"]), first["cursor"]
+        while True:
+            result = self.poll(cursor); events += result["events"]; cursor = result["cursor"]
+            if not result["more"]:
+                break
+        self.assertEqual(made, [e["commit"] for e in events])
+
+    def test_old_and_surplus_cache_files_are_pruned(self):
+        folder = Path(kt._history_cache_file("pr_one")).parent
+        folder.mkdir(parents=True)
+        for n in range(40):
+            stale = folder / f"{n:016x}.json"; stale.write_text("{}")
+            os.utime(stale, (1, 1) if n < 5 else None)
+        (folder / "keep-me.txt").write_text("not a cache file")
+        cursor = self.poll()["cursor"]
+        self.change(lambda d: self.alpha(d).update(title="moved"))
+        self.poll(cursor)
+        names = {p.name for p in folder.iterdir()}
+        self.assertIn("keep-me.txt", names); self.assertIn(Path(kt._history_cache_file("pr_one")).name, names)
+        self.assertLessEqual(len([n for n in names if n.endswith(".json")]), kt.WATCH_HISTORY_CACHE_FILES)
+        self.assertFalse({f"{n:016x}.json" for n in range(5)} & names)
 
     def test_the_cache_holds_the_backlog_not_the_history(self):
         cursor = self.poll()["cursor"]
@@ -602,7 +650,6 @@ class ApiCost(GitBoard):
         self.assertFalse(result["more"])
         self.assertEqual([1000 - 20 * k for k in range(1, 51)], sizes)
         self.assertEqual((decode(cursor)["commit"], self.head()), (self.cache()["base"], self.cache()["head"]))
-        self.assertLessEqual(len(self.cache()["trees"]), 2)
         writes = []
         real = kt.atomic_write
         with mock.patch.object(kt, "atomic_write", lambda path, text, *a, **k: (writes.append(path), real(path, text, *a, **k))):

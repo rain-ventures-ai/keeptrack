@@ -840,7 +840,7 @@ def watch_poll_history(kt, args):
         fail("watch cursor belongs to another board, project or version")
     if not isinstance(prior["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", prior["commit"]):
         fail("invalid watch cursor commit")
-    page = kt.board_history(prior["commit"])
+    page = kt.board_history(prior["commit"], project=prior["project"])   # each watched project keeps its own cache
     try:
         data = kt.load_board_at(prior["commit"])
         loaded = {prior["commit"]: data}

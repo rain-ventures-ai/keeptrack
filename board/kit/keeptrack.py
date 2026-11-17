@@ -1486,46 +1486,62 @@ def _git_history(since):
     return head, order, parents, trees
 
 
-WATCH_HISTORY_CACHE_MAX = 20000   # API transport: commits kept in the history cache at most
+WATCH_HISTORY_CACHE_MAX = 20000   # API transport: commits kept in one history cache file at most
+WATCH_HISTORY_CACHE_FILES = 32    # history cache files kept per board repo at most
+WATCH_HISTORY_CACHE_DAYS = 14     # a history cache file unused this long is removed
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 
 
-def _history_cache_file():
-    """One file per branch and board path, next to the blob cache: {v, base, head, parents, trees}. It holds only commit
-    facts that never change (a commit's parents, its board folder's tree), so it is valid for any later head that
-    descends from `head`."""
-    import hashlib
-    key = hashlib.sha256(f"{BRANCH}\0{PATH}".encode()).hexdigest()[:16]
+def _history_cache_file(project=""):
+    """One file per branch, board path and watched project, next to the blob cache: {v, base, head, parents, trees}.
+    Each watcher keeps its own backlog, so two watchers far apart never trim each other's. It holds only commit facts
+    that never change (a commit's parents, its board folder's tree), so it is valid for any later head that descends
+    from `head`."""
+    key = hashlib.sha256(f"{BRANCH}\0{PATH}\0{project}".encode()).hexdigest()[:16]
     return os.path.join(CACHE_DIR, *REPO.split("/"), "history", key + ".json")
 
 
-def _history_cache_read():
+def _history_cache_prune(keep):
+    """Remove history cache files unused for WATCH_HISTORY_CACHE_DAYS, then the oldest past WATCH_HISTORY_CACHE_FILES.
+    Only plain files named like a cache file; never a link or anything else."""
+    folder = os.path.dirname(keep)
     try:
-        with open(_history_cache_file(), encoding="utf-8") as f:
+        with os.scandir(folder) as entries:
+            files = [(e.stat(follow_symlinks=False).st_mtime, e.path) for e in entries
+                     if re.fullmatch(r"[0-9a-f]{16}\.json", e.name) and e.is_file(follow_symlinks=False) and e.path != keep]
+    except OSError:
+        return
+    files.sort(reverse=True)
+    cutoff = time.time() - WATCH_HISTORY_CACHE_DAYS * 86400
+    for n, (mtime, path) in enumerate(files):
+        if mtime < cutoff or n >= WATCH_HISTORY_CACHE_FILES - 1:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
+def _history_cache_read(project=""):
+    try:
+        with open(_history_cache_file(project), encoding="utf-8") as f:
             d = json.load(f)
     except (OSError, ValueError):
         return None
     sha = lambda v: isinstance(v, str) and _SHA40.fullmatch(v) is not None
-    if not (isinstance(d, dict) and d.get("v") == 1 and sha(d.get("base")) and sha(d.get("head"))
-            and isinstance(d.get("parents"), dict) and isinstance(d.get("trees"), dict)):
+    if not (isinstance(d, dict) and set(d) == {"v", "base", "head", "parents"} and d["v"] == 2 and sha(d["base"])
+            and sha(d["head"]) and isinstance(d["parents"], dict)):
         return None
     if not all(sha(k) and isinstance(v, list) and all(sha(p) for p in v) for k, v in d["parents"].items()):
-        return None
-    if not all(sha(k) and (v == "missing" or sha(v)) for k, v in d["trees"].items()):
         return None
     return d
 
 
 def _history_cache_text(d):
-    """The file text for d: only the trees its commits (and their parents) can still need."""
-    keep = set(d["parents"]) | {d["base"]} | {p for ps in d["parents"].values() for p in ps}
-    return json.dumps({**d, "trees": {k: v for k, v in d["trees"].items() if k in keep}}, separators=(",", ":"), sort_keys=True)
+    return json.dumps(d, separators=(",", ":"), sort_keys=True)
 
 
-def _history_cache_write(d, before=None):
+def _history_cache_write(d, before=None, project=""):
     """Save d, unless it is what the file already holds (`before`). Over the limit the file is removed, never left
     stale: the next call compares from its own cursor."""
-    path = _history_cache_file()
+    path = _history_cache_file(project)
     if len(d["parents"]) > WATCH_HISTORY_CACHE_MAX:
         with contextlib.suppress(OSError):
             os.unlink(path)
@@ -1541,14 +1557,16 @@ def _history_cache_write(d, before=None):
         atomic_write(path, text)
     except OSError:
         pass
+    _history_cache_prune(path)
 
 
-def _api_compare(base, head, refuse=True):
+def _api_compare(base, head, refuse=True, count=False):
     """{commit: parents} for base..head from the compare API. refuse: a base that is unknown or not an ancestor of
-    head stops loudly; otherwise (a cache's old head) None comes back instead."""
+    head stops loudly; otherwise (a cache's old head) None comes back instead. count: one small request that checks
+    the same and returns only how many commits base..head holds."""
     parents, total = {}, 0
     for page in range(1, WATCH_HISTORY_COMPARE + 1):
-        rc, out, err = gh(f"repos/{REPO}/compare/{base}...{head}?per_page=100&page={page}")
+        rc, out, err = gh(f"repos/{REPO}/compare/{base}...{head}?per_page={1 if count else 100}&page={page}")
         if rc:
             if re.search(r"\b(404|422)\b|Not Found|No commit found", err + out):
                 if not refuse:
@@ -1561,6 +1579,8 @@ def _api_compare(base, head, refuse=True):
                 return None
             _history_refuse(base, f"is not an ancestor of {REPO}@{BRANCH} (the branch was force-pushed or rewritten)")
         total = int(d.get("total_commits") or 0)
+        if count:
+            return total
         rows = d.get("commits") or []
         for c in rows:
             parents[c["sha"]] = [x.get("sha") for x in c.get("parents") or []]
@@ -1602,11 +1622,27 @@ def _history_cache_range(cache, since):
     return {c: ps for c, ps in known.items() if c not in behind}
 
 
-def _api_history(since):
-    """Like _git_history, from the GitHub API. Commit facts (parents, board folder trees) are cached on disk, so a run
-    of catch-up polls against one head reads the compare range once, and a newer head only reads its new commits."""
+def _history_cache_checked(parents, head, since):
+    """The cache is local data, so it only ever saves requests: its range must be exactly what GitHub says since..head
+    holds (one small compare, which also checks `since` is an ancestor of head and refuses loudly), and every commit
+    in it must be reached from head. Anything else falls back to a full compare."""
+    if _api_compare(since, head, count=True) != len(parents):
+        return None
+    reached, stack = set(), [head] if parents else []
+    while stack:
+        c = stack.pop()
+        if c in parents and c not in reached:
+            reached.add(c)
+            stack.extend(parents[c])
+    return parents if reached == set(parents) else None
+
+
+def _api_history(since, project=""):
+    """Like _git_history, from the GitHub API. Each watched project keeps its commit parents (which never change) on
+    disk, so a run of catch-up polls against one head reads the compare range once, a newer head reads only its new
+    commits, and two watchers never trim each other's backlog. Board folder trees are read once per run."""
     head = _api_head()
-    cache, parents = _history_cache_read(), None
+    cache, parents = _history_cache_read(project), None
     before = _history_cache_text(cache) if cache else None
     if cache and cache["head"] != head:
         tail = _api_compare(cache["head"], head, refuse=False)   # only the commits the head gained
@@ -1616,23 +1652,20 @@ def _api_history(since):
             cache["parents"].update(tail); cache["head"] = head
     if cache:
         parents = _history_cache_range(cache, since)
+        if parents is not None:
+            parents = _history_cache_checked(parents, head, since)
     if parents is None:   # the compare also checks `since` is an ancestor of head, and refuses loudly
         parents = _api_compare(since, head)
-        cache = {"v": 1, "base": since, "head": head, "parents": dict(parents), "trees": (cache or {}).get("trees", {})}
+        cache = {"v": 2, "base": since, "head": head, "parents": dict(parents)}
 
     def trees(commits):
-        found = {}
-        for c in commits:
-            if c not in cache["trees"]:
-                cache["trees"][c] = _api_board_tree(c, missing_ok=True)[1]
-            found[c] = cache["trees"][c]
-        return found
+        return {c: _api_board_tree(c, missing_ok=True)[1] for c in commits}
 
     def flush(cursor):   # keep only what is left after the new cursor; write once, and only when something changed
         left = _history_cache_range(cache, cursor)
         if left is not None:
             cache["parents"], cache["base"] = left, cursor
-        _history_cache_write(cache, before)
+        _history_cache_write(cache, before, project)
     trees.flush = flush
     return head, list(parents), parents, trees
 
@@ -1661,7 +1694,7 @@ def _history_units(head, parents):
     return units
 
 
-def board_history(since, limit=None):
+def board_history(since, limit=None, project=""):
     """Kit v133, read-only. Replays since..head in whole units along head's first-parent line: for each first-parent
     commit Fi (oldest first), the commits of Fi^1..Fi in topological order (a merge with its side branch, or one plain
     commit). {head, commits: [...], next, more}. Each item is {commit, parent, missing} for a commit whose board folder
@@ -1677,7 +1710,7 @@ def board_history(since, limit=None):
     if not isinstance(since, str) or not re.fullmatch(r"[0-9a-f]{40}", since):
         sys.exit("invalid watch cursor commit")
     limit = WATCH_HISTORY_PAGE if limit is None else limit
-    head, _order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since)
+    head, _order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since, project)
     picked, last, examined, known = [], since, 0, {None: None}
     for tip, unit in _history_units(head, parents):
         if len(unit) > WATCH_HISTORY_SCAN:

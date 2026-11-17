@@ -48,12 +48,16 @@ own commits; there is no new event store. No new card field, no migration, no `m
   were not replayed, and the merge itself is still diffed.
 - A commit that cannot be projected (over the 256-card or 128 KiB bound, with no board folder, or with a board file that is not
   valid JSON) gives one `unreplayable` event for that commit (`card: null`) and the replay moves on; reconcile the board when you
-  see one. A corrupt board at head still stops loudly. A cursor left on a commit without a readable board moves on.
-- API transport: commit facts (parents and board folder trees, which never change) are cached under the kit's cache folder
-  (`history/` next to the blob cache, one bounded file per branch and board path), so a catch-up reads its compare range once
-  and a newer head reads only its new commits. Each save keeps only the commits after the new cursor (the backlog), a poll that
-  learned nothing writes nothing, and a cache that would pass 20,000 commits is rebuilt from the cursor or removed, never left
-  stale. A rewritten branch drops the cache.
+  see one. A call stops loudly only when it must read an unreadable board at head (head itself changed the board, or the cursor
+  sits on an unreadable commit); a cursor left on a past commit without a readable board moves on.
+- API transport: commit parents (which never change) are cached under the kit's cache folder (`history/` next to the blob
+  cache), one file per branch, board path and watched project, so two watchers never trim each other's backlog. A catch-up reads
+  its compare range once and a newer head reads only its new commits. Each save keeps only the commits after the new cursor, a
+  poll that learned nothing writes nothing, a cache that would pass 20,000 commits is rebuilt from the cursor or removed, and
+  files unused for 14 days or past 32 per repo are removed. The cache only saves requests: each poll checks its range against
+  GitHub's commit count for cursor..head (one small compare, which also checks ancestry) and that every commit is reached from
+  head, and falls back to a full compare otherwise. Board folder trees are not kept on disk. A rewritten branch drops it.
+- Blobs read for past commits stay in the blob cache until the next ordinary read of the board at head prunes them.
 - If the head's first-parent line differs from the old cursor's (a merge whose first parent is another branch), the cursor moves
   to the new line and commits already delivered can be replayed again: a repeat, never a gap.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently
