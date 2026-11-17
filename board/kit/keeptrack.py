@@ -472,7 +472,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 133  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 134  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1103,13 +1103,13 @@ def _blob_cache_file(sha):
     return os.path.join(CACHE_DIR, *REPO.split("/"), sha + ".json")
 
 
-_API_BLOB_MEMO = {}   # kit v133 history: blobs of past commits, kept in memory for this run only (bounded)
+_API_BLOB_MEMO = {}   # kit v134 history: blobs of past commits, kept in memory for this run only (bounded)
 _API_MEMO_CHARS = 32 * 1024 * 1024
-_HISTORY_HEAD = [None]   # kit v133: the branch head this run's history read; its blobs are current data, cached on disk
+_HISTORY_HEAD = [None]   # kit v134: the branch head this run's history read; its blobs are current data, cached on disk
 
 
 def _api_blob(sha, persist=True):
-    """persist=False (kit v133 history): a blob read for a past commit is used but not written to the local cache, so
+    """persist=False (kit v134 history): a blob read for a past commit is used but not written to the local cache, so
     board data deleted since then is not copied to disk; it is kept in memory for the rest of this run."""
     cache = _blob_cache_file(sha)
     try:
@@ -1221,7 +1221,7 @@ def _git_fetch_head():
 
 
 def _git_snapshot(include_archive=False, ref=None):
-    """ref (kit v133): read the board at that commit instead of fetching the branch head. The caller has checked it."""
+    """ref (kit v134): read the board at that commit instead of fetching the branch head. The caller has checked it."""
     _check_git_clone()
     head = _git_fetch_head() if ref is None else ref
     base = os.path.dirname(PATH).strip("/")
@@ -1282,11 +1282,11 @@ def _api_head():
     return json.loads(out)["object"]["sha"]
 
 
-_API_TREE_MEMO = {}   # kit v133 history: commit sha -> (root tree, board folder tree); a commit never changes
+_API_TREE_MEMO = {}   # kit v134 history: commit sha -> (root tree, board folder tree); a commit never changes
 
 
 def _api_board_tree(head, missing_ok=False):
-    """(root tree, board folder tree) of one commit. missing_ok (kit v133 history): a commit without the board folder
+    """(root tree, board folder tree) of one commit. missing_ok (kit v134 history): a commit without the board folder
     gives "missing" instead of stopping, and the answer is remembered for this run (a commit sha never changes)."""
     if missing_ok and (head, PATH) in _API_TREE_MEMO:
         return _API_TREE_MEMO[(head, PATH)]
@@ -1319,7 +1319,7 @@ def _api_board_tree_read(head, missing_ok):
 
 
 def _api_snapshot(include_archive=False, ref=None):
-    """ref (kit v133): read the board at that commit instead of the branch head. The caller has checked it. A past
+    """ref (kit v134): read the board at that commit instead of the branch head. The caller has checked it. A past
     commit never prunes the blob cache, which holds the head's blobs."""
     head = _api_head() if ref is None else ref
     root_tree, sha = _api_board_tree(head) if ref is None else _api_board_tree(head, missing_ok=True)
@@ -1359,11 +1359,11 @@ _BOARD_STATES = {}
 
 
 class BoardDecodeError(SystemExit):
-    """A board file that is not valid JSON (kit v133: history replay tells it apart from a transport failure)."""
+    """A board file that is not valid JSON (kit v134: history replay tells it apart from a transport failure)."""
 
 
 class BoardMissingError(SystemExit):
-    """No board (no board folder or no tasks.json) at a past commit (kit v133 history; never raised for the head)."""
+    """No board (no board folder or no tasks.json) at a past commit (kit v134 history; never raised for the head)."""
 
 
 def _decode_json(rel, entry):
@@ -1378,7 +1378,7 @@ def _decode_json(rel, entry):
 def _github_load_board(ref=None):
     """Load either layout into the v3-shaped in-memory model used by commands.
 
-    ref (kit v133, read-only): the board as it was at that commit, through the same decoding and layout code. Such a
+    ref (kit v134, read-only): the board as it was at that commit, through the same decoding and layout code. Such a
     board is never registered for a save, and the shared-folder flag of the live board is left as it was."""
     if not REPO and not FILE:
         sys.exit("cannot tell which board to use: run keeptrack.py from a clone of the board repo, run `keeptrack.py use owner/name` "
@@ -1435,7 +1435,7 @@ def _github_load_board(ref=None):
     return data
 
 
-# ---- board history for `watch-poll --history` (kit v133) -------------------------------------------------------------
+# ---- board history for `watch-poll --history` (kit v134) -------------------------------------------------------------
 # A read-only replay of the board branch's own commits; there is no second event store. Every commit after the cursor
 # (all of `since..head`, side branches included) is replayed in whole units along head's first-parent line, each unit
 # in topological order, each commit diffed against its own first parent, so every event is a real change on some
@@ -1713,7 +1713,7 @@ def _history_units(head, parents):
 
 
 def board_history(since, limit=None, project=""):
-    """Kit v133, read-only. Replays since..head in whole units along head's first-parent line: for each first-parent
+    """Kit v134, read-only. Replays since..head in whole units along head's first-parent line: for each first-parent
     commit Fi (oldest first), the commits of Fi^1..Fi in topological order (a merge with its side branch, or one plain
     commit). {head, commits: [...], next, more}. Each item is {commit, parent, missing} for a commit whose board folder
     differs from its own first parent's (`missing`: no board folder there, nothing to project), or {commit, gap} for a
@@ -1758,7 +1758,7 @@ def board_history(since, limit=None, project=""):
 
 
 def load_board_at(commit):
-    """Kit v133, read-only: the board as it was at one commit of its branch. Never registered for a save."""
+    """Kit v134, read-only: the board as it was at one commit of its branch. Never registered for a save."""
     _history_transport()
     return _github_load_board(ref=commit)
 
@@ -13348,15 +13348,46 @@ def shard_archive_family(year, current, current_sha, incoming, data, base, absor
     return out
 
 
+def archive_split_board(data):
+    """Only a split board that owns its folder may write archive part files: one-file boards can share a folder and its
+    archive/, and repacking would move another board's records into parts its index never lists. Unknown counts as shared."""
+    return data.get("version") == 4 and data.get("layout") == "split" \
+        and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False
+
+
+def archive_oversize_years(data, plan, base):
+    """Logical years the plan does not touch whose indexed archive files already include one over ARCHIVE_FILE_MAX (kit v133).
+    An archive run re-splits them, so no archive file is left over the limit. Only a split board that owns its folder."""
+    if not archive_split_board(data):
+        return []
+    indexed, out = archive_years(data), []
+    for key in indexed:
+        year = key[:4]   # an indexed part whose base year is not indexed still counts: the re-split creates the base file
+        if year in plan or year in out or not valid_year(year):
+            continue
+        cur, _ = read_archive(key, base)
+        if not isinstance(cur, dict):
+            continue
+        size = max(getattr(cur, "stored_bytes", None) or 0, len(_json_text(cur).encode()))
+        if size > ARCHIVE_FILE_MAX:
+            out.append(year)
+    return out
+
+
 def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_history=0):
     """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
     back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
     other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
     the years to write, so the size checked is the text written. History lines of a held year go back to their items (on the
     board, or in another planned year, which is then measured again)."""
-    held, blocked_years = [], set()
+    held, blocked_years, kept_warnings = [], set(), []
+    # kit v133: a year already over the limit is re-split, never appended to. One card (archive <ref>, merge-card) only
+    # moves that card and leaves unrelated years alone: it plans no re-split, so it never reads or rewrites other years.
+    resplit = set() if ref_orig is not None else set(archive_oversize_years(data, plan, base))
+    for y in resplit:
+        plan[y] = {"tasks": [], "contacts": [], "proposals": [], "history": {}}
     while True:
-        warnings, files, again = [], {}, False
+        warnings, files, again = list(kept_warnings), {}, False
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
@@ -13370,12 +13401,18 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
             size = len(_json_text(cur).encode())
             # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
             # and repacking would move another board's records into parts its index never lists. They hold the year back.
-            split = data.get("version") == 4 and data.get("layout") == "split" \
-                and _BOARD_STATES.get(id(data), {}).get("shared_folder") is False   # unknown or shared: archive/ may hold another board's records
+            split = archive_split_board(data)
             if split and (size > ARCHIVE_FILE_MAX or any(key.startswith(y + "-") for key in archive_years(data))) and valid_year(y):
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
                 except ArchiveUnpackable as exc:
+                    # only while the part is still empty: once a held entity's old history was added to this year (the held path
+                    # below), deleting the plan would drop those lines, so it falls through to the held / lines-back path instead
+                    if y in resplit and not (part["tasks"] or part["contacts"] or part.get("proposals") or part["history"]):   # nothing of this year's own is being archived: leave the files as they are and say so
+                        note = f"warning: {rel} is over its {ARCHIVE_FILE_MAX // 1024} KB limit and cannot be re-split ({exc}). " + ARCHIVE_NEXT_STEP
+                        warnings.append(note); kept_warnings.append(note)   # kept: the year leaves the plan and the loop may run again
+                        del plan[y]
+                        continue
                     if any(key.startswith(y + "-") for key in archive_years(data)):
                         sys.exit(f"not saved: archive parts for {y} cannot be repacked ({exc}); nothing changed")
                     packed = None   # preserve the original year and all live records when one unit cannot fit
@@ -13485,6 +13522,7 @@ def _cmd_archive(a):
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
         summary = f"task #{task.get('num')} ({clean(task['title'], 80)}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
         if not plan:
+            for line in size_warnings: print(line, file=sys.stderr)   # a year left alone with a warning must still be said
             if not ref and slimmed:
                 if a.dry_run:
                     print(f"would slim {slimmed} decided proposal(s); nothing was saved")

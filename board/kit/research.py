@@ -721,7 +721,7 @@ def parser(sub, callback):
     p.add_argument("--project", required=True); p.set_defaults(f=callback, work_action="research-candidates")
     p = sub.add_parser("watch-poll", help="one read-only watch snapshot diff; cursor is not authority or an event log")
     p.add_argument("--project", required=True)
-    p.add_argument("--history", action="store_true", help="kit v133: replay board commits since the cursor's commit (git or API transport)")
+    p.add_argument("--history", action="store_true", help="kit v134: replay board commits since the cursor's commit (git or API transport)")
     p.set_defaults(f=callback, work_action="watch-poll")
     for name in ("snapshot", "draft", "admit", "check", "handover"):
         p = sub.add_parser("work-research-" + name, help="disabled-by-default read-only public research pilot")
@@ -764,7 +764,7 @@ def watch_projection_bound(kt, task):
 
 
 def without_clock(entry):
-    """Kit v133 history: the projection with its clock-only parts taken out, so a replayed commit gives the same events
+    """Kit v134 history: the projection with its clock-only parts taken out, so a replayed commit gives the same events
     and ids whenever it is replayed. A claim stale by age counts as running (a stored stuck/blocked/done stays), and
     chase and overdue are never set: none of them is a change a commit made."""
     if entry.get("claim") == "stale":
@@ -774,7 +774,7 @@ def without_clock(entry):
 
 
 def watch_project(kt, data, project, bound, today, history=False):
-    """One project's watch projection, bounded: 256 cards, each card's input, and 128 KiB encoded. history (kit v133):
+    """One project's watch projection, bounded: 256 cards, each card's input, and 128 KiB encoded. history (kit v134):
     without the clock-only parts, see without_clock."""
     chosen = []
     for task in data.get("tasks") or []:
@@ -811,7 +811,7 @@ def _watch_cursor_input(kt):
 
 
 def watch_poll_history(kt, args):
-    """Kit v133 `watch-poll --history`: replay the board branch's commits instead of diffing two snapshots.
+    """Kit v134 `watch-poll --history`: replay the board branch's commits instead of diffing two snapshots.
 
     The cursor is one commit, no snapshot. Each call replays at most kt.WATCH_HISTORY_PAGE commits that changed the
     board folder, oldest first in topological order, each diffed against its own first parent with the same
@@ -925,7 +925,7 @@ def watch_poll(kt, args):
     The client carries an untrusted bounded snapshot. It can invent its own old
     state, but this read-only call cannot grant admission or execute anything.
     Missed intermediate transitions require reconciliation against work-status;
-    `--history` (kit v133) replays board commits instead.
+    `--history` (kit v134) replays board commits instead.
     """
     if getattr(args, "history", False):
         return watch_poll_history(kt, args)

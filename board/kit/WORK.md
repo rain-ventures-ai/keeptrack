@@ -99,7 +99,7 @@ must reconcile the current task/run after a wake or restart. Hosted mode is
 unsupported. `work-research-snapshot` and `work-research-check` give the host a
 bounded request projection without activity/comment history.
 
-`watch-poll --project ID --history` (kit v133) replays board commits instead of
+`watch-poll --project ID --history` (kit v134) replays board commits instead of
 diffing two snapshots, so an intermediate change is never lost. Its cursor is one
 commit, `{"v":2,"board","project","commit"}` in base64url, with no snapshot; no
 cursor is a quiet baseline at the branch head. Each call verifies the commit is an
