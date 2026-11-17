@@ -40,12 +40,17 @@ Every change to a card's label set now leaves a `labels:` history line carrying 
   board-wide rename/delete, already wrote it.
 - Each board-wide rename or delete now leaves two history lines per affected card (`labels: ...` and the existing "label X ..."
   line), from the CLI and from the web page.
-- Relay note: a board-wide `label-rm needs-human --force` or `label-set --rename` now writes a `labels:` line per card, which relay's
-  owner bridge (`_owner_reset`) counts as an owner dispatch-count reset on those cards.
+- Relay note: relay's `_owner_reset` counts a `labels:` line written by the owner's own login (not `agent@login`) that has no
+  `needs-human` where the card's previous `labels:` line had it. So `label-set --rename` resets only when the renamed label is
+  `needs-human`, and `label-rm needs-human --force` only when the owner runs it; other renames and deletes reset nothing. Cards
+  created with `needs-human` now get a first `labels:` line, so a later owner `--unlabel needs-human` on such a card now counts as
+  a reset where it did not before (there was no earlier `labels:` line to compare with).
 - Rook research writes the full list when it adds `needs-human`, not the literal `labels: needs-human`; the two agree when
   that is the card's only label.
-- Not covered: the hosted `add` path (`keeptrack.py add` on a hosted board) posts a create-card command and leaves the card's
-  history to the server; this release does not claim a `labels:` line there.
+- Not covered: hosted boards, for every path (not only `add`). The server owns card history there:
+  `HostedStorageAdapter.model_changes` puts the server's old history back on every card it saves, and the web page's hosted save
+  skips the history field. This release makes no claim that a hosted label change leaves a `labels:` line; whether the server
+  writes one is not checked in this repo. Relay's `_owner_reset` on hosted boards depends on the server writing it.
 
 ### v131 (schema 4)
 

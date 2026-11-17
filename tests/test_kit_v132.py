@@ -1,15 +1,19 @@
 """Kit v132: every change to a card's label set leaves a "labels: a, b" history line with the full resulting list, so a
 reader can prove from history alone who placed a label. Covers add --label, task-set, label-set --rename, label-rm --force
-merge-card, proposal accept (create and update), proposal merge, inbound card creation, to-do split and kit-check.
-`PATHS` below enumerates the label-mutating paths this file can reach; each must leave a labels: line."""
+merge-card, proposal accept (create and update), proposal merge, inbound card creation, to-do split, import and the kit-check
+upgrade card. EveryPath and the two tests after it run each of those through the real CLI and assert the line. Not covered
+here: hosted boards, where the server owns card history (HostedHistory only pins what model_changes does) and the web page,
+whose autoLog is run for real in node by WebAutoLog."""
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from test_kit_v112 import Board, read, item  # noqa: E402
 
@@ -25,14 +29,66 @@ class Release(unittest.TestCase):
         self.assertIn("### v132 (schema 4)", read("board/kit/UPGRADING.md"))
         self.assertIn("Kit v132:", read("CHANGELOG.md"))
 
-    def test_web_page_logs_a_new_card_with_labels_like_the_cli(self):
-        src = read("board/board.js")
-        self.assertIn("if (!p) { add('created'); if ((t.labels || []).length) add('labels: ' + t.labels.join(', ')); return; }", src)
-
     def test_rook_research_uses_the_full_list_helper(self):
         src = read("board/kit/research.py")
         self.assertNotIn('"labels: needs-human"', src)
         self.assertIn("kt.hist_labels(task)", src)
+
+
+class WebAutoLog(unittest.TestCase):
+    """Runs the real autoLog function from board/board.js in node (extracted by brace matching, with its few page helpers
+    stubbed) for a new card with labels, a new card without, and a label edit on an existing card."""
+
+    SCRIPT = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[1], 'utf8');
+const start = src.indexOf('function autoLog(pre, post) {');
+let i = src.indexOf('{', start), depth = 0, end = -1;
+for (let j = i; j < src.length; j++) { if (src[j] === '{') depth++; else if (src[j] === '}' && --depth === 0) { end = j + 1; break; } }
+const body = src.slice(start, end);
+const stubs = { byId: (st) => new Map((st.tasks || []).map(t => [t.id, t])), cfg: () => ({ me: 'tester' }), nowIso: () => 'now',
+  colName: x => x, validRank: () => false, relationOf: () => undefined, doneColId: () => 'done', jcanon: x => JSON.stringify(x) };
+const autoLog = new Function(...Object.keys(stubs), body + '; return autoLog;')(...Object.values(stubs));
+const card = (id, labels) => ({ id, title: id, labels, assignees: [], links: [], contacts: [], todos: [], history: [] });
+const pre = { tasks: [card('old', ['a'])] };
+const post = { tasks: [card('old', ['a', 'b']), card('with', ['x', 'y']), card('none', [])] };
+autoLog(pre, post);
+process.stdout.write(JSON.stringify(Object.fromEntries(post.tasks.map(t => [t.id, t.history.map(h => h.text)]))));
+"""
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_autolog_writes_the_labels_line_for_a_new_card_with_labels(self):
+        p = subprocess.run(["node", "-e", self.SCRIPT, os.path.join(ROOT, "board", "board.js")], capture_output=True, text=True)
+        self.assertEqual(0, p.returncode, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual(["created", "labels: x, y"], out["with"])
+        self.assertEqual(["created"], out["none"])
+        self.assertEqual(["labels: a, b"], out["old"])
+
+
+class HostedHistory(unittest.TestCase):
+    """On hosted boards the server owns card history for every path. HostedStorageAdapter.model_changes puts the server's
+    old history back on every card it saves, so a labels: line the CLI added in memory is dropped. This pins that behaviour
+    (it does not prove the server writes its own labels: line; that is not checked in this repo)."""
+
+    def test_model_changes_restores_the_servers_history_over_the_local_labels_line(self):
+        import copy
+        sys.path.insert(0, os.path.join(ROOT, "board", "kit"))
+        import keeptrack as kt
+        adapter = object.__new__(kt.HostedStorageAdapter)
+        adapter.holder = lambda *a, **k: None
+        adapter.identity = {"agent_id": None}
+        card = {"id": "t_1", "title": "x", "labels": [], "history": [{"at": "a", "by": "b", "text": "created"}]}
+        files = {"tasks.json": {"rev": "r0", "body": {}}, "cards/t_1.json": {"rev": "r1", "body": copy.deepcopy(card)}}
+        data = {"tasks": [copy.deepcopy(card)]}
+        task = data["tasks"][0]
+        task["labels"] = ["needs-human"]
+        kt.hist_labels(task)
+        self.assertEqual(["created", "labels: needs-human"], [h["text"] for h in task["history"]])
+        ops, _ = adapter.model_changes(data, files)
+        sent = next(op for op in ops if op["path"] == "cards/t_1.json")["body"]
+        self.assertEqual(["needs-human"], sent["labels"])
+        self.assertEqual(["created"], [h["text"] for h in sent["history"]])
 
 
 class LabelLines(Board):
@@ -138,17 +194,34 @@ class EveryPath(LabelLines):
         self.kt("label-rm", "delta", "--force")
         self.assertEqual("labels: omega", self.label_lines("Target")[-1])
 
-    def test_inbound_card_with_labels_leaves_a_line(self):
+        # inbound card creation with labels
         self.kt("inbound-source", "rainshift-contact", "--mode", "card", "--assign", "alex", "--label", "enquiry", "--stage", "New")
         self.put(item("c-9"))
         self.kt("inbound")
         self.assertEqual(["labels: enquiry"], self.label_lines("Enquiry from Casey Example (Example Ltd)"))
-
-    def test_split_to_do_copies_labels_with_a_line(self):
+        # to-do split copies labels
         self.add("Parent", "--label", "needs-human", "--todo", "Do the thing")
         self.kt("todo-move", self.ids["Parent"], "1")
-        child = next(c for c in self.cards().values() if c["title"] == "Do the thing")
-        self.assertEqual(["labels: needs-human"], [h["text"] for h in child["history"] if h["text"].startswith("labels:")])
+        self.assertEqual(["labels: needs-human"], self.label_lines("Do the thing"))
+
+    def test_import_with_labels_leaves_a_line_and_without_leaves_none(self):
+        staging = os.path.join(self.repo, "staging.json")
+        with open(staging, "w", encoding="utf8") as f:
+            json.dump({"tasks": [{"title": "Imported with", "labels": ["alpha", "beta"]}, {"title": "Imported plain"}]}, f)
+        self.kt("import", staging)
+        self.assertEqual(["labels: alpha, beta"], self.label_lines("Imported with"))
+        self.assertEqual([], self.label_lines("Imported plain"))
+
+    def test_kit_check_upgrade_card_with_the_board_label_leaves_a_line(self):
+        self.kt("label-add", "board")
+        kit = os.path.join(self.repo, "published-kit")
+        os.makedirs(kit)
+        with open(os.path.join(kit, "manifest.json"), "w") as f:
+            json.dump({"version": 99999, "files": {}}, f)
+        self.kt("kit-check", "--card", "--from", kit)
+        card = self.cards()["Upgrade board tools to kit v99999"]
+        self.assertEqual(["board"], card["labels"])
+        self.assertEqual(["labels: board"], self.label_lines("Upgrade board tools to kit v99999"))
 
 
 if __name__ == "__main__":

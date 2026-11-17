@@ -17,7 +17,9 @@ so a reader can prove from history alone who placed a label. New writers of that
 labels, `add --label`, Review Inbox accept (a new card with labels, or an update that changes them), `proposal-merge` when `--fields`
 changes labels, an inbound card created with labels, `todo-move`, `import` and the kit-upgrade card (all created with labels), and the
 web page for any new card created with labels (split from a to-do, board and relay cards). Rook research writes the full list for
-needs-human (it wrote the literal `labels: needs-human`). Not covered: the hosted `add` path, which leaves history to the server.
+needs-human (it wrote the literal `labels: needs-human`). Not covered: hosted boards, for every path (not only `add`): the server
+owns card history there (`model_changes` restores the server's history on every save, and the web page's hosted save skips it).
+Whether the server writes a `labels:` line is not checked in this repo, and relay's `_owner_reset` on hosted boards depends on it.
 Existing lines and boards are unchanged. No schema change.
 
 Kit v131: a browser signed in with GitHub learns its username from `GET /user` when `kb_me` is empty (after sign-in, and once
