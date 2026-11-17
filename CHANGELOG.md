@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v129: two new `work-research-note` reasons. `needs_information` sends the card back to Backlog with `needs-human` and
+one question comment (the request has a blank such as TBD); `awaiting_approval` does the same without a comment (the request
+also asks for a change the research pilot never starts). Both settle like `request_rejected`. No schema change.
+When `work-research-admit` takes `needs-human` off a card it now also writes the usual `labels: ...` history entry, so a later
+hold on the same card is a new occurrence for the owner notifier (it used to reuse the first hold's event id and stay silent).
+The `needs_information` question now asks for the detail inside a sentence about what to research.
+
 Kit v128: work the owner asked for. New optional card fields `asked` `{at, via, mode: now|dispatch|unsure}` and
 `finished` `{at, by: agent|person, cancelled}`. `add`, the approval (`move ID todo`) and `claim --attended` take
 `--asked MODE --asked-via NAME`; only those flags write `asked`, and a later approval or claim keeps the first `at`.
