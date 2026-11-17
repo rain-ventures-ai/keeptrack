@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v135: `keeptrack.py reconcile --dry-run` prints one row per open card older than a day. The verb is close when every
+linked pull request is merged, every to-do is ticked, and there is no open question, wait or live claim; ask when the
+pull requests are merged and a to-do, wait or question remains; leave when a pull request is still open, a to-do is
+open without that merged evidence, or a claim is live; park when a wait has no chase date and is older than seven days.
+Pull-request evidence is one read of state and mergedAt. A run without `--dry-run` is refused. The command writes
+nothing. No data change and no migration.
+
 Web board only, no kit version and no schema bump: optional "Sign in with GitHub" (a GitHub App user token) beside the unchanged
 fine-grained token paste. New optional setting `settings.github_app_signin` `{client_id, exchange_url}`; older pages and the
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code

@@ -7,6 +7,7 @@ local file with --file for testing. Every write re-reads the latest file and ret
 SHA conflict, so a human editing the board in the browser never gets overwritten.
 
   keeptrack.py list [-q "text"] [--column todo] [--assignee osouthgate] [--unclaimed] [--attention] [--waiting] [--waiting-on me]
+  keeptrack.py reconcile --dry-run   # one row per open card older than a day: close, ask, leave or park (writes nothing)
   keeptrack.py show ID
   keeptrack.py next --for osouthgate --agent claude --session ABC     # claim the first claimable todo task
   keeptrack.py claim ID --for osouthgate --agent claude --session ABC [--note ...] [--force]
@@ -472,7 +473,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 134  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 135  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -7757,7 +7758,7 @@ def cmd_resolve(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "watch", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack"],
+    "tasks": ["list", "show", "watch", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack", "reconcile"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "attach", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
@@ -13468,6 +13469,214 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
             return held, warnings, files
 
 
+# Dry-run reconcile: one stdout row per open card older than a day. The model reads these rows and nothing else.
+# Pull-request evidence is one GraphQL read of state and mergedAt. This release never writes the board.
+_RECONCILE_PR = re.compile(r"^https://github\.com/((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)/pull/([0-9]+)$")
+_RECONCILE_DAY = 86400
+
+
+def reconcile_clock():
+    """The clock a dry run ages cards against. A test may replace it; the command does not."""
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _reconcile_older(updated, clock):
+    try:
+        at = parse(str(updated))
+    except (TypeError, ValueError):
+        return False
+    return (clock - at).total_seconds() > _RECONCILE_DAY
+
+
+def _reconcile_claim_live(data, claim, clock):
+    """A claim that is still running, blocked or stuck. A stale claim, a finished claim and no claim are not live."""
+    if not isinstance(claim, dict) or not claim:
+        return False
+    if claim.get("status") in ("stuck", "blocked"):
+        return True
+    if claim.get("status") == "done":
+        return False
+    try:
+        last = parse(str(claim.get("heartbeat_at") or claim.get("claimed_at")))
+    except (TypeError, ValueError):
+        return True
+    return (clock - last).total_seconds() / 60 <= stale_limit(data, claim)
+
+
+def _reconcile_prs(task):
+    """Linked pull requests, first link wins, compared case-insensitively. Other links are ignored."""
+    found, seen = [], set()
+    for link in task.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        match = _RECONCILE_PR.fullmatch(str(link.get("url") or ""))
+        if not match:
+            continue
+        key = (match.group(1), match.group(2), int(match.group(3)))
+        low = (key[0].lower(), key[1].lower(), key[2])
+        if low in seen:
+            continue
+        seen.add(low)
+        found.append(key)
+    return found
+
+
+def _reconcile_questions(data):
+    """Cards with a pending Review Inbox question (ask.choose, ask.approve, ask.question)."""
+    ids = set()
+    for proposal in data.get("proposals") or []:
+        if not isinstance(proposal, dict) or proposal.get("status") != "pending" or proposal.get("kind") not in ASK_KINDS:
+            continue
+        change = proposal.get("change") if isinstance(proposal.get("change"), dict) else {}
+        task = change.get("task")
+        if isinstance(task, str) and task:
+            ids.add(task)
+        target = proposal.get("target") if isinstance(proposal.get("target"), dict) else {}
+        if target.get("type") == "task" and isinstance(target.get("id"), str) and target.get("id"):
+            ids.add(target["id"])
+    return ids
+
+
+def _reconcile_read_prs(prs):
+    """One batched read of state and mergedAt. None means that pull request could not be read."""
+    ordered, seen = [], set()
+    for owner, repo, number in prs:
+        low = (owner.lower(), repo.lower(), int(number))
+        if low in seen:
+            continue
+        seen.add(low)
+        ordered.append((owner, repo, int(number)))
+    ordered.sort(key=lambda item: (item[0].lower(), item[1].lower(), item[2]))
+    if not ordered:
+        return {}
+    parts = []
+    for i, (owner, repo, number) in enumerate(ordered):
+        parts.append(f"p{i}: repository(owner: {json.dumps(owner)}, name: {json.dumps(repo)}) "
+                     f"{{ pullRequest(number: {number}) {{ state mergedAt }} }}")
+    rc, out, _err = gh("-X", "POST", "graphql", "--input", "-", body={"query": "query { " + " ".join(parts) + " }"})
+    if rc != 0:
+        sys.exit("reconcile: could not read pull request state (state and mergedAt only); wrote nothing")
+    try:
+        payload = json.loads(out)
+    except ValueError:
+        sys.exit("reconcile: pull request state was not JSON; wrote nothing")
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        sys.exit("reconcile: pull request state had no data; wrote nothing")
+    states = {}
+    for i, (owner, repo, number) in enumerate(ordered):
+        node = data.get(f"p{i}")
+        pull = node.get("pullRequest") if isinstance(node, dict) else None
+        low = (owner.lower(), repo.lower(), number)
+        if not isinstance(pull, dict):
+            states[low] = None
+        else:
+            states[low] = (pull.get("state"), pull.get("mergedAt"))
+    return states
+
+
+def _reconcile_merged_day(info):
+    """The merge date when state is MERGED and mergedAt is a date. Anything else is not proof of a merge."""
+    if not info or info[0] != "MERGED":
+        return ""
+    day = str(info[1] or "")[:10]
+    return day if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) else ""
+
+
+def _reconcile_park_since(waiting, clock):
+    """The wait's start date when it has no chase date and is older than 7 days, else ''."""
+    if not waiting:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(waiting.get("nudge") or "")):
+        return ""
+    try:
+        since = dt.date.fromisoformat(str(waiting.get("since") or ""))
+    except ValueError:
+        return ""
+    return since.isoformat() if (clock.date() - since).days > 7 else ""
+
+
+def _reconcile_label(task):
+    num = task.get("num")
+    if isinstance(num, int) and not isinstance(num, bool):
+        return f"#{num}"
+    return _flat(task.get("id"))
+
+
+def _reconcile_row(data, task, prs, states, questions, clock):
+    label = _reconcile_label(task)
+    waiting = open_waiting(task)
+    todos_open = any(isinstance(item, dict) and not item.get("done") for item in (task.get("todos") or []))
+    question = task.get("id") in questions
+    if _reconcile_claim_live(data, task.get("claim"), clock):
+        return f"leave {label} claim live"
+    evidence = []
+    for owner, repo, number in prs:
+        info = states.get((owner.lower(), repo.lower(), number))
+        day = _reconcile_merged_day(info)
+        ref = f"{owner}/{repo}#{number}"
+        if day:
+            evidence.append((True, ref, day, ""))
+        else:
+            state = info[0] if info else None
+            why = "open" if state == "OPEN" else "closed" if state == "CLOSED" else "unread"
+            evidence.append((False, ref, "", why))
+    if any(not ok for ok, _ref, _day, _why in evidence):
+        ref, why = next((ref, why) for ok, ref, _day, why in evidence if not ok)
+        return f"leave {label} {ref} {why}"
+    merged = [(ref, day) for ok, ref, day, _why in evidence if ok]
+    if merged and (todos_open or waiting or question):
+        bits = []
+        if todos_open:
+            bits.append("open to-do")
+        if waiting:
+            bits.append("wait")
+        if question:
+            bits.append("open question")
+        names = ", ".join(f"{ref} merged {day}" for ref, day in merged)
+        return f"ask {label} close this? {names}; " + "; ".join(bits)
+    if merged:
+        names = ", ".join(f"{ref} merged {day}" for ref, day in merged)
+        return f"close {label} {names}"
+    since = _reconcile_park_since(waiting, clock)
+    if since and not todos_open and not question:
+        return f"park {label} wait since {since}, no chase date"
+    if todos_open:
+        return f"leave {label} open to-do"
+    if question:
+        return f"leave {label} open question"
+    if waiting:
+        return f"leave {label} wait"
+    return f"leave {label} still open"
+
+
+def reconcile_rows(data, clock=None):
+    """Rows for open cards older than a day, lowest number first. Done cards and newer cards are absent."""
+    clock = clock or reconcile_clock()
+    questions = _reconcile_questions(data)
+    chosen = [task for task in (data.get("tasks") or [])
+              if isinstance(task, dict) and task.get("column") != "done" and _reconcile_older(task.get("updated"), clock)]
+    by_id, prs = {}, []
+    for task in chosen:
+        found = _reconcile_prs(task)
+        by_id[id(task)] = found
+        prs.extend(found)
+    states = _reconcile_read_prs(prs)
+    chosen.sort(key=lambda task: (task.get("num") if isinstance(task.get("num"), int) and not isinstance(task.get("num"), bool) else 10 ** 12,
+                                  str(task.get("id") or "")))
+    return [_line_guard(_reconcile_row(data, task, by_id[id(task)], states, questions, clock)) for task in chosen]
+
+
+def cmd_reconcile(a):
+    """Print one row per open card older than a day. This release only dry-runs: it never closes, merges, deploys or writes."""
+    if not getattr(a, "dry_run", False):
+        sys.exit("refused: reconcile only prints a dry run in this release (pass --dry-run). "
+                 "It does not close a card, merge, deploy or write a rule.")
+    data, _base = load()
+    for row in reconcile_rows(data):
+        print(row)
+
+
 def cmd_archive(a):
     with local_lock():   # --file mode: one critical section from read to both writes
         return _cmd_archive(a)
@@ -14827,7 +15036,7 @@ def _automation_parser(sub):
 def _proposals_only(a):
     if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1": return
     # Fail closed: new commands must be deliberately classified before loader use.
-    reads = {"list", "show", "work-status", "work-research-policy-snapshot", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
+    reads = {"list", "show", "reconcile", "work-status", "work-research-policy-snapshot", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
              "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
@@ -15098,6 +15307,8 @@ def main():
     s = sub.add_parser("touch-url", help="set or clear (\"\") a contact log entry's source link, such as its Gmail thread"); s.add_argument("ref"); s.add_argument("url")
     s.add_argument("--touch", help="log entry id (default: the latest)"); s.set_defaults(f=cmd_touch_url)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
+    s = sub.add_parser("reconcile", help="one row per open card older than a day (close, ask, leave or park); --dry-run writes nothing")
+    s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_reconcile)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
     s.add_argument("--done-days", type=int); s.add_argument("--lost-days", type=int); s.add_argument("--keep-history", type=int)
