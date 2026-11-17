@@ -11,6 +11,11 @@ fine-grained token paste. New optional setting `settings.github_app_signin` `{cl
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code
 exchange. See `docs/help/github-signin.md`.
 
+Kit v131: a browser signed in with GitHub learns its username from `GET /user` when `kb_me` is empty (after sign-in, and once
+at start-up), so comments no longer show as "someone"; a typed username is never replaced. The "Sign in again" failure counters
+are kept per board. `settings-set --github-app-signin` refuses a client id with a trailing newline, as the page does.
+No schema change.
+
 Kit v130: `keeptrack.py settings-set --github-app-signin '{"client_id":"...","exchange_url":"https://..."}'` and
 `--clear-github-app-signin` set and clear `settings.github_app_signin`, validated like the web page does (client id shape,
 https only, no login, query or fragment, normalised). `settings` prints it. No schema change.

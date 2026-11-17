@@ -326,13 +326,15 @@ if (typeof window !== 'undefined') (() => {
     if (p.config) lsPut(SK.cfg(repo), JSON.stringify(p.config)); else lsDrop(SK.cfg(repo));
     const was = signinNote; signinNote = p.note; if (was !== p.note) try { renderSignin(); } catch { /* Settings not built yet */ }
   }
-  let refreshFails = 0, configFails = 0, signinAgain = '';   // consecutive failed renewals, those of them the Worker's own configuration refusals, and the repo that was asked to sign in again
+  const failCounts = new Map();   // repo -> { fails, config }: consecutive failed renewals, those of them the Worker's own configuration refusals; per board, so one board's failures never prompt another
+  const failsOf = repo => { let f = failCounts.get(repo); if (!f) failCounts.set(repo, f = { fails: 0, config: 0 }); return f; };
+  let signinAgain = '';   // the repo that was asked to sign in again
   function signinPrompt(repo) {   // renewal keeps failing: keep every token, but say so (status line, Settings button "Sign in again")
     const first = signinAgain !== repo; signinAgain = repo; if (LS.get('kb_repo', '') !== repo) return;
     setStatus('Sign in again', 'err'); if (first) toast('Your GitHub sign-in could not be renewed. Sign in again in Settings, or use a token.', true); try { renderSignin(); } catch { /* Settings not built yet */ }
   }
   function signinFailed(repo, why) {   // the sign-in cannot be renewed: forget it and say so
-    signinAgain = ''; refreshFails = configFails = 0; dropApp(repo); if (LS.get('kb_repo', '') !== repo) return;
+    if (signinAgain === repo) signinAgain = ''; failCounts.delete(repo); dropApp(repo); if (LS.get('kb_repo', '') !== repo) return;
     lastSyncOk = false; setStatus('Not connected', 'err'); toast(why || 'Your GitHub sign-in ended. Sign in again in Settings.', true); try { renderSignin(); renderThis(); } catch { /* Settings not built yet */ }
   }
   let refreshing = null, refreshHold = 0;   // refreshHold: no refresh attempts before this time (after a network error or a 5xx)
@@ -349,15 +351,15 @@ if (typeof window !== 'undefined') (() => {
       let res, data = null;
       if (refreshHeld(refreshHold, Date.now())) return null;
       const held = kind => {   // a failure that is not GitHub's refusal: keep the sign-in and retry after the hold, but not silently for ever
-        refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; refreshFails++; configFails = kind === 'config' ? configFails + 1 : 0;
-        if (signinPromptDue({ exp: rec.exp, now: Date.now(), fails: refreshFails, configFails })) signinPrompt(repo);
+        const f = failsOf(repo); refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; f.fails++; f.config = kind === 'config' ? f.config + 1 : 0;
+        if (signinPromptDue({ exp: rec.exp, now: Date.now(), fails: f.fails, configFails: f.config })) signinPrompt(repo);
         return null;
       };
       try { res = await window.fetch(conf.exchange_url + '/refresh', { method: 'POST', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: ghSignal('POST'),
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: rec.refresh }) }); } catch { return held('transient'); }
       try { data = await res.json(); } catch { /* no body */ }
       const next = res.ok ? appRecordFromExchange(data, Date.now()) : null;
-      if (next) { refreshHold = 0; refreshFails = configFails = 0; const was = signinAgain === repo; signinAgain = ''; writeApp(repo, next); if (was) try { renderSignin(); } catch { /* Settings not built yet */ } return next; }
+      if (next) { refreshHold = 0; failCounts.delete(repo); const was = signinAgain === repo; if (was) signinAgain = ''; writeApp(repo, next); if (was) try { renderSignin(); } catch { /* Settings not built yet */ } return next; }
       const kind = refreshFailureKind(res.status, data);
       if (kind !== 'refused') return held(kind);   // 5xx, 429, network, the Worker's own errors: keep the sign-in (and its refresh token)
       signinFailed(repo); return null;
@@ -428,6 +430,15 @@ if (typeof window !== 'undefined') (() => {
     const rec = res.ok ? appRecordFromExchange(data, Date.now()) : null;
     if (!rec) { setTimeout(() => toast('GitHub sign-in did not complete' + (data && data.error === 'redirect_not_allowed' ? ': this page address is not allowed by the sign-in service' : '') + '. Try again.', true)); return; }
     writeApp(repo, rec); lsPut(SK.method(repo), 'app'); LS.del('kb_ro:' + repo); setTimeout(() => toast('Signed in with GitHub.'));
+    await learnMe(rec.token);
+  }
+  // A GitHub sign-in knows who the person is: fill an empty username from GET /user, so edits and comments never show as "someone".
+  // Never overwrites a username the person typed.
+  async function learnMe(token) {
+    if (!token || LS.get('kb_me', '')) return;
+    try { const r = await fetch(cfg().api + '/user', { cache: 'no-store', credentials: 'omit', headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } });
+      if (!r.ok) return; const login = (await r.json()).login;
+      if (typeof login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(login) && !LS.get('kb_me', '')) LS.set('kb_me', login); } catch { /* best effort: Settings still lets the person type it */ }
   }
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};
@@ -500,7 +511,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 130;
+  const PAGE_KIT = 131;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -6489,7 +6500,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function signOutApp() {   // the app tokens only: a pasted token is not touched
     const repo = cfg().repo; if (boardWorking()) { setStatus('Waiting for the save to finish before signing out…'); await boardIdle(); }
-    signinAgain = ''; refreshFails = configFails = 0; dropApp(repo); loadGen++; LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); widgets = []; widgetMeta = { key: '', etag: '', problem: '' };
+    if (signinAgain === repo) signinAgain = ''; failCounts.delete(repo); dropApp(repo); loadGen++; LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); widgets = []; widgetMeta = { key: '', etag: '', problem: '' };
     state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Signed out'); renderSignin(); renderThis(); toast('Signed out of GitHub in this browser.');
   }
   if ($('sSignin')) {
@@ -10456,5 +10467,5 @@ if (typeof window !== 'undefined') (() => {
   }
 
   if (HOSTED) { startHosted(); return; }
-  (async () => { await signinReturned; await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
+  (async () => { await signinReturned; if (!LS.get('kb_me', '') && cfg().repo && authMethod(cfg().repo) === 'app') learnMe(cfg().token); await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
 })();

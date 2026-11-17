@@ -283,8 +283,35 @@ test('sign in again: a failing renewal is shown after a few Worker refusals in a
   // source: the prompt keeps every token (only signinFailed drops them), and a success clears it
   const run = source.slice(source.indexOf('const held = kind'), source.indexOf('signinFailed(repo); return null;', source.indexOf('const held = kind')));
   assert.ok(run.includes('signinPrompt(repo)') && !run.includes('dropApp') && !run.includes('signinFailed'), 'held failures prompt without dropping the sign-in');
-  assert.match(run, /signinAgain = ''; writeApp\(repo, next\)/);
+  assert.match(run, /if \(was\) signinAgain = ''; writeApp\(repo, next\)/);
   assert.match(source, /again \? 'Sign in again'/);
+});
+
+test('sign in again: the failure counters belong to one board, so one board\'s failures never prompt another', () => {
+  assert.doesNotMatch(source, /\b(let|var)\s+(refreshFails|configFails)\b/, 'no counter shared by every board in the tab');
+  assert.doesNotMatch(source, /\brefreshFails\b|\bconfigFails\s*[=+]/, 'nothing reads or writes a tab-wide counter');
+  assert.match(source, /const failCounts = new Map\(\)/);
+  assert.match(source, /const f = failsOf\(repo\);/, 'a held failure counts against the repo whose renewal failed');
+  assert.match(source, /fails: f\.fails, configFails: f\.config/);
+  assert.match(source, /refreshHold = 0; failCounts\.delete\(repo\);/, 'a renewal clears only its own board\'s count');
+  assert.match(source, /failCounts\.delete\(repo\); dropApp\(repo\);/, 'signing out or ending a sign-in clears only its own board\'s count');
+  assert.match(source, /if \(signinAgain === repo\) signinAgain = ''/, 'and never another board\'s "sign in again" mark');
+});
+
+test('learnMe: a GitHub sign-in fills an empty username from GET /user, never overwrites a typed one', () => {
+  const fn = source.slice(source.indexOf('async function learnMe(token)'), source.indexOf('// The link picks the board'));
+  assert.ok(fn.length > 100, 'learnMe found');
+  assert.match(fn, /if \(!token \|\| LS\.get\('kb_me', ''\)\) return;/, 'a typed username is never replaced (checked before the request)');
+  assert.match(fn, /!LS\.get\('kb_me', ''\)\) LS\.set\('kb_me', login\)/, 'and again after it, in case it was typed meanwhile');
+  assert.match(fn, /cfg\(\)\.api \+ '\/user'/, 'the API stays cfg().api so tests can override it');
+  assert.match(fn, /await fetch\(/, 'goes through authFetch, so an expired access token is renewed first');
+  assert.match(fn, /\/\^\[A-Za-z0-9-\]\{1,39\}\$\/\.test\(login\)/, 'only a GitHub-shaped login is stored');
+  assert.match(fn, /catch \{/, 'best effort: a failure never breaks sign-in');
+  // after sign-in it gets the token the exchange produced (the record's field is `token`, not access_token)
+  assert.match(source, /writeApp\(repo, rec\);[^\n]*\n\s*await learnMe\(rec\.token\);/);
+  assert.doesNotMatch(source, /learnMe\(rec\.access_token\)/);
+  // at startup, once, after a sign-in return, for a browser on the app method with no username
+  assert.match(source, /await signinReturned; if \(!LS\.get\('kb_me', ''\) && cfg\(\)\.repo && authMethod\(cfg\(\)\.repo\) === 'app'\) learnMe\(cfg\(\)\.token\);/);
 });
 
 test('origins: the default exchange origin comes first and the page and the policy cap at 8 the same way', () => {

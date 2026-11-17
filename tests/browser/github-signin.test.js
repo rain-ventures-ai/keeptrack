@@ -34,14 +34,15 @@ const card = (id, num, title) => ({ id, num, title, column: 'todo', client: '', 
 const CORS = { 'Access-Control-Allow-Origin': '*' };
 
 class Github {
-  constructor(settings) { this.files = { 'tasks.json': text(root(settings)), 'cards/t_one.json': text(card('t_one', 1, 'First')) }; this.head = 'head-1'; this.calls = []; this.reject = null; }
+  constructor(settings) { this.files = { 'tasks.json': text(root(settings)), 'cards/t_one.json': text(card('t_one', 1, 'First')) }; this.head = 'head-1'; this.calls = []; this.reject = null; this.login = 'alex'; this.n = 1; this.blobs = {}; this.pending = null; }
+  card(id = 't_one') { return JSON.parse(this.files['cards/' + id + '.json']); }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
   async route(route) {
     const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', ''), auth = req.headers().authorization || '';
     this.calls.push({ method, path: p, auth, body: req.postData() || '' });
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', ...CORS }, body: JSON.stringify(body) });
     if (this.reject && auth === 'Bearer ' + this.reject) return json({ message: 'Bad credentials' }, 401);
-    if (p === '/user' && method === 'GET') return json({ login: 'alex' });
+    if (p === '/user' && method === 'GET') return json({ login: this.login });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '/rate_limit') return json({ resources: { core: { remaining: 4900, limit: 5000 } } });
     if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
@@ -53,6 +54,12 @@ class Github {
     if (p.startsWith('/git/trees/root-') && method === 'GET') return json({ tree: [{ path: 'board', type: 'tree', sha: 'board-1' }] });
     if (p.startsWith('/git/trees/board-') && method === 'GET') return json({ truncated: false, tree: Object.entries(this.files).map(([f, c]) => ({ path: f, type: 'blob', sha: this.sha(f), size: Buffer.byteLength(c) })) });
     if (p.startsWith('/git/blobs/') && method === 'GET') { const sha = p.split('/').pop(), rel = Object.keys(this.files).find(x => this.sha(x) === sha); return json({ encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }); }
+    if (p.startsWith('/contents/board/') && method === 'GET') { const rel = p.slice('/contents/board/'.length); return this.files[rel] ? json({ sha: this.sha(rel), encoding: 'base64', content: Buffer.from(this.files[rel]).toString('base64') }) : json({ message: 'Not Found' }, 404); }
+    if (p.startsWith('/contents/board/') && method === 'PUT') { const rel = p.slice('/contents/board/'.length), b = req.postDataJSON(); this.files[rel] = Buffer.from(b.content, 'base64').toString(); this.head = 'head-' + ++this.n; return json({ content: { sha: this.sha(rel) }, commit: { sha: this.head, tree: { sha: 'root-' + this.n } } }); }
+    if (p === '/git/blobs' && method === 'POST') { const sha = 'new-blob-' + ++this.n; this.blobs[sha] = req.postDataJSON().content; return json({ sha }); }
+    if (p === '/git/trees' && method === 'POST') { this.pending = req.postDataJSON().tree; return json({ sha: 'new-tree-' + ++this.n }); }
+    if (p === '/git/commits' && method === 'POST') return json({ sha: 'new-commit-' + ++this.n });
+    if (p === '/git/refs/heads/main' && method === 'PATCH') { for (const e of this.pending || []) { const rel = e.path.replace(/^board\//, ''); if (e.sha === null) delete this.files[rel]; else this.files[rel] = this.blobs[e.sha]; } this.head = req.postDataJSON().sha; return json({ object: { sha: this.head } }); }
     return json({ message: 'not mocked: ' + method + ' ' + p }, 404);
   }
   bearers() { return this.calls.map(c => c.auth); }
@@ -64,18 +71,18 @@ const BOARD_CFG = { client_id: PAGE_DEFAULT.client_id, exchange_url: 'https://si
 const OTHER_APP_CFG = { client_id: 'Iv23liSOMEONEELSE', exchange_url: 'https://signin.test' };
 const GOOD_TOKENS = (n, extra = {}) => ({ access_token: 'ghu_' + n, expires_in: 28800, refresh_token: 'ghr_' + n, refresh_token_expires_in: 15811200, token_type: 'bearer', ...extra });
 
-async function open(browser, { settings = {}, meta = null, token = 'test', seed = null, method = null, query = '', authorize = 'ok', exchange = [GOOD_TOKENS(1)], refreshReply = [GOOD_TOKENS(2)], configure } = {}) {
+async function open(browser, { settings = {}, meta = null, token = 'test', seed = null, method = null, query = '', authorize = 'ok', exchange = [GOOD_TOKENS(1)], refreshReply = [GOOD_TOKENS(2)], me = 'alex', configure } = {}) {
   const api = new Github(settings), page = await browser.newPage({ viewport: { width: 1280, height: 860 }, serviceWorkers: 'block' }), errors = [];   // blocked: the app shell's service worker would serve a reload without the test's meta
   page.errors = errors; page.api = api; page.worker = []; page.authorizeCalls = [];
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
-  await page.addInitScript(([token, seed, method]) => {
-    localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test');
+  await page.addInitScript(([token, seed, method, me]) => {
+    localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_api', 'https://api.test');
     if (token && !sessionStorage.getItem('seeded')) localStorage.setItem('kb_token', token);   // first load only: a test may forget it and reload
     localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board');
-    if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1');
+    if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); if (me) localStorage.setItem('kb_me', me);   // first load only: the page may learn or change it, and a reload must not undo that
       if (seed) localStorage.setItem('kb_signin_app:acme/board', JSON.stringify(seed));
       if (method) localStorage.setItem('kb_signin_method:acme/board', method); }
-  }, [token, seed, method]);
+  }, [token, seed, method, me]);
   await page.route('https://api.test/**', r => api.route(r));
   // the page owner's meta goes in front of the policy script, as docs/help/github-signin.md describes
   await page.route(/\/board\/(index\.html)?(\?.*)?$/, async r => {
@@ -349,6 +356,42 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
       assert.equal(JSON.parse(await stored(page, 'kb_signin_app:acme/board')).token, 'ghu_2');
       await openConn(page); assert.equal(await visible(page, '#sSigninGo'), false, 'no prompt once it renewed');
       assert.deepEqual(page.errors, []); await page.close(); }
+    // 15. a GitHub sign-in learns the username (GET /user) when kb_me is empty, and never replaces a typed one
+    const userCalls = page => page.api.calls.filter(c => c.method === 'GET' && c.path === '/user');
+    const signInFromSettings = async page => {
+      await openConn(page); await page.locator('#sAuthApp').check(); await page.waitForTimeout(400);
+      await page.locator('#sSigninGo').click(); await page.waitForFunction(() => localStorage.getItem('kb_signin_app:acme/board'), null, { timeout: 8000 });
+      await page.waitForFunction(() => document.querySelector('.card')); await page.waitForTimeout(500); };
+    const comment = async (page, words) => {
+      await page.locator('.card').first().click(); await page.locator('#dlgCard[open]').waitFor();
+      const saved = page.waitForResponse(r => ['PUT', 'PATCH'].includes(r.request().method()) && r.url().startsWith('https://api.test/repos/acme/board/'));
+      await page.locator('#cmText').fill(words); await page.locator('#cmPost').click(); await saved; await page.waitForTimeout(300);
+      return page.api.card().comments.at(-1); };
+    { const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, me: null, configure: p => { p.api.login = 'octo-cat'; } });
+      assert.ok(await hasCard(page)); assert.equal(await stored(page, 'kb_me'), null, 'a fresh browser has no username');
+      await signInFromSettings(page);
+      assert.equal(await stored(page, 'kb_me'), 'octo-cat', 'sign-in learned the GitHub login');
+      assert.ok(userCalls(page).some(c => c.auth === 'Bearer ghu_1'), 'asked GitHub who the app token belongs to');
+      const c = await comment(page, 'Posted after sign-in'); assert.equal(c.text, 'Posted after sign-in'); assert.equal(c.by, 'octo-cat', 'the comment is by the login, not "someone"');
+      assert.deepEqual(page.errors, []); await page.close(); }
+    { const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, me: 'typed-name', configure: p => { p.api.login = 'octo-cat'; } });
+      assert.ok(await hasCard(page)); await signInFromSettings(page);
+      assert.equal(await stored(page, 'kb_me'), 'typed-name', 'a typed username is never overwritten');
+      assert.equal(userCalls(page).length, 0, 'and GitHub is not even asked');
+      assert.equal((await comment(page, 'By the typed name')).by, 'typed-name');
+      assert.deepEqual(page.errors, []); await page.close(); }
+    { const seed = { token: 'ghu_ok', exp: Date.now() + 3600 * 1000, refresh: 'ghr_ok', rexp: Date.now() + 1e10 };   // already signed in, no username: learned on reload
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed, me: null, configure: p => { p.api.login = 'octo-cat'; } });
+      await page.waitForFunction(() => localStorage.getItem('kb_me'), null, { timeout: 5000 });
+      assert.equal(await stored(page, 'kb_me'), 'octo-cat'); assert.ok(userCalls(page).some(c => c.auth === 'Bearer ghu_ok'));
+      assert.equal((await comment(page, 'After a reload')).by, 'octo-cat');
+      await page.evaluate(() => localStorage.setItem('kb_me', 'someone-typed')); const asked = userCalls(page).length;
+      await page.reload(); await page.waitForTimeout(900);
+      assert.equal(await stored(page, 'kb_me'), 'someone-typed', 'a later reload does not replace it'); assert.equal(userCalls(page).length, asked, 'nor ask again');
+      assert.deepEqual(page.errors, []); await page.close(); }
+    { const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, me: null, configure: p => { p.api.login = 'not a login!'; } });   // a reply that is no GitHub login is not stored
+      await signInFromSettings(page); assert.ok(userCalls(page).length >= 1);
+      assert.equal(await stored(page, 'kb_me'), null); assert.deepEqual(page.errors, []); await page.close(); }
     console.log('github-signin: ok');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
