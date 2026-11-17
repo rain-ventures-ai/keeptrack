@@ -23,7 +23,7 @@ board page  <-  access token + refresh token        board page  ->  api.github.c
    `<meta name="kb-github-app-signin" content='{"client_id":"<Client ID>","exchange_url":"https://keeptrack-signin.<your-subdomain>.workers.dev"}'>`
    The page's security policy then allows the page to talk to that address and no other (list more addresses in `"origins"` if different boards use different Workers). The meta is not a script, so the policy's script hashes do not change. The hosted entry (`hosted.html`) never gets the meta and never signs in this way.
 
-That meta alone turns sign-in on for every board that opens on this page. A private board can only read its own settings once someone is signed in, so for private boards this page-level default is what makes the button appear.
+That meta alone makes **Sign in with GitHub** available as a choice in Settings on every board that opens on this page. It does not change any board's default: a fresh browser still starts on the pasted token (see below). A private board can only read its own settings once someone is signed in, so for private boards this page-level default is what makes the choice appear.
 
 ## Choosing per board
 
@@ -33,16 +33,17 @@ A board can also name its own app and Worker in `board/tasks.json`, under `setti
 "github_app_signin": { "client_id": "Iv23li...", "exchange_url": "https://keeptrack-signin.example.workers.dev" }
 ```
 
-- Absent: the board uses the page default if there is one, otherwise the token only.
+- Absent: the board offers sign-in as a choice if the page has the meta, otherwise the token only. Either way it starts on the token.
 - `client_id` must be the same app as the page's meta (a board cannot send people to some other GitHub App); `exchange_url` must be one of the page's listed origins. A board that names a different `client_id` is ignored with a note.
-- Present and valid: Settings, Connection shows **How this browser signs in to GitHub** with two choices, **Sign in with GitHub** and **Use a fine-grained token**. The choice is remembered per board in this browser. A browser that already has a saved token starts on the token; a new one starts on sign-in.
+- Present and valid: Settings, Connection shows **How this browser signs in to GitHub** with two choices, **Sign in with GitHub** and **Use a fine-grained token**. The choice is remembered per board in this browser. Which one a browser starts on: a choice saved for this board wins; otherwise a saved token keeps being used; otherwise the board starts on **Sign in with GitHub** only if its own settings contain a valid `github_app_signin`, and on the token in every other case (including a page meta with no board setting).
 - Present but wrong (not an object, no `client_id`, an `exchange_url` that is not https, or one the page does not allow): it is ignored, a note says why in Settings, and the token path works as normal.
 - `exchange_url` is read only from board settings or the page default, never from the address bar. The page also refuses any address that is not in the page's own allow-list (step 4).
 
 ## What people see
 
 - Settings, Connection shows which method is active. **Sign in with GitHub** sends you to github.com and back to the same board.
-- The page renews its short-lived GitHub token about five minutes before it expires, and once after a refusal. If renewal fails (for example the refresh token was revoked or expired) the sign-in is cleared and the board asks you to sign in again. A network blip does not sign anyone out.
+- The page renews its short-lived GitHub token about five minutes before it expires, and once after a refusal. If renewal fails (for example the refresh token was revoked or expired) the sign-in is cleared and the board asks you to sign in again. Only GitHub's real refusals (such as a revoked or used refresh token) end a sign-in. A network error, a server error, the Worker's rate limit (`429`) or one of the Worker's own errors (for example `not_configured`) keeps the sign-in and is retried after a minute.
+- The page sends the callback as `.../board/` even when it was opened as `.../board/index.html`, so it matches `ALLOWED_REDIRECTS` and the app's Callback URL.
 - **Sign out** removes the sign-in tokens from this browser. A pasted token is not touched. Forgetting a board also removes its sign-in.
 - Sign-in tokens are kept in this browser only (per board, in `localStorage`), are never included in a settings code or a board move, and the refresh token is sent only to the Worker.
 

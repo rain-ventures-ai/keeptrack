@@ -101,6 +101,7 @@ function similarMatches(d, title, client, project, skip, doneCol = 'done') {
 // The token paste stays: a board only offers sign-in when it (or this page) names a client_id and an exchange_url.
 const SIGNIN_REFRESH_MARGIN_MS = 5 * 60 * 1000, SIGNIN_PENDING_MS = 10 * 60 * 1000;
 const OAUTH_RETURN_PARAMS = ['code', 'state', 'error', 'error_description', 'error_uri'];
+const SIGNIN_MAX_ORIGINS = 8;
 const SIGNIN_ORIGIN_RE = /^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i;
 const signinLocalHost = h => /^(localhost|127\.0\.0\.1|\[::1\])$/.test(h);
 // raw: settings.github_app_signin from a board (or the page default). allowed: the exchange origins this page's owner allows.
@@ -126,15 +127,18 @@ function parseSigninConfig(raw, allowed, pageClientId) {
 function parsePageSignin(text) {
   let o; try { o = text ? JSON.parse(text) : null; } catch { o = null; }
   if (!o || typeof o !== 'object' || Array.isArray(o)) return { origins: [], def: null, clientId: '' };
-  const origins = new Set((Array.isArray(o.origins) ? o.origins : []).filter(x => typeof x === 'string' && SIGNIN_ORIGIN_RE.test(x)));
+  // The default exchange's own origin comes first, then the listed ones, at most SIGNIN_MAX_ORIGINS in all: index.html's policy applies the
+  // same order and cap, so what the page allows and what the policy lets through are the same list.
+  const origins = new Set();
   try { const u = new URL(o.exchange_url); if (SIGNIN_ORIGIN_RE.test(u.origin)) origins.add(u.origin); } catch { /* no default exchange */ }
-  const list = [...origins];
+  (Array.isArray(o.origins) ? o.origins : []).forEach(x => { if (typeof x === 'string' && SIGNIN_ORIGIN_RE.test(x)) origins.add(x); });
+  const list = [...origins].slice(0, SIGNIN_MAX_ORIGINS);
   const clientId = typeof o.client_id === 'string' && /^[A-Za-z0-9._-]{8,64}$/.test(o.client_id) ? o.client_id : '';
   return { origins: list, clientId, def: o.client_id === undefined && o.exchange_url === undefined ? null : parseSigninConfig({ client_id: o.client_id, exchange_url: o.exchange_url }, list, o.client_id).config };
 }
 const signinHex = bytes => [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
 function newOAuthState(getRandomValues) { return signinHex(getRandomValues(new Uint8Array(32))); }
-function signinRedirectUri(href) { const u = new URL(href); return u.origin + u.pathname; }   // GitHub Apps want the callback without a query: the board's own query is kept in the pending record instead
+function signinRedirectUri(href) { const u = new URL(href); return u.origin + u.pathname.replace(/\/index\.html$/, '/'); }   // .../board/index.html is sent as .../board/, the callback URL the app and the Worker list   // GitHub Apps want the callback without a query: the board's own query is kept in the pending record instead
 // PKCE (RFC 7636, S256): the verifier stays in this tab's pending record and goes only to exchange_url; GitHub gets its hash up front.
 const signinB64u = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 function newCodeVerifier(getRandomValues) { return signinB64u(getRandomValues(new Uint8Array(32))); }   // 43 characters
@@ -168,11 +172,14 @@ function checkOAuthReturn(search, pending, now) {
   const back = typeof pending.search === 'string' && (pending.search === '' || pending.search[0] === '?') ? stripOAuthParams(pending.search) : clean;
   return { kind: 'ok', code, verifier: pending.verifier, repo, search: back };
 }
-// Which sign-in method a board uses: only a board with sign-in configured can use 'app'; a saved choice wins, else a saved token keeps being used.
-function resolveAuthMethod({ configured, stored, hasPat }) {
+// Which sign-in method a board uses. Sign-in can be chosen wherever it is available (the page meta or the board's settings), but the pasted
+// token is the default: a saved choice wins, then a saved token, and only a board whose OWN settings carry a valid github_app_signin
+// (boardConfigured) starts on sign-in. The page meta alone never changes a board's default.
+function resolveAuthMethod({ configured, boardConfigured, stored, hasPat }) {
   if (!configured) return 'pat';
   if (stored === 'app' || stored === 'pat') return stored;
-  return hasPat ? 'pat' : 'app';
+  if (hasPat) return 'pat';
+  return boardConfigured ? 'app' : 'pat';
 }
 // The bearer token for api.github.com. app: { token, exp, refresh, rexp } (times in ms; 0 = never expires) or null.
 function chooseToken({ method, pat, app, now }) {
@@ -183,6 +190,13 @@ function chooseToken({ method, pat, app, now }) {
 // 'none': use the token as it is. 'refresh': ask the exchange for a new one first. 'signin': it cannot be renewed.
 // After a refresh failed for a passing reason (network, 5xx) the page leaves the Worker alone for a minute and keeps using the current token.
 const SIGNIN_REFRESH_HOLD_MS = 60 * 1000;
+// Only GitHub's real refusals end a sign-in. A 5xx, a 429 (the Worker's rate limit) and the Worker's own errors (not_configured,
+// redirect_not_allowed, bad_request, github_unreachable, a generic github_error ...) are passing: keep the tokens and retry after the hold.
+const SIGNIN_GITHUB_REFUSALS = new Set(['bad_refresh_token', 'bad_verification_code', 'incorrect_client_credentials', 'redirect_uri_mismatch', 'unverified_user_email', 'access_denied', 'application_suspended']);
+function refreshFailureKind(status, data) {
+  if (status >= 500 || status === 429) return 'transient';
+  return data && typeof data === 'object' && SIGNIN_GITHUB_REFUSALS.has(data.error) ? 'refused' : 'transient';
+}
 const refreshHeld = (holdUntil, now) => typeof holdUntil === 'number' && now < holdUntil;
 function refreshDecision(app, now, margin = SIGNIN_REFRESH_MARGIN_MS) {
   if (!app || !app.token) return 'signin';
@@ -199,7 +213,7 @@ function appRecordFromExchange(data, now) {
     refresh: typeof data.refresh_token === 'string' ? data.refresh_token : '', rexp: secs(data.refresh_token_expires_in) ? now + secs(data.refresh_token_expires_in) * 1000 : 0 };
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText, similarScore, similarKind, similarScope, similarMatches,
-  parseSigninConfig, parsePageSignin, newOAuthState, newCodeVerifier, codeChallenge, refreshHeld, SIGNIN_REFRESH_HOLD_MS, signinRedirectUri, authorizeUrl, stripOAuthParams, checkOAuthReturn, resolveAuthMethod, chooseToken, refreshDecision, appRecordFromExchange };
+  parseSigninConfig, parsePageSignin, newOAuthState, newCodeVerifier, codeChallenge, refreshHeld, refreshFailureKind, SIGNIN_MAX_ORIGINS, SIGNIN_REFRESH_HOLD_MS, signinRedirectUri, authorizeUrl, stripOAuthParams, checkOAuthReturn, resolveAuthMethod, chooseToken, refreshDecision, appRecordFromExchange };
 
 // A page and a board.js from different deploys (GitHub Pages and browsers cache index.html for ~10 minutes) never wire up:
 // refresh the cached page and reload once, and if the server still has the other version, say so. index.html has the same
@@ -276,15 +290,18 @@ if (typeof window !== 'undefined') (() => {
   }
   const writeApp = (repo, rec) => { APP_SEEN.add(rec.token); lsPut(SK.app(repo), JSON.stringify(rec)); };
   const dropApp = repo => lsDrop(SK.app(repo));
+  function boardSigninConfig(repo) {   // what the board's own settings said last time it was read (re-checked against the page), or null
+    const cached = lsRaw(SK.cfg(repo)); if (!cached) return null;
+    let o; try { o = JSON.parse(cached); } catch { o = null; }
+    return parseSigninConfig(o === null ? undefined : o, PAGE_SIGNIN.origins, PAGE_SIGNIN.clientId).config;
+  }
   function signinConfig(repo) {   // the board's own (cached from its settings), else the page default; null when sign-in is not offered
     if (!SIGNIN_ON || !repo) return null;
-    const cached = lsRaw(SK.cfg(repo));
-    if (cached) { let o; try { o = JSON.parse(cached); } catch { o = null; } const p = parseSigninConfig(o === null ? undefined : o, PAGE_SIGNIN.origins, PAGE_SIGNIN.clientId); if (p.config) return p.config; }
-    return PAGE_SIGNIN.def;
+    return boardSigninConfig(repo) || PAGE_SIGNIN.def;
   }
   function authMethod(repo) {
     if (!SIGNIN_ON || !repo || !PAGE_SIGNIN.origins.length || !(PAGE_SIGNIN.def || lsRaw(SK.cfg(repo)))) return 'pat';   // no page meta (the common case): no storage read at all
-    return resolveAuthMethod({ configured: !!signinConfig(repo), stored: lsRaw(SK.method(repo)), hasPat: !!LS.get('kb_token') });
+    return resolveAuthMethod({ configured: !!signinConfig(repo), boardConfigured: !!boardSigninConfig(repo), stored: lsRaw(SK.method(repo)), hasPat: !!LS.get('kb_token') });
   }
   function effectiveToken() {
     const repo = LS.get('kb_repo', ''), method = authMethod(repo);
@@ -321,7 +338,7 @@ if (typeof window !== 'undefined') (() => {
       try { data = await res.json(); } catch { /* no body */ }
       const next = res.ok ? appRecordFromExchange(data, Date.now()) : null;
       if (next) { refreshHold = 0; writeApp(repo, next); return next; }
-      if (res.status >= 500) { refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; return null; }
+      if (refreshFailureKind(res.status, data) === 'transient') { refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; return null; }   // 5xx, 429, the Worker's own errors: keep the sign-in, retry after the hold
       signinFailed(repo); return null;
     };
     refreshing = (async () => (navigator.locks ? navigator.locks.request('kb_signin_refresh:' + repo, run) : run()))().finally(() => { refreshing = null; });

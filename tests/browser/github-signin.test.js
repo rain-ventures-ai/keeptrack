@@ -22,7 +22,7 @@ const { chromium } = require('playwright');
 const ROOT = path.resolve(__dirname, '../..');
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.png': 'image/png' };
 const server = http.createServer((req, res) => {
-  const rel = decodeURIComponent(new URL(req.url, 'http://local').pathname).replace(/^\/+/, '') || 'board/index.html';
+  const rel = (decodeURIComponent(new URL(req.url, 'http://local').pathname).replace(/^\/+/, '') || 'board/').replace(/\/$/, '/index.html');   // /board/ is the page too
   const file = path.resolve(ROOT, rel); if (!file.startsWith(ROOT + path.sep)) { res.writeHead(403).end(); return; }
   fs.readFile(file, (err, data) => { if (err) res.writeHead(404).end(); else { res.setHeader('Content-Type', mime[path.extname(file)] || 'application/octet-stream'); res.end(data); } });
 });
@@ -69,7 +69,7 @@ async function open(browser, { settings = {}, meta = null, token = 'test', seed 
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
   await page.addInitScript(([token, seed, method]) => {
     localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test');
-    if (token) localStorage.setItem('kb_token', token);
+    if (token && !sessionStorage.getItem('seeded')) localStorage.setItem('kb_token', token);   // first load only: a test may forget it and reload
     localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board');
     if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1');
       if (seed) localStorage.setItem('kb_signin_app:acme/board', JSON.stringify(seed));
@@ -77,7 +77,7 @@ async function open(browser, { settings = {}, meta = null, token = 'test', seed 
   }, [token, seed, method]);
   await page.route('https://api.test/**', r => api.route(r));
   // the page owner's meta goes in front of the policy script, as docs/help/github-signin.md describes
-  await page.route(/\/board\/index\.html(\?.*)?$/, async r => {
+  await page.route(/\/board\/(index\.html)?(\?.*)?$/, async r => {
     const headers = { ...r.request().headers() }; delete headers['if-none-match']; delete headers['if-modified-since'];   // a reload must get the whole page, not a 304
     const resp = await r.fetch({ headers }); let body = await resp.text();
     // index.html ships the owner's own meta; every case starts from a page without it, then adds its own (or none)
@@ -192,12 +192,12 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
       assert.equal(a.searchParams.get('client_id'), BOARD_CFG.client_id);
       assert.equal(a.searchParams.get('code_challenge_method'), 'S256');
       const challenge = a.searchParams.get('code_challenge'); assert.match(challenge, /^[A-Za-z0-9_-]{43}$/);
-      assert.equal(a.searchParams.get('redirect_uri'), base + '/board/index.html', 'the callback has no query');
+      assert.equal(a.searchParams.get('redirect_uri'), base + '/board/', 'opened as /board/index.html, the callback is the directory, with no query');
       assert.match(a.searchParams.get('state'), /^[0-9a-f]{64}$/);
       assert.equal(page.worker.length, 1);
       const sent = page.worker[0];   // PKCE: the verifier goes to the Worker, only its hash went to github.com
       assert.equal(sent.path, '/exchange'); assert.deepEqual(Object.keys(sent.body).sort(), ['code', 'code_verifier', 'redirect_uri']);
-      assert.equal(sent.body.code, 'CODE1'); assert.equal(sent.body.redirect_uri, base + '/board/index.html');
+      assert.equal(sent.body.code, 'CODE1'); assert.equal(sent.body.redirect_uri, base + '/board/');
       assert.equal(crypto.createHash('sha256').update(sent.body.code_verifier).digest('base64url'), challenge, 'the challenge is the S256 hash of the verifier');
       assert.ok(!a.href.includes(sent.body.code_verifier));
       const q = new URLSearchParams(await search(page));   // the page adds its own view parameters; the board's query is back and code/state are gone
@@ -284,6 +284,35 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
       assert.ok(page.api.bearers().every(b => b === 'Bearer ghu_old'), 'the current token was used throughout');
       assert.ok(await stored(page, 'kb_signin_app:acme/board'), 'a passing failure does not sign out');
       assert.deepEqual(page.errors, []); await page.close(); }
+    // 12. default method (owner decision): the token is the default; only a board's own github_app_signin starts on sign-in
+    { const page = await open(browser, { settings: {}, meta: PAGE_DEFAULT, token: null });   // fresh browser, page meta only
+      await openConn(page);
+      assert.equal(await page.locator('#sAuthPat').isChecked(), true, 'a page meta alone does not change the default');
+      assert.equal(await visible(page, '#sSigninChoice'), true, 'but sign-in is a choice');
+      assert.equal(await visible(page, '#sToken'), true, 'the token form is what the fresh browser sees');
+      assert.equal(await stored(page, 'kb_signin_method:acme/board'), null);
+      await page.close(); }
+    { const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT });   // the board's settings get read (and remembered) with a token
+      assert.ok(await hasCard(page));
+      await page.evaluate(() => localStorage.removeItem('kb_token')); await page.reload(); await page.waitForTimeout(700); await openConn(page);   // now a fresh browser for this board
+      assert.equal(await stored(page, 'kb_token'), null);
+      assert.equal(await page.locator('#sAuthApp').isChecked(), true, 'the board\'s own valid github_app_signin starts on sign-in');
+      assert.equal(await visible(page, '#sSigninGo'), true);
+      await page.locator('#sAuthPat').check(); await page.waitForTimeout(300); await page.reload(); await page.waitForTimeout(500); await openConn(page);
+      assert.equal(await page.locator('#sAuthPat').isChecked(), true, 'a stored choice wins');
+      await page.close(); }
+
+    // 13. a 429 or one of the Worker's own errors on /refresh holds like a 5xx; only GitHub's refusals end the sign-in
+    for (const reply of [{ http: 429 }, { error: 'not_configured' }, { error: 'redirect_not_allowed' }, { error: 'github_error' }]) {
+      const seed = { token: 'ghu_old', exp: Date.now() + 2 * 60 * 1000, refresh: 'ghr_old', rexp: Date.now() + 1e10 };
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed, refreshReply: [reply, GOOD_TOKENS(2)] });
+      const what = JSON.stringify(reply);
+      assert.ok(await hasCard(page), what + ': the still-valid token keeps the board open');
+      assert.equal(page.worker.filter(w => w.path === '/refresh').length, 1, what + ': one attempt, then the hold');
+      assert.ok(await stored(page, 'kb_signin_app:acme/board'), what + ': the sign-in is kept');
+      assert.ok(page.api.bearers().every(b => b === 'Bearer ghu_old'), what);
+      assert.deepEqual(page.errors, []); await page.close();
+    }
     console.log('github-signin: ok');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
