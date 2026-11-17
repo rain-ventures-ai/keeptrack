@@ -207,6 +207,35 @@ class Resplit(unittest.TestCase):
             sizes = self.sizes(board)
             self.assertTrue(all(size <= k.ARCHIVE_FILE_MAX for size in sizes.values()), sizes)
 
+    def test_held_card_history_is_never_dropped_when_current_year_cannot_be_resplit(self):
+        """Invariant: an archive run never drops a history line; each ends on the board or in a written archive file."""
+        import datetime
+        with tempfile.TemporaryDirectory() as folder:
+            board, path, run, _ = self.board(folder)
+            year = str(datetime.date.today().year)
+            for old in (board / "archive").glob("*.json"):
+                old.unlink()
+            big_old = dict(id="t_old1", num=1, title="Old", column="done", updated=f"{year}-01-01T00:00:00Z", details="x" * 950000, history=[])
+            (board / "archive" / f"{year}.json").write_text(json.dumps(envelope(year, [big_old])))   # cannot be re-split
+            data = json.loads(path.read_text())
+            data["archive"] = {"files": {year: {"tasks": 1, "contacts": 0}}}
+            hist = [dict(at=f"2020-01-{(i % 28) + 1:02d}T00:00:{i % 60:02d}Z", by="alex", text=f"big line {i}") for i in range(30)]
+            big = dict(id="t_big", num=2, title="Big", column="done", updated="2020-02-01T00:00:00Z", details="y" * 950000, history=hist)
+            small = dict(id="t_small", num=3, title="Small", column="done", updated="2021-02-01T00:00:00Z", details="s", history=[])
+            (board / "cards" / "t_big.json").write_text(json.dumps(big))
+            (board / "cards" / "t_small.json").write_text(json.dumps(small))
+            data["next_num"] = 4
+            path.write_text(json.dumps(data))
+            run("archive")
+            card = board / "cards" / "t_big.json"
+            on_card = len(json.loads(card.read_text()).get("history", [])) if card.exists() else 0
+            archived = 0
+            for p in (board / "archive").glob("*.json"):
+                doc = json.loads(p.read_text())
+                archived += len(doc.get("history", {}).get("t_big", []))
+                archived += sum(len(t.get("history", [])) for t in doc.get("tasks", []) if t["id"] == "t_big")
+            self.assertEqual(on_card + archived, 30, f"card {on_card} + archive {archived}")
+
 
 if __name__ == "__main__":
     unittest.main()

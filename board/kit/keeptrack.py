@@ -13000,7 +13000,9 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
                 try:
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
                 except ArchiveUnpackable as exc:
-                    if y in resplit:   # nothing of this year's own is being archived: leave the files as they are and say so
+                    # only while the part is still empty: once a held entity's old history was added to this year (the held path
+                    # below), deleting the plan would drop those lines, so it falls through to the held / lines-back path instead
+                    if y in resplit and not (part["tasks"] or part["contacts"] or part.get("proposals") or part["history"]):   # nothing of this year's own is being archived: leave the files as they are and say so
                         note = f"warning: {rel} is over its {ARCHIVE_FILE_MAX // 1024} KB limit and cannot be re-split ({exc}). " + ARCHIVE_NEXT_STEP
                         warnings.append(note); kept_warnings.append(note)   # kept: the year leaves the plan and the loop may run again
                         del plan[y]
