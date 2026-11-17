@@ -120,6 +120,7 @@ class Resplit(unittest.TestCase):
             self.assertFalse((board / "cards" / "t_due.json").exists(), "the due card was archived")
             for name, size in before.items():
                 self.assertLess(sizes[name], size, f"{name} shrank: it was not grown")
+            self.assertGreater(len(sizes), len(before), "the oversize year was re-split into more parts")
 
     def test_second_run_changes_nothing(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -141,8 +142,70 @@ class Resplit(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             board, _, run, _ = self.board(folder, layout="one-file")
             before = {p.name: p.read_text() for p in (board / "archive").glob("*.json")}
-            run("archive", ok=False)
+            result = run("archive", ok=False)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual({p.name: p.read_text() for p in (board / "archive").glob("*.json")}, before)
+
+    def test_single_card_archive_on_a_board_with_oversize_years(self):
+        with tempfile.TemporaryDirectory() as folder:
+            board, path, run, ids = self.board(folder, extra_done=True)
+            before = {p.name: p.read_text() for p in (board / "archive").glob("*.json")}
+            result = run("archive", "t_due")
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse((board / "cards" / "t_due.json").exists(), "the card was archived")
+            after = {p.name: p.read_text() for p in (board / "archive").glob("*.json")}
+            for name, text in before.items():
+                self.assertEqual(after[name], text, f"{name}: one card never rewrites an unrelated year")
+            self.assertIn("t_due", self.archived_ids(board))
+
+    def test_merge_card_on_a_board_with_oversize_years(self):
+        with tempfile.TemporaryDirectory() as folder:
+            board, path, run, ids = self.board(folder, extra_done=True)
+            column = json.loads(path.read_text())["columns"][0]
+            column = column["id"] if isinstance(column, dict) else column
+            card = dict(id="t_into", num=9999, title="Into", column=column, updated="2020-02-01T00:00:00Z", details="keep", history=[])
+            (board / "cards" / "t_into.json").write_text(json.dumps(card))
+            result = run("merge-card", "t_due", "t_into")
+            self.assertNotIn("Traceback", result.stderr + result.stdout)
+            self.assertIn("t_due", self.archived_ids(board))
+            self.assertFalse((board / "cards" / "t_due.json").exists())
+
+    def test_cannot_fit_warning_is_shown_when_nothing_else_is_due(self):
+        with tempfile.TemporaryDirectory() as folder:
+            board, _, run, _ = self.board(folder)
+            big = board / "archive" / "2020.json"
+            doc = json.loads(big.read_text())
+            doc["tasks"][0]["details"] = "x" * 950000   # one record too big for any part
+            big.write_text(json.dumps(doc))
+            before = self.sizes(board)
+            result = run("archive")
+            self.assertIn("cannot be re-split", result.stderr)
+            self.assertEqual(self.sizes(board), before, "nothing was changed")
+
+    def test_cannot_fit_warning_survives_another_year_being_archived(self):
+        with tempfile.TemporaryDirectory() as folder:
+            board, _, run, _ = self.board(folder, extra_done=True)
+            due = board / "cards" / "t_due.json"
+            card = json.loads(due.read_text()); card["updated"] = "2021-02-01T00:00:00Z"; due.write_text(json.dumps(card))   # another year is due
+            big = board / "archive" / "2020.json"
+            doc = json.loads(big.read_text())
+            doc["tasks"][0]["details"] = "x" * 950000
+            big.write_text(json.dumps(doc))
+            result = run("archive")
+            self.assertIn("cannot be re-split", result.stderr)
+            self.assertFalse(due.exists(), "the other year was archived")
+
+    def test_oversize_part_without_an_indexed_base_year_is_resplit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            board, path, run, ids = self.board(folder)
+            data = json.loads(path.read_text())
+            del data["archive"]["files"]["2020"]
+            path.write_text(json.dumps(data))
+            (board / "archive" / "2020.json").unlink()
+            run("archive")
+            sizes = self.sizes(board)
+            self.assertTrue(all(size <= k.ARCHIVE_FILE_MAX for size in sizes.values()), sizes)
 
 
 if __name__ == "__main__":

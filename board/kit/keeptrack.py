@@ -12956,8 +12956,8 @@ def archive_oversize_years(data, plan, base):
         return []
     indexed, out = archive_years(data), []
     for key in indexed:
-        year = key[:4]
-        if year in plan or year in out or year not in indexed or not valid_year(year):
+        year = key[:4]   # an indexed part whose base year is not indexed still counts: the re-split creates the base file
+        if year in plan or year in out or not valid_year(year):
             continue
         cur, _ = read_archive(key, base)
         if not isinstance(cur, dict):
@@ -12974,12 +12974,14 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
     other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
     the years to write, so the size checked is the text written. History lines of a held year go back to their items (on the
     board, or in another planned year, which is then measured again)."""
-    held, blocked_years = [], set()
-    resplit = set(archive_oversize_years(data, plan, base))   # kit v133: a year already over the limit is re-split, never appended to
+    held, blocked_years, kept_warnings = [], set(), []
+    # kit v133: a year already over the limit is re-split, never appended to. One card (archive <ref>, merge-card) only
+    # moves that card and leaves unrelated years alone: it plans no re-split, so it never reads or rewrites other years.
+    resplit = set() if ref_orig is not None else set(archive_oversize_years(data, plan, base))
     for y in resplit:
         plan[y] = {"tasks": [], "contacts": [], "proposals": [], "history": {}}
     while True:
-        warnings, files, again = [], {}, False
+        warnings, files, again = list(kept_warnings), {}, False
         for y in sorted(plan):
             part, rel = plan[y], f"archive/{y}.json"
             cur, sha = read_archive(y, base)
@@ -12999,7 +13001,8 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
                     packed = shard_archive_family(y, cur, sha, part, data, base, [ref_orig["id"]] if ref_orig else ())
                 except ArchiveUnpackable as exc:
                     if y in resplit:   # nothing of this year's own is being archived: leave the files as they are and say so
-                        warnings.append(f"warning: {rel} is over its {ARCHIVE_FILE_MAX // 1024} KB limit and cannot be re-split ({exc}). " + ARCHIVE_NEXT_STEP)
+                        note = f"warning: {rel} is over its {ARCHIVE_FILE_MAX // 1024} KB limit and cannot be re-split ({exc}). " + ARCHIVE_NEXT_STEP
+                        warnings.append(note); kept_warnings.append(note)   # kept: the year leaves the plan and the loop may run again
                         del plan[y]
                         continue
                     if any(key.startswith(y + "-") for key in archive_years(data)):
@@ -13111,6 +13114,7 @@ def _cmd_archive(a):
         nh = sum(len(h) for p in plan.values() for h in p["history"].values())
         summary = f"task #{task.get('num')} ({clean(task['title'], 80)}); nothing deleted, restore with unarchive" if ref else f"{nt} done tasks, {np_} Lost people, {nr} decided proposals and {nh} old history lines"
         if not plan:
+            for line in size_warnings: print(line, file=sys.stderr)   # a year left alone with a warning must still be said
             if not ref and slimmed:
                 if a.dry_run:
                     print(f"would slim {slimmed} decided proposal(s); nothing was saved")

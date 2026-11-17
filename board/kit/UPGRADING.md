@@ -38,7 +38,10 @@ appends to a file that is over it. No new card field, no migration; an upgrade c
 - Same boundary as before: only a split board that owns its folder writes part files (it needs kit v107 to read them; the board's
   `min_kit` is raised to 107 as for any split). A one-file or shared-folder board is left unchanged, as is a year whose single
   record cannot fit a part: the run warns and leaves those files as they are.
-- Cost: each run reads every indexed archive file once to measure it (before, only the years being written).
+- Cost: each bulk `archive` run reads every indexed archive file once to measure it (before, only the years being written); on API or
+  hosted backends each read is a network call. `archive <card>` and `merge-card` (which archives the merged card) do not re-split:
+  they move that one card and never read or rewrite other years for this purpose.
+- A year that cannot be re-split is left as it is and the warning is printed on stderr, also when nothing else is due.
 
 ### v132 (schema 4)
 
