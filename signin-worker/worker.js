@@ -3,7 +3,7 @@
 // github.com/login/oauth/access_token sends no CORS headers and needs the GitHub App's client secret, so a browser
 // cannot trade the OAuth code for a token by itself. This Worker does exactly that trade and nothing else:
 //
-//   POST /exchange  {code, redirect_uri}   -> {access_token, expires_in, refresh_token, refresh_token_expires_in, token_type}
+//   POST /exchange  {code, redirect_uri, code_verifier}   -> {access_token, expires_in, refresh_token, refresh_token_expires_in, token_type}
 //   POST /refresh   {refresh_token}        -> the same fields
 //
 // Invariants (tests: worker.test.js):
@@ -20,6 +20,7 @@ const TOKEN_FIELDS = ['access_token', 'expires_in', 'refresh_token', 'refresh_to
 const GITHUB_ERRORS = new Set(['bad_verification_code', 'bad_refresh_token', 'incorrect_client_credentials', 'redirect_uri_mismatch',
   'unverified_user_email', 'access_denied', 'application_suspended']);
 const CODE_RE = /^[A-Za-z0-9_-]{1,256}$/;
+const VERIFIER_RE = /^[A-Za-z0-9._~-]{43,128}$/;
 const REFRESH_RE = /^[A-Za-z0-9_-]{1,512}$/;
 
 const list = v => String(v || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -75,6 +76,11 @@ export async function handle(request, env, fetchImpl = fetch) {
   }
   if (request.method !== 'POST') return reply(405, { error: 'method_not_allowed' }, origin, { Allow: 'POST, OPTIONS' });
   if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) return reply(500, { error: 'not_configured' }, origin);
+  if (env.SIGNIN_LIMIT && typeof env.SIGNIN_LIMIT.limit === 'function') {   // optional Rate Limiting binding; absent means no limit
+    let allowed = true;
+    try { allowed = (await env.SIGNIN_LIMIT.limit({ key: request.headers.get('CF-Connecting-IP') || 'unknown' })).success !== false; } catch { allowed = true; }   // a broken limiter never blocks sign-in
+    if (!allowed) return reply(429, { error: 'rate_limited' }, origin, { 'Retry-After': '60' });
+  }
   if (!/^application\/json\s*(;|$)/i.test(request.headers.get('Content-Type') || '')) return reply(415, { error: 'json_only' }, origin);
   const text = await readLimited(request, MAX_BODY_BYTES);
   if (text === null) return reply(413, { error: 'too_large' }, origin);
@@ -85,7 +91,9 @@ export async function handle(request, env, fetchImpl = fetch) {
   if (path === '/exchange') {
     if (typeof body.code !== 'string' || !CODE_RE.test(body.code) || typeof body.redirect_uri !== 'string') return reply(400, { error: 'bad_request' }, origin);
     if (!list(env.ALLOWED_REDIRECTS).includes(body.redirect_uri)) return reply(400, { error: 'redirect_not_allowed' }, origin);
-    fields = { code: body.code, redirect_uri: body.redirect_uri };
+    // PKCE: the page's code_verifier (RFC 7636, 43-128 unreserved characters) is required and passed on; GitHub checks it against the challenge
+    if (typeof body.code_verifier !== 'string' || !VERIFIER_RE.test(body.code_verifier)) return reply(400, { error: 'code_verifier_required' }, origin);
+    fields = { code: body.code, redirect_uri: body.redirect_uri, code_verifier: body.code_verifier };
   } else {
     if (typeof body.refresh_token !== 'string' || !REFRESH_RE.test(body.refresh_token)) return reply(400, { error: 'bad_request' }, origin);
     fields = { grant_type: 'refresh_token', refresh_token: body.refresh_token };

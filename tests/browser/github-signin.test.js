@@ -3,7 +3,7 @@
 // exchange Worker. Covered:
 //  1. a board with no github_app_signin (and no page default) is exactly as before: no sign-in UI, the pasted token is the bearer
 //  2. a malformed github_app_signin is ignored with a visible note, and the token still works
-//  3. with sign-in configured Settings offers both methods; the choice is remembered; the board's own client_id wins over the page default
+//  3. with sign-in configured Settings offers both methods; the choice is remembered; a board may not name another GitHub App (client_id must be the page's)
 //  4. the sign-in round trip: random state, authorize URL, state checked, code stripped from the address, one POST to /exchange,
 //     the app token used for api calls, the pasted token untouched
 //  5. a wrong or missing state never reaches the Worker; the address is cleaned
@@ -59,7 +59,8 @@ class Github {
 
 let base;
 const PAGE_DEFAULT = { client_id: 'Iv23liPAGEDEFAULT', exchange_url: 'https://signin.test' };
-const BOARD_CFG = { client_id: 'Iv23liBOARDCLIENT', exchange_url: 'https://signin.test' };
+const BOARD_CFG = { client_id: PAGE_DEFAULT.client_id, exchange_url: 'https://signin.test' };   // a board must name the page's own app
+const OTHER_APP_CFG = { client_id: 'Iv23liSOMEONEELSE', exchange_url: 'https://signin.test' };
 const GOOD_TOKENS = (n, extra = {}) => ({ access_token: 'ghu_' + n, expires_in: 28800, refresh_token: 'ghr_' + n, refresh_token_expires_in: 15811200, token_type: 'bearer', ...extra });
 
 async function open(browser, { settings = {}, meta = null, token = 'test', seed = null, method = null, query = '', authorize = 'ok', exchange = [GOOD_TOKENS(1)], refreshReply = [GOOD_TOKENS(2)], configure } = {}) {
@@ -88,6 +89,7 @@ async function open(browser, { settings = {}, meta = null, token = 'test', seed 
     if (req.method() === 'OPTIONS') return r.fulfill({ status: 204, headers: { ...CORS, 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' } });
     page.worker.push({ path: p, body: req.postDataJSON() });
     const next = queue[p.slice(1)].shift();
+    if (next && next.http) return r.fulfill({ status: next.http, headers: { 'Content-Type': 'application/json', ...CORS }, body: '{}' });
     if (!next) return r.fulfill({ status: 400, headers: { 'Content-Type': 'application/json', ...CORS }, body: JSON.stringify({ error: 'bad_refresh_token' }) });
     return r.fulfill({ status: next.error ? 400 : 200, headers: { 'Content-Type': 'application/json', ...CORS }, body: JSON.stringify(next) });
   });
@@ -133,6 +135,26 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
       assert.equal(await visible(page, '#sToken'), true);
       assert.deepEqual(page.errors, []); await page.close(); }
 
+    // 2b. a board naming another GitHub App is ignored with a note; the page's own app is still the one used
+    { const page = await open(browser, { settings: { github_app_signin: OTHER_APP_CFG }, meta: PAGE_DEFAULT });
+      await openConn(page);
+      assert.match(await page.locator('#sSigninNote').innerText(), /client_id is not the GitHub App this page is set up for/);
+      await page.locator('#sAuthApp').check(); await page.waitForTimeout(300);
+      await page.locator('#sSigninGo').click(); await page.waitForFunction(() => localStorage.getItem('kb_signin_app:acme/board'), null, { timeout: 8000 });
+      assert.equal(page.authorizeCalls.length, 1);
+      assert.equal(page.authorizeCalls[0].searchParams.get('client_id'), PAGE_DEFAULT.client_id, 'never the board\'s other app');
+      assert.ok(!page.authorizeCalls.some(u => u.href.includes('SOMEONEELSE')));
+      await page.close(); }
+
+    // 2c. no page meta at all: the board's block is ignored with a note and the whole pasted-token form is visible
+    { const page = await open(browser, { settings: { github_app_signin: BOARD_CFG } });
+      assert.ok(await hasCard(page)); await openConn(page);
+      assert.equal(await visible(page, '#sSignin'), true); assert.equal(await visible(page, '#sSigninChoice'), false);
+      assert.match(await page.locator('#sSigninNote').innerText(), /ignored/);
+      assert.equal(await visible(page, '#sToken'), true); assert.equal(await visible(page, '#patLink'), true, 'the Make a token link is visible');
+      assert.equal(await page.evaluate(() => !document.getElementById('sTokenReuse').hidden && !document.getElementById('patLink').closest('p').hidden), true);
+      await page.close(); }
+
     // 3. both methods on offer; the board's own client_id; the choice is remembered
     { const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT });
       await openConn(page);
@@ -164,11 +186,17 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
       await page.waitForFunction(() => document.querySelector('.card')); await page.waitForTimeout(500);
       assert.equal(page.authorizeCalls.length, 1);
       const a = page.authorizeCalls[0];
-      assert.equal(a.searchParams.get('client_id'), BOARD_CFG.client_id, 'the board\'s own client id');
+      assert.equal(a.searchParams.get('client_id'), BOARD_CFG.client_id);
+      assert.equal(a.searchParams.get('code_challenge_method'), 'S256');
+      const challenge = a.searchParams.get('code_challenge'); assert.match(challenge, /^[A-Za-z0-9_-]{43}$/);
       assert.equal(a.searchParams.get('redirect_uri'), base + '/board/index.html', 'the callback has no query');
       assert.match(a.searchParams.get('state'), /^[0-9a-f]{64}$/);
       assert.equal(page.worker.length, 1);
-      assert.deepEqual(page.worker[0], { path: '/exchange', body: { code: 'CODE1', redirect_uri: base + '/board/index.html' } });
+      const sent = page.worker[0];   // PKCE: the verifier goes to the Worker, only its hash went to github.com
+      assert.equal(sent.path, '/exchange'); assert.deepEqual(Object.keys(sent.body).sort(), ['code', 'code_verifier', 'redirect_uri']);
+      assert.equal(sent.body.code, 'CODE1'); assert.equal(sent.body.redirect_uri, base + '/board/index.html');
+      assert.equal(crypto.createHash('sha256').update(sent.body.code_verifier).digest('base64url'), challenge, 'the challenge is the S256 hash of the verifier');
+      assert.ok(!a.href.includes(sent.body.code_verifier));
       const q = new URLSearchParams(await search(page));   // the page adds its own view parameters; the board's query is back and code/state are gone
       assert.deepEqual([q.get('repo'), q.get('branch'), q.get('path'), q.has('code'), q.has('state')], ['acme/board', 'main', 'board/tasks.json', false, false]);
       assert.ok(page.api.bearers().includes('Bearer ghu_1'), 'api calls carry the app token');
@@ -224,11 +252,34 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
     { const seed = { token: 'ghu_ok', exp: Date.now() + 3600 * 1000, refresh: 'ghr_ok', rexp: Date.now() + 1e10 };
       const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed });
       assert.ok(await hasCard(page)); await openConn(page);
+      assert.equal(await page.evaluate(() => document.getElementById('sForgetRow').hidden), true, 'app mode: Forget token is hidden, Sign out is the control');
+      assert.equal(await page.evaluate(() => !document.getElementById('sTokenReuse').hidden || !document.getElementById('patLink').closest('p').hidden), false, 'the pasted-token form is out of the way');
+      await page.evaluate(() => document.getElementById('sForget').click()); await page.waitForTimeout(300);   // even if it were reached
+      assert.equal(await stored(page, 'kb_token'), 'test', 'Forget never deletes the pasted token in app mode');
+      assert.ok(await stored(page, 'kb_signin_app:acme/board'), 'and does not sign out either');
+      assert.equal(await page.evaluate(() => !!document.querySelector('dialog[open]:not(#dlgSettings)')), false, 'no Forget confirmation opened');
       await page.locator('#sSigninOut').click(); await page.waitForTimeout(400);
       assert.equal(await stored(page, 'kb_signin_app:acme/board'), null);
       assert.equal(await stored(page, 'kb_token'), 'test', 'sign out leaves a pasted token alone');
       assert.equal(page.worker.length, 0, 'signing out needs no server');
       assert.equal(await visible(page, '#sSigninGo'), true);
+      assert.deepEqual(page.errors, []); await page.close(); }
+    // 9. back on the token, Forget token is there again and works on the pasted token only
+    { const seed = { token: 'ghu_ok', exp: Date.now() + 3600 * 1000, refresh: 'ghr_ok', rexp: Date.now() + 1e10 };
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'pat', seed });
+      await openConn(page);
+      assert.equal(await page.evaluate(() => document.getElementById('sForgetRow').hidden), false, 'token mode keeps Forget token');
+      assert.ok(await stored(page, 'kb_signin_app:acme/board'), 'the app sign-in is kept while the token method is chosen');
+      await page.close(); }
+
+    // 11. a failed refresh (5xx) is not retried for a minute; the still-valid token keeps working
+    { const seed = { token: 'ghu_old', exp: Date.now() + 2 * 60 * 1000, refresh: 'ghr_old', rexp: Date.now() + 1e10 };
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed, refreshReply: [{ http: 503 }, GOOD_TOKENS(2)] });
+      assert.ok(await hasCard(page), 'the near-expiry token still opens the board');
+      assert.ok(page.api.calls.length > 3, 'several API calls were made');
+      assert.equal(page.worker.filter(w => w.path === '/refresh').length, 1, 'one attempt, then a minute of quiet, not one per request');
+      assert.ok(page.api.bearers().every(b => b === 'Bearer ghu_old'), 'the current token was used throughout');
+      assert.ok(await stored(page, 'kb_signin_app:acme/board'), 'a passing failure does not sign out');
       assert.deepEqual(page.errors, []); await page.close(); }
     console.log('github-signin: ok');
   } finally { await browser.close(); server.close(); }

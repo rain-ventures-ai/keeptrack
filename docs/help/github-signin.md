@@ -17,6 +17,7 @@ board page  <-  access token + refresh token        board page  ->  api.github.c
 3. **Deploy the Worker.** From `signin-worker/`, with the Wrangler tool you already use for Cloudflare:
    - Edit `wrangler.toml`: `ALLOWED_ORIGINS` is the page's origin (comma-separated, exact match), `ALLOWED_REDIRECTS` is the callback URL from step 2 (comma-separated, exact match), `GITHUB_CLIENT_ID` is the app's Client ID (public).
    - `wrangler secret put GITHUB_CLIENT_SECRET` and paste the secret.
+   - Optional rate limit: `wrangler.toml` has a `[[ratelimits]]` block (binding `SIGNIN_LIMIT`, 20 requests per 60 seconds, keyed by the caller's `CF-Connecting-IP`). The Worker uses it when the binding exists and answers `429` with `Retry-After: 60` over the limit; remove the block and it simply does not limit. `namespace_id` is any number that is unique in your Cloudflare account, and `period` can only be 10 or 60.
    - `wrangler deploy`. Note the address it prints, for example `https://keeptrack-signin.<your-subdomain>.workers.dev`.
 4. **Tell the page about the Worker.** In `board/index.html` add, above the first `<script>`, the meta described in the comment at the top of that file:
    `<meta name="kb-github-app-signin" content='{"client_id":"<Client ID>","exchange_url":"https://keeptrack-signin.<your-subdomain>.workers.dev"}'>`
@@ -33,6 +34,7 @@ A board can also name its own app and Worker in `board/tasks.json`, under `setti
 ```
 
 - Absent: the board uses the page default if there is one, otherwise the token only.
+- `client_id` must be the same app as the page's meta (a board cannot send people to some other GitHub App); `exchange_url` must be one of the page's listed origins. A board that names a different `client_id` is ignored with a note.
 - Present and valid: Settings, Connection shows **How this browser signs in to GitHub** with two choices, **Sign in with GitHub** and **Use a fine-grained token**. The choice is remembered per board in this browser. A browser that already has a saved token starts on the token; a new one starts on sign-in.
 - Present but wrong (not an object, no `client_id`, an `exchange_url` that is not https, or one the page does not allow): it is ignored, a note says why in Settings, and the token path works as normal.
 - `exchange_url` is read only from board settings or the page default, never from the address bar. The page also refuses any address that is not in the page's own allow-list (step 4).
@@ -46,6 +48,9 @@ A board can also name its own app and Worker in `board/tasks.json`, under `setti
 
 ## Checks and limits
 
+- Sign-in uses PKCE (S256): the page keeps a random `code_verifier` for the one sign-in, sends only its hash to github.com, and sends the verifier to the Worker, which refuses `/exchange` without a well-formed one and passes it to GitHub.
+- While sign-in is the chosen method, **Forget token** is hidden (use **Sign out**) and cannot delete a saved pasted token.
+- After a failed renewal (network error or a server error) the page waits a minute before trying again and keeps using the current token while it is still valid.
 - The Worker answers only the origins in `ALLOWED_ORIGINS`, only passes redirect addresses in `ALLOWED_REDIRECTS` to GitHub, takes small JSON bodies by POST only, never logs codes or tokens, and returns only the five token fields or a short fixed error code. Its tests run with `node --test signin-worker/worker.test.js`.
 - The page's checks (settings parsing, state check, address cleanup, which token is used, refresh timing) run with `node --test tests/signin.test.js`.
 - Not for demo boards or the hosted board.

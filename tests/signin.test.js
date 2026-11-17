@@ -13,16 +13,17 @@ const ALLOWED = [WORKER];
 const GOOD = { client_id: 'Iv23liHHNoIZpe3JyJWH', exchange_url: WORKER };
 const NOW = 1_800_000_000_000;
 const STATE = 'ab'.repeat(32);
-const pending = (over = {}) => ({ state: STATE, repo: 'acme/board', search: '?repo=acme/board&path=board/tasks.json', t: NOW - 1000, ...over });
+const VERIFIER = 'Vv'.repeat(22);
+const pending = (over = {}) => ({ state: STATE, verifier: VERIFIER, repo: 'acme/board', search: '?repo=acme/board&path=board/tasks.json', t: NOW - 1000, ...over });
 
 test('settings: absent is unchanged and silent', () => {
-  assert.deepEqual(k.parseSigninConfig(undefined, ALLOWED), { config: null, note: '' });
+  assert.deepEqual(k.parseSigninConfig(undefined, ALLOWED, GOOD.client_id), { config: null, note: '' });
 });
 
 test('settings: a good block parses, and the exchange_url is normalised', () => {
-  assert.deepEqual(k.parseSigninConfig(GOOD, ALLOWED).config, GOOD);
-  assert.equal(k.parseSigninConfig({ ...GOOD, exchange_url: WORKER + '/' }, ALLOWED).config.exchange_url, WORKER);
-  assert.equal(k.parseSigninConfig({ ...GOOD, exchange_url: WORKER + '/v1/' }, ALLOWED).config.exchange_url, WORKER + '/v1');
+  assert.deepEqual(k.parseSigninConfig(GOOD, ALLOWED, GOOD.client_id).config, GOOD);
+  assert.equal(k.parseSigninConfig({ ...GOOD, exchange_url: WORKER + '/' }, ALLOWED, GOOD.client_id).config.exchange_url, WORKER);
+  assert.equal(k.parseSigninConfig({ ...GOOD, exchange_url: WORKER + '/v1/' }, ALLOWED, GOOD.client_id).config.exchange_url, WORKER + '/v1');
 });
 
 test('settings: malformed is ignored with a visible note that keeps the token path open', () => {
@@ -32,7 +33,7 @@ test('settings: malformed is ignored with a visible note that keeps the token pa
     { ...GOOD, exchange_url: 'https://user:pw@signin.example.workers.dev' }, { ...GOOD, exchange_url: WORKER + '?x=1' }, { ...GOOD, exchange_url: WORKER + '#x' },
     { ...GOOD, exchange_url: 'https://evil.example' }, { ...GOOD, exchange_url: 'javascript:alert(1)' }];
   for (const raw of cases) {
-    const r = k.parseSigninConfig(raw, ALLOWED);
+    const r = k.parseSigninConfig(raw, ALLOWED, GOOD.client_id);
     assert.equal(r.config, null, JSON.stringify(raw));
     assert.match(r.note, /github_app_signin .*ignored/, JSON.stringify(raw));
     assert.match(r.note, /token/);
@@ -40,16 +41,16 @@ test('settings: malformed is ignored with a visible note that keeps the token pa
 });
 
 test('settings: an origin the page does not list is refused, even if well formed', () => {
-  assert.equal(k.parseSigninConfig(GOOD, []).config, null);
-  assert.equal(k.parseSigninConfig({ ...GOOD, exchange_url: 'https://signin.example.workers.dev.evil.example' }, ALLOWED).config, null);
-  assert.deepEqual(k.parseSigninConfig({ ...GOOD, exchange_url: 'http://localhost:8787' }, ['http://localhost:8787']).config?.exchange_url, 'http://localhost:8787');
+  assert.equal(k.parseSigninConfig(GOOD, [], GOOD.client_id).config, null);
+  assert.equal(k.parseSigninConfig({ ...GOOD, exchange_url: 'https://signin.example.workers.dev.evil.example' }, ALLOWED, GOOD.client_id).config, null);
+  assert.deepEqual(k.parseSigninConfig({ ...GOOD, exchange_url: 'http://localhost:8787' }, ['http://localhost:8787'], GOOD.client_id).config?.exchange_url, 'http://localhost:8787');
 });
 
 test('page default: only listed origins count; a bad meta is no default', () => {
   const p = k.parsePageSignin(JSON.stringify({ ...GOOD, origins: ['https://other.example', 'http://insecure.example', 'https://a.example/path', 5] }));
   assert.deepEqual(p.def, GOOD);
   assert.deepEqual(p.origins.sort(), ['https://other.example', WORKER].sort());
-  for (const text of [undefined, '', 'not json', '[]', 'null', '{}']) assert.deepEqual(k.parsePageSignin(text), { origins: [], def: null }, String(text));
+  for (const text of [undefined, '', 'not json', '[]', 'null', '{}']) assert.deepEqual(k.parsePageSignin(text), { origins: [], def: null, clientId: '' }, String(text));
   assert.equal(k.parsePageSignin(JSON.stringify({ client_id: 'short', exchange_url: WORKER })).def, null);
 });
 
@@ -82,7 +83,7 @@ test('return: no sign-in params means nothing to do', () => {
 
 test('return: a matching state yields the code and restores the board query', () => {
   const r = k.checkOAuthReturn(`?code=abc123&state=${STATE}`, pending(), NOW);
-  assert.deepEqual(r, { kind: 'ok', code: 'abc123', repo: 'acme/board', search: '?repo=acme/board&path=board/tasks.json' });
+  assert.deepEqual(r, { kind: 'ok', code: 'abc123', verifier: VERIFIER, repo: 'acme/board', search: '?repo=acme/board&path=board/tasks.json' });
 });
 
 test('return: a mismatched, missing, short, or case-changed state never yields a code', () => {
@@ -176,4 +177,57 @@ test('invariants in the source: the refresh token only goes to exchange_url; the
   assert.ok(ret.indexOf('checkOAuthReturn') < ret.indexOf('finishSignin('), 'the state check comes first');
   assert.match(ret, /r\.kind === 'error'[^\n]*return;/, 'an error never reaches finishSignin');
   assert.doesNotMatch(source, /localStorage\.setItem\([^)]*refresh/i, 'the refresh token is stored only inside the app record');
+});
+
+test('client_id: a board may only use the GitHub App the page is set up for (no consent phishing)', () => {
+  const other = { ...GOOD, client_id: 'Iv23liSOMEONEELSE' };
+  const r = k.parseSigninConfig(other, ALLOWED, GOOD.client_id);
+  assert.equal(r.config, null);
+  assert.match(r.note, /github_app_signin .*ignored.*client_id is not the GitHub App this page is set up for.*token/);
+  assert.equal(k.parseSigninConfig(GOOD, ALLOWED, undefined).config, null, 'a page with no client_id accepts nothing from a board');
+  assert.equal(k.parseSigninConfig(GOOD, ALLOWED, '').config, null);
+  assert.deepEqual(k.parseSigninConfig(GOOD, ALLOWED, GOOD.client_id).config, GOOD);
+  const page = k.parsePageSignin(JSON.stringify({ client_id: GOOD.client_id, origins: [WORKER] }));
+  assert.equal(page.clientId, GOOD.client_id, 'an origins-only meta still names the app');
+  assert.equal(page.def, null);
+  assert.equal(k.parsePageSignin('{}').clientId, '');
+});
+
+test('PKCE: verifier is 43 URL-safe characters, the challenge is its S256 hash, and the authorize URL carries only the challenge', async () => {
+  const crypto = require('node:crypto');
+  const rnd = a => crypto.randomFillSync(a);
+  const v = k.newCodeVerifier(rnd);
+  assert.match(v, /^[A-Za-z0-9_-]{43}$/);
+  assert.notEqual(v, k.newCodeVerifier(rnd));
+  const c = await k.codeChallenge(v, crypto.webcrypto.subtle);
+  assert.equal(c, crypto.createHash('sha256').update(v).digest('base64url'));
+  assert.equal(await k.codeChallenge('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk', crypto.webcrypto.subtle), 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM', 'RFC 7636 appendix B vector');
+  const u = new URL(k.authorizeUrl(GOOD, 'https://pages.example/keeptrack/board/', STATE, c));
+  assert.equal(u.searchParams.get('code_challenge'), c);
+  assert.equal(u.searchParams.get('code_challenge_method'), 'S256');
+  assert.ok(![...u.searchParams.values()].includes(v), 'the verifier never goes to github.com');
+});
+
+test('PKCE: a return without the stored verifier is refused; a good one hands it to the exchange', () => {
+  const q = `?code=abc123&state=${STATE}`;
+  for (const verifier of [undefined, '', 'short', 'x'.repeat(129), 'has space ' + 'v'.repeat(40), 5]) assert.equal(k.checkOAuthReturn(q, pending({ verifier }), NOW).kind, 'error', String(verifier));
+  assert.equal(k.checkOAuthReturn(q, pending(), NOW).verifier, VERIFIER);
+});
+
+test('refresh hold: after a passing failure the Worker is left alone for a minute', () => {
+  assert.equal(k.SIGNIN_REFRESH_HOLD_MS, 60_000);
+  assert.equal(k.refreshHeld(0, NOW), false);
+  assert.equal(k.refreshHeld(undefined, NOW), false);
+  assert.equal(k.refreshHeld(NOW + 59_999, NOW), true);
+  assert.equal(k.refreshHeld(NOW + k.SIGNIN_REFRESH_HOLD_MS, NOW + k.SIGNIN_REFRESH_HOLD_MS - 1), true);
+  assert.equal(k.refreshHeld(NOW + 60_000, NOW + 60_000), false, 'it ends');
+});
+
+test('source: token is a lazy getter, PAT-only pages do no sign-in storage reads, Forget cannot delete a hidden pasted token', () => {
+  assert.match(source, /get token\(\) \{ return effectiveToken\(\); \}/);
+  assert.match(source, /!PAGE_SIGNIN\.origins\.length \|\| !\(PAGE_SIGNIN\.def/, 'no meta: authMethod answers before touching storage');
+  const forget = source.slice(source.indexOf("$('sForget').onclick"), source.indexOf("$('sForget').onclick") + 400);
+  assert.ok(forget.indexOf("authMethod(cfg().repo) === 'app'") > -1 && forget.indexOf("authMethod(cfg().repo) === 'app'") < forget.indexOf('ask('), 'the handler checks the method before it asks or deletes');
+  assert.equal([...source.matchAll(/code_verifier: verifier/g)].length, 1, 'the verifier is sent in exactly one place');
+  assert.match(source, /refreshHeld\(refreshHold, Date\.now\(\)\)/);
 });

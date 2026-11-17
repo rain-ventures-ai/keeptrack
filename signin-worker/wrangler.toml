@@ -16,3 +16,13 @@ ALLOWED_REDIRECTS = "https://rain-ventures-ai.github.io/keeptrack/board/"
 
 # The client secret is a Worker secret, never a var:
 #   wrangler secret put GITHUB_CLIENT_SECRET
+
+# Optional rate limit (Cloudflare Workers Rate Limiting binding; syntax checked against wrangler's config schema).
+# The Worker uses it when present, keyed by CF-Connecting-IP, and answers 429 over the limit; without it nothing changes.
+# namespace_id is any number string that is unique in your account. period can only be 10 or 60 seconds.
+[[ratelimits]]
+name = "SIGNIN_LIMIT"
+namespace_id = "1001"
+  [ratelimits.simple]
+  limit = 20
+  period = 60

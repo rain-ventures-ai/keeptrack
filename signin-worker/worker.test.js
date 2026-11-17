@@ -5,6 +5,7 @@ import worker, { handle } from './worker.js';
 
 const ORIGIN = 'https://pages.example';
 const REDIRECT = 'https://pages.example/keeptrack/board/';
+const VERIFIER = 'v'.repeat(43);
 const SECRET = 'client-secret-value-1234';
 const ENV = { GITHUB_CLIENT_ID: 'Iv1.test', GITHUB_CLIENT_SECRET: SECRET, ALLOWED_ORIGINS: `${ORIGIN}, https://other.example`, ALLOWED_REDIRECTS: REDIRECT };
 
@@ -25,19 +26,19 @@ const post = (path, body, { origin = ORIGIN, headers = {}, raw } = {}) => new Re
   headers: { ...(origin ? { Origin: origin } : {}), 'Content-Type': 'application/json', ...headers } });
 
 test('an allowed origin gets its own origin back as CORS, and no caching', async () => {
-  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, mockGithub(GOOD));
+  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, mockGithub(GOOD));
   assert.equal(res.status, 200);
   assert.equal(res.headers.get('Access-Control-Allow-Origin'), ORIGIN);
   assert.equal(res.headers.get('Vary'), 'Origin');
   assert.equal(res.headers.get('Cache-Control'), 'no-store');
-  const second = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }, { origin: 'https://other.example' }), ENV, mockGithub(GOOD));
+  const second = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }, { origin: 'https://other.example' }), ENV, mockGithub(GOOD));
   assert.equal(second.headers.get('Access-Control-Allow-Origin'), 'https://other.example');
 });
 
 test('other origins, a missing origin and near-misses get 403 with no CORS headers and never reach GitHub', async () => {
   for (const origin of ['https://evil.example', 'https://pages.example/', 'http://pages.example', 'https://pages.example.evil.example', 'null', null]) {
     const gh = mockGithub(GOOD);
-    const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }, { origin }), ENV, gh);
+    const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }, { origin }), ENV, gh);
     assert.equal(res.status, 403, String(origin));
     assert.equal(res.headers.get('Access-Control-Allow-Origin'), null);
     assert.equal(res.headers.get('Cache-Control'), 'no-store');
@@ -82,29 +83,29 @@ test('redirect_uri must be an exact match from ALLOWED_REDIRECTS', async () => {
 
 test('exchange: calls GitHub with the secret and returns only the five token fields', async () => {
   const gh = mockGithub(GOOD);
-  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, client_id: 'attacker', client_secret: 'x', grant_type: 'other' }), ENV, gh);
+  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER, client_id: 'attacker', client_secret: 'x', grant_type: 'other' }), ENV, gh);
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { access_token: 'ghu_abc', expires_in: 28800, refresh_token: 'ghr_def', refresh_token_expires_in: 15811200, token_type: 'bearer' });
   assert.equal(gh.calls.length, 1);
   assert.equal(gh.calls[0].url, 'https://github.com/login/oauth/access_token');
-  assert.deepEqual(gh.calls[0].body, { client_id: 'Iv1.test', client_secret: SECRET, code: 'abc123', redirect_uri: REDIRECT }, 'the caller cannot choose the client id, secret or grant type');
+  assert.deepEqual(gh.calls[0].body, { client_id: 'Iv1.test', client_secret: SECRET, code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }, 'the caller cannot choose the client id, secret or grant type');
 });
 
 test('GitHub errors become a fixed safe code, never GitHub text or the secret', async () => {
-  const known = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV,
+  const known = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV,
     mockGithub({ error: 'bad_verification_code', error_description: `The code passed is incorrect or expired. ${SECRET}`, error_uri: 'https://x' }));
   assert.equal(known.status, 400);
   assert.deepEqual(await known.json(), { error: 'bad_verification_code' });
-  const unknown = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, mockGithub({ error: `weird ${SECRET}`, error_description: SECRET }));
+  const unknown = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, mockGithub({ error: `weird ${SECRET}`, error_description: SECRET }));
   const text = JSON.stringify(await unknown.json());
   assert.equal(text, '{"error":"github_error"}');
   assert.ok(!text.includes(SECRET));
-  const down = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, mockGithub({}, { throws: true }));
+  const down = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, mockGithub({}, { throws: true }));
   assert.equal(down.status, 502);
   assert.deepEqual(await down.json(), { error: 'github_unreachable' });
-  const noToken = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, mockGithub({ token_type: 'bearer' }));
+  const noToken = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, mockGithub({ token_type: 'bearer' }));
   assert.equal(noToken.status, 502);
-  const html = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, async () => new Response('<html>' + SECRET, { status: 200 }));
+  const html = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, async () => new Response('<html>' + SECRET, { status: 200 }));
   assert.equal(html.status, 502);
   assert.ok(!(await html.text()).includes(SECRET));
 });
@@ -138,7 +139,7 @@ test('JSON only, small bodies only', async () => {
 });
 
 test('an unconfigured Worker refuses with a bare error', async () => {
-  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), { ...ENV, GITHUB_CLIENT_SECRET: '' }, mockGithub(GOOD));
+  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), { ...ENV, GITHUB_CLIENT_SECRET: '' }, mockGithub(GOOD));
   assert.equal(res.status, 500);
   assert.deepEqual(await res.json(), { error: 'not_configured' });
 });
@@ -147,8 +148,8 @@ test('nothing is logged, whatever happens', async () => {
   const seen = [];
   const spies = ['log', 'info', 'warn', 'error', 'debug'].map(k => { const o = console[k]; console[k] = (...a) => seen.push(a); return () => { console[k] = o; }; });
   try {
-    await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, mockGithub(GOOD));
-    await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT }), ENV, mockGithub({}, { throws: true }));
+    await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, mockGithub(GOOD));
+    await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, mockGithub({}, { throws: true }));
     await handle(post('/refresh', { refresh_token: 'ghr_old' }), ENV, mockGithub({ error: 'bad_refresh_token' }));
   } finally { spies.forEach(undo => undo()); }
   assert.deepEqual(seen, []);
@@ -158,4 +159,44 @@ test('the default export turns a crash into a bare 500', async () => {
   const res = await worker.fetch(new Request('https://worker.example/exchange', { method: 'POST', headers: { Origin: ORIGIN, 'Content-Type': 'application/json' }, body: '{}' }), null);
   assert.equal(res.status, 500);
   assert.equal(res.headers.get('Access-Control-Allow-Origin'), null);
+});
+
+test('PKCE: /exchange refuses a missing or malformed code_verifier and never calls GitHub', async () => {
+  for (const code_verifier of [undefined, '', 'short', 'v'.repeat(42), 'v'.repeat(129), 'has space ' + 'v'.repeat(40), 5, null]) {
+    const gh = mockGithub(GOOD);
+    const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier }), ENV, gh);
+    assert.equal(res.status, 400, String(code_verifier));
+    assert.deepEqual(await res.json(), { error: 'code_verifier_required' });
+    assert.equal(gh.calls.length, 0);
+  }
+  const gh = mockGithub(GOOD);
+  const ok = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: 'A-._~' + 'z'.repeat(60) }), ENV, gh);
+  assert.equal(ok.status, 200);
+  assert.equal(gh.calls[0].body.code_verifier, 'A-._~' + 'z'.repeat(60), 'passed to GitHub unchanged');
+  const refresh = await handle(post('/refresh', { refresh_token: 'ghr_old' }), ENV, mockGithub(GOOD));
+  assert.equal(refresh.status, 200, 'refresh needs no verifier');
+});
+
+test('rate limit: used when the binding is present (keyed by IP), 429 over the limit, ignored when absent', async () => {
+  const keys = [];
+  const limiter = n => ({ limit: async ({ key }) => { keys.push(key); return { success: keys.length <= n }; } });
+  const req = () => post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }, { headers: { 'CF-Connecting-IP': '203.0.113.9' } });
+  const env = { ...ENV, SIGNIN_LIMIT: limiter(1) };
+  assert.equal((await handle(req(), env, mockGithub(GOOD))).status, 200);
+  const gh = mockGithub(GOOD);
+  const over = await handle(req(), env, gh);
+  assert.equal(over.status, 429);
+  assert.equal(over.headers.get('Retry-After'), '60');
+  assert.equal(over.headers.get('Access-Control-Allow-Origin'), ORIGIN, 'the page can read the 429');
+  assert.deepEqual(await over.json(), { error: 'rate_limited' });
+  assert.equal(gh.calls.length, 0);
+  assert.deepEqual(keys, ['203.0.113.9', '203.0.113.9']);
+  // not limited without the binding, and a failing limiter does not block sign-in
+  for (let i = 0; i < 5; i++) assert.equal((await handle(req(), ENV, mockGithub(GOOD))).status, 200);
+  const broken = { ...ENV, SIGNIN_LIMIT: { limit: async () => { throw new Error('down'); } } };
+  assert.equal((await handle(req(), broken, mockGithub(GOOD))).status, 200);
+  // a disallowed origin is refused before the limiter is touched
+  const before = keys.length;
+  await handle(post('/exchange', {}, { origin: 'https://evil.example' }), env, mockGithub(GOOD));
+  assert.equal(keys.length, before);
 });
