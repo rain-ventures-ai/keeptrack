@@ -828,13 +828,17 @@ def watch_poll_history(kt, args):
     if not isinstance(prior["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", prior["commit"]):
         fail("invalid watch cursor commit")
     page = kt.board_history(prior["commit"])
-    data = kt.load_board_at(prior["commit"])
+    try:
+        data = kt.load_board_at(prior["commit"])
+        loaded = {prior["commit"]: data}
+    except kt.BoardDecodeError:   # the cursor sits on a corrupt commit already reported: resolve the project at head
+        data, loaded = kt.load_board_at(page["head"]), {}   # a corrupt head stops loudly
     project = kt.find_project(data, args.project)["id"]
     if project != prior["project"]:
         fail("watch cursor belongs to another board, project or version")
     scope = {"v": 2, "board": board, "project": project}
     today = kt.board_today(data).isoformat()
-    loaded, projected = {prior["commit"]: data}, {}
+    projected = {}
 
     def project_at(commit):   # (projection, board) at one commit; a past commit is never registered for a save
         if commit not in projected:
@@ -853,13 +857,20 @@ def watch_poll_history(kt, args):
         elif step["missing"]:
             problem = "the board folder is missing at this commit or its first parent"
         else:
+            at = parent
             try:
                 previous = project_at(parent)[0] if parent else {"cards": {}, "proposals": {}}
+                at = commit
                 current, now_data = project_at(commit)
                 found = kt.watch_events(previous, current, now_data, me="")
             except Refused as refusal:   # a bound refusal, never a transport failure: report it and move on
                 projected.clear()
                 problem = str(refusal).removeprefix("research: ")
+            except kt.BoardDecodeError:   # a corrupt past commit; a corrupt head still stops loudly
+                if at == page["head"]:
+                    raise
+                projected.clear()
+                problem = "a board file at this commit or its first parent is not valid JSON"
         if problem:
             # One loud event instead of a watcher stuck on this commit forever; the consumer reconciles the board.
             found = [{"board": board, "kind": "unreplayable", "text": f"cannot replay commit {commit}: {problem}; "

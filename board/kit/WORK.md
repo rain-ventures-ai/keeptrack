@@ -112,10 +112,12 @@ an ordinal. Delivery is at least once: a merge is diffed against its first paren
 so a side branch's change comes again at the merge with another `id`. Pages are
 whole units along the head's first-parent line (a plain commit, or a merge with
 its side branch); the cursor only moves forward along that line, so no commit is
-skipped. A commit over the bounds or without the board folder, or a side branch
-longer than the 200-commit scan cap, gives one `unreplayable` event (`card:
-null`) naming the commit or merge, and the replay moves on: a loud gap, never a
-silent one.
+skipped. A commit over the bounds, without the board folder or with a board file
+that is not valid JSON, or a side branch longer than the 200-commit scan cap,
+gives one `unreplayable` event (`card: null`) naming the commit or merge, and the
+replay moves on: a loud gap, never a silent one. A corrupt board at head still
+stops loudly. One call can load up to the scan cap's worth of past boards (200);
+on the API transport each load costs about 5 requests.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has

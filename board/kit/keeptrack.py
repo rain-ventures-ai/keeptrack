@@ -1324,11 +1324,15 @@ def _api_snapshot(include_archive=False, ref=None):
 _BOARD_STATES = {}
 
 
+class BoardDecodeError(SystemExit):
+    """A board file that is not valid JSON (kit v133: history replay tells it apart from a transport failure)."""
+
+
 def _decode_json(rel, entry):
     try:
         obj = json.loads(entry["text"])
     except (ValueError, UnicodeError) as e:
-        sys.exit(f"cannot read {rel}: invalid JSON ({e})")
+        raise BoardDecodeError(f"cannot read {rel}: invalid JSON ({e})")
     entry["obj"] = json.loads(json.dumps(obj))
     return obj
 

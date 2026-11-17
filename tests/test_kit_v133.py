@@ -461,6 +461,37 @@ class Probe:
         self.assertEqual((merges[0], True), (decode(result["cursor"])["commit"], result["more"]))
 
 
+    def test_a_corrupt_past_commit_is_one_loud_event_but_a_corrupt_head_stops(self):
+        self.build()
+        cursor = self.poll()["cursor"]
+        folder = Path(self.writer) / "board"
+        good_card, good_root = (folder / "cards" / "t_alpha.json").read_text(), (folder / "tasks.json").read_text()
+
+        def commit(path, text, message):
+            path.write_text(text)
+            self.run_git(self.writer, "commit", "-qam", message)
+            return self.run_git(self.writer, "rev-parse", "HEAD")
+        bad_card = commit(folder / "cards" / "t_alpha.json", "{not json", "corrupt card")
+        self.push()
+        with self.assertRaisesRegex(SystemExit, "invalid JSON"):   # at head: loud, as before
+            self.poll(cursor)
+        later = commit(Path(self.writer) / "README.md", "later\n", "readme")
+        self.push()
+        first = self.poll(cursor)
+        self.assertEqual([("unreplayable", bad_card)], [(e["kind"], e["commit"]) for e in first["events"]])
+        self.assertIn("not valid JSON", first["events"][0]["text"]); self.assertNotIn("{not json", first["events"][0]["text"])
+        self.assertEqual((later, False), (decode(first["cursor"])["commit"], first["more"]))
+        fixed = commit(folder / "cards" / "t_alpha.json", good_card, "fix card")
+        bad_root = commit(folder / "tasks.json", "{not json", "corrupt root")
+        fixed_root = commit(folder / "tasks.json", good_root, "fix root")
+        moved = self.split_card("t_alpha", 1, "Alpha moved on")
+        self.push()
+        second = self.poll(first["cursor"])   # the cursor sits on a corrupt board and still moves past it
+        self.assertEqual([("unreplayable", fixed), ("unreplayable", bad_root), ("unreplayable", fixed_root), ("fields", moved)],
+                         [(e["kind"], e["commit"]) for e in second["events"]])
+        self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
+
+
 class ProbeGit(Probe, GitBoard):
     pass
 
