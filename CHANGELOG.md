@@ -11,6 +11,12 @@ fine-grained token paste. New optional setting `settings.github_app_signin` `{cl
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code
 exchange. See `docs/help/github-signin.md`.
 
+Kit v133: `keeptrack.py archive` re-splits archive files already over the 900 KB doctor limit into bounded parts, even when nothing
+is due for that year, and never appends to a file over it. Before, a year was repacked only when the run had records for it, so an
+oversize year or part (older kit, hand edit) stayed oversize. Split boards that own their folder only; one-file and shared-folder
+boards, and a year with a record too big for any part, are left as they are with a warning. Each run now reads every indexed archive
+file once to measure it. No schema change.
+
 Kit v132: every label change on a card now leaves a `labels: a, b` history line with the full resulting list (or `labels: none`),
 so a reader can prove from history alone who placed a label. New writers of that line: `research-lock`, `label-set --rename`,
 `label-rm --force` (one line per card, written just before the existing "label X renamed/removed" line), `merge-card` when the target gains
