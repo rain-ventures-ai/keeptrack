@@ -38,9 +38,14 @@ own commits; there is no new event store. No new card field, no migration, no `m
   two polls gives both events. Each event carries `commit` and a stable `id` (board, commit, card, kind, text, author and an
   ordinal), so a consumer can drop a repeat. Output is `{events, cursor, baseline, more, semantics: "commit-replay"}`;
   `more: true` means poll again at once.
+- Paging goes by whole units along the head's first-parent line: for each first-parent commit, the commits it brings (a plain
+  commit, or a merge with its side branch). A page never ends inside a unit, and the cursor only moves forward along that line,
+  so every commit replayed is behind the cursor and every one not yet replayed is ahead of it. The first unit of a call is always
+  taken, even past the page cap.
 - Delivery is **at least once**: a merge commit is diffed against its first parent, so a side branch's change is reported at its
-  own commit and again at the merge (with a different `id`), and a page boundary inside a side branch can repeat a commit.
-  Nothing is skipped.
+  own commit and again at the merge (with a different `id`). Nothing is skipped silently: a side branch longer than the 200-commit
+  scan cap is not replayed commit by commit; it gives one `unreplayable` event naming the merge and how many side-branch commits
+  were not replayed, and the merge itself is still diffed.
 - A commit that cannot be projected (over the 256-card or 128 KiB bound, or with no board folder) gives one `unreplayable` event
   for that commit (`card: null`) and the replay moves on; reconcile the board when you see one.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently

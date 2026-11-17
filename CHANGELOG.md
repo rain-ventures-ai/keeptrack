@@ -16,7 +16,9 @@ polls; snapshot mode (no `--history`) is unchanged. The cursor is one commit (`{
 Each call replays every commit after it (side branches included) in topological order, at most 20 that changed the board
 folder, each diffed against its own first parent with the same watch projection, so a change and its revert between polls
 give two events, each tagged with its `commit` and a stable `id`. Delivery is at least once (a merge repeats its side branch's
-changes); nothing is skipped. A commit over the bounds gives one `unreplayable` event and the replay moves on. Output adds
+changes); nothing is skipped silently. Pages are whole units along the head's first-parent line, so the cursor only moves
+forward. A commit over the bounds, or a side branch longer than the 200-commit scan cap, gives one `unreplayable` event and
+the replay moves on. Output adds
 `more` and `semantics: "commit-replay"`. A non-ancestor (force-pushed or rewritten) or unknown cursor commit is refused, never
 re-baselined; a `--file` board is refused. Clock-only states are not history events. `_git_snapshot`, `_api_snapshot` and
 `_github_load_board` take an optional `ref`; with none, behaviour is unchanged. No new event store, no schema change.

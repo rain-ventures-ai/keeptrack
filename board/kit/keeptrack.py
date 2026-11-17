@@ -1395,14 +1395,15 @@ def _github_load_board(ref=None):
 
 # ---- board history for `watch-poll --history` (kit v133) -------------------------------------------------------------
 # A read-only replay of the board branch's own commits; there is no second event store. Every commit after the cursor
-# (all of `since..head`, side branches included) is replayed in topological order, oldest first, each diffed against
-# its own first parent, so every event is a real change on some commit and none is skipped. A merge commit is diffed
-# against its first parent too, so a side branch's change can be reported twice (at its commit and at the merge, with
-# different ids): at least once, never missed. The cursor commit must be an ancestor of the branch head. Any other
+# (all of `since..head`, side branches included) is replayed in whole units along head's first-parent line, each unit
+# in topological order, each commit diffed against its own first parent, so every event is a real change on some
+# commit and none is skipped. The cursor only moves forward along that line. A merge commit is diffed against its first
+# parent too, so a side branch's change can be reported twice (at its commit and at the merge, with different ids):
+# at least once, never missed. The cursor commit must be an ancestor of the branch head. Any other
 # commit (the branch was force-pushed or rewritten, or the commit is unknown) is refused loudly, never silently
 # re-baselined: a watcher must never believe nothing happened when it cannot know.
-WATCH_HISTORY_PAGE = 20      # board commits replayed per call at most
-WATCH_HISTORY_SCAN = 200     # commits examined per call at most
+WATCH_HISTORY_PAGE = 20      # board commits replayed per call (whole units; the first unit is always taken)
+WATCH_HISTORY_SCAN = 200     # commits examined per call; a bigger side branch is reported as a gap
 WATCH_HISTORY_COMPARE = 50   # API transport: compare pages of 100 commits read per call at most
 
 
@@ -1502,32 +1503,69 @@ def _api_history(since):
     return head, order, parents, trees
 
 
-def board_history(since, limit=WATCH_HISTORY_PAGE):
-    """Kit v133, read-only. The commits of since..head, oldest first in topological order, whose board folder differs
-    from their own first parent's: {head, commits: [{commit, parent, missing}] (at most `limit`), next, more}.
+def _history_units(head, parents):
+    """Split since..head into whole units along head's first-parent line, oldest first: [(Fi, commits of Fi^1..Fi in
+    topological order, Fi last)]. A plain commit is a unit of one; a merge brings its side branch with it."""
+    line, c = [], head
+    while c in parents:
+        line.append(c)
+        c = (parents[c] or [None])[0]
+    line.reverse()
+    units, done = [], set()
+    for tip in line:
+        unit, stack = [], [(tip, False)]
+        while stack:   # post-order over parents inside since..head: a commit's parents come before it
+            c, expanded = stack.pop()
+            if c in done:
+                continue
+            if expanded:
+                done.add(c); unit.append(c)
+                continue
+            stack.append((c, True))
+            stack.extend((p, False) for p in reversed(parents[c]) if p in parents and p not in done)
+        units.append((tip, unit))
+    return units
 
-    `next` is the last commit examined (head when nothing is left). Every commit after it in the order is not one of its
-    ancestors, so `next..head` still holds every commit not yet examined: a page boundary never skips one (it can repeat
-    a side-branch commit examined before `next`). A commit that leaves the board folder as its first parent had it is
-    passed over. `missing`: the board folder is absent at the commit or its parent, so there is nothing to project."""
+
+def board_history(since, limit=None):
+    """Kit v133, read-only. Replays since..head in whole units along head's first-parent line: for each first-parent
+    commit Fi (oldest first), the commits of Fi^1..Fi in topological order (a merge with its side branch, or one plain
+    commit). {head, commits: [...], next, more}. Each item is {commit, parent, missing} for a commit whose board folder
+    differs from its own first parent's (`missing`: no board folder there, nothing to project), or {commit, gap} for a
+    merge whose side branch has more than WATCH_HISTORY_SCAN commits: those are not replayed one by one, and the gap is
+    reported, never silent; the merge itself is still diffed against its first parent.
+
+    `next` is the last Fi whose unit was replayed whole. Every commit replayed is then an ancestor of `next` (or `next`),
+    and every commit not yet replayed is in next..head, so the cursor only moves forward along head's first-parent line
+    and a page never ends inside a unit. A page takes whole units up to `limit` (WATCH_HISTORY_PAGE) replayed commits
+    and WATCH_HISTORY_SCAN examined ones; its first unit is always taken, so every call makes progress."""
     _history_transport()
     if not isinstance(since, str) or not re.fullmatch(r"[0-9a-f]{40}", since):
         sys.exit("invalid watch cursor commit")
-    head, order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since)
-    scan = order[:WATCH_HISTORY_SCAN]
-    first = {c: (parents.get(c) or [None])[0] for c in scan}
-    last, picked, known = since, [], {None: None}
-    for i, c in enumerate(scan):
-        if c not in known or first[c] not in known:   # in small batches: the API transport reads two objects per commit
-            batch = scan[i:i + limit + 5]
-            want = [x for x in dict.fromkeys(batch + [first[x] for x in batch]) if x is not None and x not in known]
-            known.update(trees(want))
-        tree, ptree = known[c], known[first[c]]
-        if tree != ptree:
-            if len(picked) >= limit:
+    limit = WATCH_HISTORY_PAGE if limit is None else limit
+    head, _order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since)
+    picked, last, examined, known = [], since, 0, {None: None}
+    for tip, unit in _history_units(head, parents):
+        if len(unit) > WATCH_HISTORY_SCAN:
+            if examined:
+                break   # an oversized unit starts its own call
+            todo = [tip]
+            items = [{"commit": tip, "gap": len(unit) - 1}]
+        else:
+            if examined + len(unit) > WATCH_HISTORY_SCAN:
                 break
-            picked.append({"commit": c, "parent": first[c], "missing": "missing" in (tree, ptree)})
-        last = c
+            todo, items = unit, []
+        want = [x for x in dict.fromkeys(todo + [(parents.get(c) or [None])[0] for c in todo]) if x is not None and x not in known]
+        if want:
+            known.update(trees(want))
+        for c in todo:
+            p = (parents.get(c) or [None])[0]
+            if known[c] != known[p]:
+                items.append({"commit": c, "parent": p, "missing": "missing" in (known[c], known[p])})
+        replayed = sum(1 for x in items if "gap" not in x)
+        if examined and len(picked) + replayed > limit:
+            break   # never split a unit; the next call starts with it
+        picked += items; examined += len(todo); last = tip
     return {"head": head, "commits": picked, "next": last, "more": last != head}
 
 

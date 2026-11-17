@@ -845,9 +845,12 @@ def watch_poll_history(kt, args):
 
     events = []
     for step in page["commits"]:
-        commit, parent = step["commit"], step["parent"]
+        commit, parent = step["commit"], step.get("parent")
         found, problem = [], None
-        if step["missing"]:
+        if "gap" in step:
+            problem = (f"merge brings {step['gap']} side-branch commits, more than the {kt.WATCH_HISTORY_SCAN} replayed "
+                       "per call; their changes are not replayed one by one (the merge itself is)")
+        elif step["missing"]:
             problem = "the board folder is missing at this commit or its first parent"
         else:
             try:

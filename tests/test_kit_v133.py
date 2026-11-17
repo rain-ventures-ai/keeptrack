@@ -388,6 +388,87 @@ class HistoryApi(GitBoard):
         self.assertLessEqual(cached, set(Path(kt.CACHE_DIR).rglob("*.json")))
 
 
+class Probe:
+    """Two side branches (3 board commits each), a main commit and two --no-ff merges, polled one call at a time under
+    every page and scan cap: each run must end, deliver every board-changing commit (or name it in a gap event), and move
+    the cursor strictly forward along head's first-parent line."""
+
+    def split_card(self, tid, num, title):
+        path = Path(self.writer) / "board" / "cards" / f"{tid}.json"
+        path.write_text(json.dumps(card(tid, num, title), indent=1))
+        self.run_git(self.writer, "add", "-A")
+        self.run_git(self.writer, "commit", "-qm", f"{tid} {title}")
+        return self.run_git(self.writer, "rev-parse", "HEAD")
+
+    def build(self):
+        root = {k: v for k, v in board().items() if k not in ("tasks", "projects")}
+        root.update(version=4, layout="split")
+        folder = Path(self.writer) / "board"
+        (folder / "tasks.json").write_text(json.dumps(root, indent=1))
+        (folder / "projects").mkdir(); (folder / "cards").mkdir()
+        (folder / "projects" / "pr_one.json").write_text(json.dumps({"id": "pr_one", "name": "One", "client": "Example"}))
+        self.split_card("t_alpha", 1, "Alpha"); self.split_card("t_gamma", 3, "Gamma")
+        self.push()
+        base = self.head()
+        self.run_git(self.writer, "checkout", "-q", "-b", "s1", base)
+        side1 = [self.split_card("t_alpha", 1, f"Alpha {n}") for n in range(3)]
+        self.run_git(self.writer, "checkout", "-q", "-b", "s2", base)
+        side2 = [self.split_card("t_gamma", 3, f"Gamma {n}") for n in range(3)]
+        self.run_git(self.writer, "checkout", "-q", "main")
+        main = self.split_card("t_delta", 4, "Delta")
+        merges = []
+        for branch in ("s1", "s2"):
+            self.run_git(self.writer, "merge", "-q", "--no-ff", "-m", f"merge {branch}", branch)
+            merges.append(self.run_git(self.writer, "rev-parse", "HEAD"))
+        self.push()
+        line = self.run_git(self.remote, "rev-list", "--first-parent", "--reverse", f"{base}..main").split()
+        return base, side1, side2, main, merges, line
+
+    def test_every_page_and_scan_cap_ends_without_missing_a_commit(self):
+        base, side1, side2, main, merges, line = self.build()
+        side_of = {**{c: merges[0] for c in side1}, **{c: merges[1] for c in side2}}
+        token = base64.urlsafe_b64encode(json.dumps({"v": 2, "board": "acme/board", "project": "pr_one", "commit": base}).encode()).decode()
+        for page in (1, 2, 3, 5):
+            for scan in (2, 3, 4, 200):
+                with self.subTest(page=page, scan=scan), mock.patch.object(kt, "WATCH_HISTORY_PAGE", page), \
+                        mock.patch.object(kt, "WATCH_HISTORY_SCAN", scan):
+                    cursor, events, at = token, [], -1
+                    for _ in range(20):
+                        result = self.poll(cursor)
+                        events += result["events"]; cursor = result["cursor"]
+                        now = line.index(decode(cursor)["commit"])
+                        self.assertGreater(now, at); at = now   # strictly forward along the first-parent line
+                        if not result["more"]:
+                            break
+                    self.assertFalse(result["more"]); self.assertEqual(line[-1], decode(cursor)["commit"])
+                    delivered = {e["commit"] for e in events if e["kind"] != "unreplayable"}
+                    gaps = {e["commit"] for e in events if e["kind"] == "unreplayable"}
+                    missed = [c for c in side1 + side2 + [main] + merges
+                              if c not in delivered and side_of.get(c) not in gaps]
+                    self.assertEqual([], missed)
+                    if scan >= 4:
+                        self.assertEqual(set(), gaps)
+
+    def test_a_side_branch_over_the_scan_cap_is_one_gap_event_and_progress(self):
+        base, side1, side2, main, merges, line = self.build()
+        token = base64.urlsafe_b64encode(json.dumps({"v": 2, "board": "acme/board", "project": "pr_one", "commit": main}).encode()).decode()
+        with mock.patch.object(kt, "WATCH_HISTORY_SCAN", 3):
+            result = self.poll(token)
+        gap = [e for e in result["events"] if e["kind"] == "unreplayable"]
+        self.assertEqual([merges[0]], [e["commit"] for e in gap]); self.assertIsNone(gap[0]["card"])
+        self.assertIn("3 side-branch commits", gap[0]["text"])
+        self.assertIn(merges[0], {e["commit"] for e in result["events"] if e["kind"] == "fields"})   # the merge itself
+        self.assertEqual((merges[0], True), (decode(result["cursor"])["commit"], result["more"]))
+
+
+class ProbeGit(Probe, GitBoard):
+    pass
+
+
+class ProbeApi(Probe, GitBoard):
+    WRITE = "api"
+
+
 class HistoryFile(unittest.TestCase):
     def test_a_file_board_has_no_history_and_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

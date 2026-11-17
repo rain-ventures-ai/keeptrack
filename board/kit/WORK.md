@@ -109,9 +109,13 @@ examined. Each is diffed against its own first parent with the same projection
 and bounds, so every event is a real change on that commit. Every event carries
 its `commit` and an `id` hashed from board, commit, card, kind, text, author and
 an ordinal. Delivery is at least once: a merge is diffed against its first parent,
-so a side branch's change comes again at the merge with another `id`; a gap cannot
-happen. A commit over the bounds or without the board folder gives one
-`unreplayable` event (`card: null`) and the replay moves on.
+so a side branch's change comes again at the merge with another `id`. Pages are
+whole units along the head's first-parent line (a plain commit, or a merge with
+its side branch); the cursor only moves forward along that line, so no commit is
+skipped. A commit over the bounds or without the board folder, or a side branch
+longer than the 200-commit scan cap, gives one `unreplayable` event (`card:
+null`) naming the commit or merge, and the replay moves on: a loud gap, never a
+silent one.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has
