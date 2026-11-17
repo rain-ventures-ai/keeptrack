@@ -183,6 +183,7 @@ const rowTitles = (page, i) => page.locator('#prsBody .prgroup').nth(i).locator(
     await rp.keyboard.press('Escape');
     assert.match(await rp.locator('#relayBar').innerText(), /Update card #10 is with @alex/);
     assert.equal(await rp.locator('#relayBar button', { hasText: 'Make the relay update card' }).count(), 0, 'once only');
+    await rp.waitForFunction(() => /^(Saved|Synced)/.test(document.getElementById('status').textContent));   // the page's beforeunload guard holds a reload while a save or load is in flight
     await rp.reload(); await rp.waitForSelector('.card'); await rp.locator('#relayBar button').waitFor();
     assert.match(await rp.locator('#relayBar').innerText(), /Update card #10/); assert.equal(r1.titles().filter(c => c.title.startsWith('Update the relay kit')).length, 1, 'a reload makes no second card');
     await rp.close();

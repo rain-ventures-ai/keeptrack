@@ -1,0 +1,9 @@
+{
+  "name": "keeptrack-signin-worker",
+  "private": true,
+  "type": "module",
+  "description": "Token exchange for Sign in with GitHub on the Keeptrack web board. No dependencies.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

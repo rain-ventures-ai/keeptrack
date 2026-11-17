@@ -20,6 +20,7 @@ Keeptrack keeps your people, follow-ups, pipeline and tasks in a private GitHub 
 | Let a website form, booking page or webhook put work on the board | [Inbound items](inbound.md) |
 | Enable per-board widgets in this browser | [Board widgets](widgets.md) |
 | Choose where your assistant runs (Cowork, your computer, the cloud, your phone) and set it up | [Where your assistant runs](where-agents-run.md) |
+| Let people sign in to the web board with GitHub instead of pasting a token | [Sign in with GitHub](github-signin.md) |
 | Know where your data is and who can see it | [Privacy and security](privacy-and-security.md) |
 | Fix a problem | [Questions and problems](faq.md) |
 | Check or repair board data | [Repair a board](repair-a-board.md) |

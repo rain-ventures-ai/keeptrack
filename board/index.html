@@ -5,8 +5,13 @@
 <!-- Content-Security-Policy: only what this page loads. Scripts: this origin, the bootstrap below (by hash; tests/test_web_page.py checks it)
      and the blob: copies it runs. connect-src: the GitHub API, cron-job.org (the Claude relay), Open-Meteo (weather widget); api.test and
      cron.test are reserved test names (RFC 2606) that never resolve, used by the browser tests' kb_api / kb_cron_api. -->
+<!-- Optional "Sign in with GitHub" (docs/help/github-signin.md). To switch it on for every board on this page, put this meta here,
+     above the script below, with the app's client id and the deployed Worker's address (and the same Worker address in "origins"
+     for any board that names a different one):
+     <meta name="kb-github-app-signin" content='{"client_id":"Iv23li…","exchange_url":"https://keeptrack-signin.example.workers.dev"}'>
+     A board's own settings (github_app_signin) may then choose among the origins listed here. Without this meta, sign-in is off. -->
 <!-- Policy template: activated by the asset-free selector immediately below. -->
-<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-dbvP2J0Y6WDMow2pX0BrQ9PqAWW1Lh0GfqVgqUnH4ug=' 'sha256-4ZnsDWMplqliXcK8rYeYC8MhDd9EcyD6bN5qTYzR0jo='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
+<template id="boardPolicy"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob: 'sha256-Q3z1k8C6XFvlW27kHVCoziMqH4wvt7fyPyY8chN5hl8=' 'sha256-4ZnsDWMplqliXcK8rYeYC8MhDd9EcyD6bN5qTYzR0jo='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://api.cron-job.org https://api.open-meteo.com https://api.test https://cron.test; worker-src 'self'; manifest-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"></template>
 <script>
 // Select the policy before loading any assets. Hosted phase 0 has no GitHub network access.
 (function () {
@@ -28,6 +33,14 @@
       if (/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i.test(target.origin) && !target.username && !target.password && !target.search && !target.hash && target.pathname.endsWith('/owner-action') && origins.indexOf(target.origin) < 0) origins.push(target.origin);
     }
     if (origins.length) policy.content = policy.content.replace("connect-src 'self'", "connect-src 'self' " + origins.join(' '));
+  } catch (_) {}
+  // Sign in with GitHub: the page owner's own <meta name="kb-github-app-signin"> (above this script) names the token-exchange
+  // origins the page may talk to. Board data and the address bar never add one.
+  try {
+    var meta = document.querySelector('meta[name="kb-github-app-signin"]'), sign = meta ? JSON.parse(meta.getAttribute('content')) : null, extra = [], list = sign && Array.isArray(sign.origins) ? sign.origins.slice() : [];
+    if (sign && sign.exchange_url) list.push(new URL(sign.exchange_url).origin);
+    list.slice(0, 8).forEach(function (o) { if (typeof o === 'string' && /^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i.test(o) && extra.indexOf(o) < 0) extra.push(o); });
+    if (extra.length) policy.content = policy.content.replace("connect-src 'self'", "connect-src 'self' " + extra.join(' '));
   } catch (_) {}
   document.head.appendChild(policy);
 })();
@@ -278,6 +291,16 @@
           <div data-row="Branch and file"><span id="bThisSub"></span></div>
           <div data-row="You" id="bThisMeRow"><span id="bThisMe"></span></div>
         </div>
+      </div>
+      <div id="sSignin" role="group" aria-labelledby="sSigninLbl" hidden>
+        <p id="sSigninLbl" class="hint"><b>How this browser signs in to GitHub</b></p>
+        <div id="sSigninChoice">
+          <label class="schk"><input type="radio" name="keeptrack-auth-method" id="sAuthApp" value="app"> Sign in with GitHub</label>
+          <label class="schk"><input type="radio" name="keeptrack-auth-method" id="sAuthPat" value="pat"> Use a fine-grained token</label>
+          <p id="sSigninState" class="hint" role="status"></p>
+          <div class="sbtns"><button id="sSigninGo" type="button" class="small primary">Sign in with GitHub</button><button id="sSigninOut" type="button" class="small">Sign out</button></div>
+        </div>
+        <p id="sSigninNote" class="hint" role="status" hidden></p>
       </div>
       <details class="sfold" id="bEditFold"><summary id="bEditBtn">Change connection</summary>
         <div id="bEdit">
