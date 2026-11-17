@@ -430,15 +430,15 @@ if (typeof window !== 'undefined') (() => {
     const rec = res.ok ? appRecordFromExchange(data, Date.now()) : null;
     if (!rec) { setTimeout(() => toast('GitHub sign-in did not complete' + (data && data.error === 'redirect_not_allowed' ? ': this page address is not allowed by the sign-in service' : '') + '. Try again.', true)); return; }
     writeApp(repo, rec); lsPut(SK.method(repo), 'app'); LS.del('kb_ro:' + repo); setTimeout(() => toast('Signed in with GitHub.'));
-    await learnMe(rec.token);
+    learnMe(rec.token);   // in the background: the first board load must never wait on it
   }
   // A GitHub sign-in knows who the person is: fill an empty username from GET /user, so edits and comments never show as "someone".
   // Never overwrites a username the person typed.
   async function learnMe(token) {
     if (!token || LS.get('kb_me', '')) return;
-    try { const r = await fetch(cfg().api + '/user', { cache: 'no-store', credentials: 'omit', headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } });
+    try { const r = await fetch(cfg().api + '/user', { cache: 'no-store', credentials: 'omit', signal: ghSignal('GET'), headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } });
       if (!r.ok) return; const login = (await r.json()).login;
-      if (typeof login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(login) && !LS.get('kb_me', '')) LS.set('kb_me', login); } catch { /* best effort: Settings still lets the person type it */ }
+      if (typeof login === 'string' && /^[A-Za-z0-9-]{1,39}$/.test(login) && !LS.get('kb_me', '')) { LS.set('kb_me', login); const f = document.getElementById('sMe'); if (f && !f.value) f.value = login; } } catch { /* best effort: Settings still lets the person type it */ }
   }
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};

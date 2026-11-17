@@ -302,13 +302,16 @@ test('learnMe: a GitHub sign-in fills an empty username from GET /user, never ov
   const fn = source.slice(source.indexOf('async function learnMe(token)'), source.indexOf('// The link picks the board'));
   assert.ok(fn.length > 100, 'learnMe found');
   assert.match(fn, /if \(!token \|\| LS\.get\('kb_me', ''\)\) return;/, 'a typed username is never replaced (checked before the request)');
-  assert.match(fn, /!LS\.get\('kb_me', ''\)\) LS\.set\('kb_me', login\)/, 'and again after it, in case it was typed meanwhile');
+  assert.match(fn, /!LS\.get\('kb_me', ''\)\) \{ LS\.set\('kb_me', login\)/, 'and again after it, in case it was typed meanwhile');
   assert.match(fn, /cfg\(\)\.api \+ '\/user'/, 'the API stays cfg().api so tests can override it');
   assert.match(fn, /await fetch\(/, 'goes through authFetch, so an expired access token is renewed first');
   assert.match(fn, /\/\^\[A-Za-z0-9-\]\{1,39\}\$\/\.test\(login\)/, 'only a GitHub-shaped login is stored');
   assert.match(fn, /catch \{/, 'best effort: a failure never breaks sign-in');
   // after sign-in it gets the token the exchange produced (the record's field is `token`, not access_token)
-  assert.match(source, /writeApp\(repo, rec\);[^\n]*\n\s*await learnMe\(rec\.token\);/);
+  assert.match(source, /writeApp\(repo, rec\);[^\n]*\n\s*learnMe\(rec\.token\);/);
+  assert.doesNotMatch(source, /await learnMe\(/, 'the first board load must never wait on GET /user');
+  assert.match(fn, /signal: ghSignal\('GET'\)/, 'GET /user has the read timeout');
+  assert.match(fn, /getElementById\('sMe'\); if \(f && !f\.value\) f\.value = login;/, 'an open Settings dialog gets the learned name, so Save never blanks it');
   assert.doesNotMatch(source, /learnMe\(rec\.access_token\)/);
   // at startup, once, after a sign-in return, for a browser on the app method with no username
   assert.match(source, /await signinReturned; if \(!LS\.get\('kb_me', ''\) && cfg\(\)\.repo && authMethod\(cfg\(\)\.repo\) === 'app'\) learnMe\(cfg\(\)\.token\);/);
