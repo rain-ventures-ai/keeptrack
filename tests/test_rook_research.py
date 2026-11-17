@@ -613,6 +613,43 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(task["coordination"]["research"]["current"]["next_actor"], "owner")
         self.assertEqual(task["coordination"]["runs"], []); self.assertEqual(task["comments"], [])
 
+    def test_needs_information_asks_the_owner_once_and_settles_like_request_rejected(self):
+        self.ready(); self.admit(); self.invoke("research-note", reason="needs_information")
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "backlog"); self.assertIn("needs-human", task["labels"])
+        self.assertFalse(task["coordination"]["research"]["admission"]["active"])
+        co = task["coordination"]["research"]
+        self.assertEqual((co["current"]["next_actor"], co["prelaunch_note"]), ("owner", {"reason": "needs_information", "label_added": True}))
+        self.assertEqual(task["coordination"]["runs"], [])
+        self.assertEqual([c["text"] for c in task["comments"]], [self.research.NEEDS_INFORMATION_QUESTION])
+
+    def test_a_repeated_needs_information_note_adds_no_second_question_or_label(self):
+        # The first note withdraws the grant, so a replay is refused by the same check as every other note.
+        self.ready(); self.admit(); self.invoke("research-note", reason="needs_information")
+        with self.assertRaisesRegex(SystemExit, "withdrawn"):
+            self.invoke("research-note", reason="needs_information")
+        task = self.read()["tasks"][0]
+        self.assertEqual(len(task["comments"]), 1); self.assertEqual(task["labels"].count("needs-human"), 1)
+
+    def test_awaiting_approval_holds_for_the_owner_without_a_comment(self):
+        self.ready(); self.admit(); self.invoke("research-note", reason="awaiting_approval")
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["column"], "backlog"); self.assertIn("needs-human", task["labels"])
+        self.assertFalse(task["coordination"]["research"]["admission"]["active"])
+        self.assertEqual(task["coordination"]["research"]["prelaunch_note"], {"reason": "awaiting_approval", "label_added": True})
+        self.assertEqual((task["coordination"]["runs"], task["comments"]), ([], []))
+        self.assertIn("approve", task["coordination"]["research"]["current"]["remaining"].lower())
+
+    def test_the_new_note_reasons_cannot_replace_an_active_attempt_and_old_reasons_stay(self):
+        self.ready(); self.start()
+        for reason in ("needs_information", "awaiting_approval"):
+            with self.assertRaisesRegex(SystemExit, "active or unresolved"):
+                self.invoke("research-note", reason=reason)
+        self.assertEqual(self.research.NOTE_REASONS[:5], ("source_unavailable", "source_rejected", "admission_expired",
+                                                         "host_unavailable", "request_rejected"))
+        self.assertEqual(self.research.OWNER_NOTE_REASONS,
+                         {"source_rejected", "admission_expired", "request_rejected", "needs_information", "awaiting_approval"})
+
     def test_prelaunch_note_cannot_replace_an_unresolved_or_claimed_run(self):
         self.ready(); self.start()
         with self.assertRaisesRegex(SystemExit, "active or unresolved"):

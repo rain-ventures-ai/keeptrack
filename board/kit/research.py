@@ -21,6 +21,14 @@ import urllib.parse
 
 SCHEMA = "keeptrack.research/1"
 EXECUTOR = "relay-research"
+# Host-only prelaunch note reasons (work-research-note). The last three need the owner: the card goes back to
+# Backlog with needs-human. needs_information (kit 129) asks the owner to add what is missing; awaiting_approval
+# (kit 129) says the request asks for more than read-only research, which this pilot never starts.
+NOTE_REASONS = ("source_unavailable", "source_rejected", "admission_expired", "host_unavailable", "request_rejected",
+                "needs_information", "awaiting_approval")
+OWNER_NOTE_REASONS = frozenset({"source_rejected", "admission_expired", "request_rejected", "needs_information", "awaiting_approval"})
+NEEDS_INFORMATION_QUESTION = ("Rook needs one more detail before it can start: this request has a blank or an open question "
+                              "(for example TBD). Add it to the card, then hand it to Rook again.")
 HASH = re.compile(r"sha256:[a-f0-9]{64}\Z")
 PUBLIC_POLICY_FIELDS = {"v", "enabled", "board", "owner", "projects", "profile", "policy_digest", "approval_ttl"}
 ACTION_BINDINGS = {"board", "owner", "project", "task_id", "approval_id", "answer_id", "content_hash", "policy_digest"}
@@ -696,7 +704,7 @@ def parser(sub, callback):
     p.set_defaults(f=callback, work_action="research-read-failed")
     p = sub.add_parser("work-research-note", help="host-only bounded prelaunch wait or refusal; never worker-supplied prose")
     p.add_argument("id"); p.add_argument("--admission-receipt", required=True); p.add_argument("--policy-digest", required=True)
-    p.add_argument("--reason", choices=("source_unavailable", "source_rejected", "admission_expired", "host_unavailable", "request_rejected"), required=True)
+    p.add_argument("--reason", choices=NOTE_REASONS, required=True)
     p.set_defaults(f=callback, work_action="research-note")
     p = sub.add_parser("work-research-reconcile", help="authenticate a saved research outcome with its private run receipt")
     p.add_argument("id"); p.add_argument("--run-id", required=True); p.add_argument("--receipt", required=True)
@@ -833,7 +841,7 @@ def command(kt, work, args):
         return read_failed(kt, work, args)
     if action == "note":
         private = _private_receipt(args.admission_receipt); result = {}
-        owner = args.reason in {"source_rejected", "admission_expired", "request_rejected"}
+        owner = args.reason in OWNER_NOTE_REASONS
         def change(data):
             kt._MUT["recheck"] = kt._MUT["rerun"] = True; result.clear()
             task = kt.find(data, args.id); co = work.coordinate(task)
@@ -844,11 +852,18 @@ def command(kt, work, args):
                     "source_rejected": "Use public HTTPS source links, then hand this request to Rook again.",
                     "admission_expired": "The run window ended before launch. Hand this request to Rook again if it is still wanted.",
                     "request_rejected": "The request did not pass execution checks. Check the brief and adopted host configuration, then hand it to Rook again.",
-                    "host_unavailable": "Configured research execution is not available yet; no worker started. Rook will recheck."}[args.reason]
+                    "host_unavailable": "Configured research execution is not available yet; no worker started. Rook will recheck.",
+                    "needs_information": NEEDS_INFORMATION_QUESTION,
+                    "awaiting_approval": "This request also asks for a change. The research pilot only reads public sources and starts nothing else. "
+                                         "Approve the change separately, or remove it from the card and hand the research to Rook again."}[args.reason]
             current = {"done": "Owner request saved; no research worker launched.", "remaining": text, "next_actor": "owner" if owner else "rook"}
             if co["research"].get("current") != current:
                 co["research"]["current"] = current
                 kt.hist(task, "Rook research needs owner input before launch" if owner else "Rook research waiting before launch")
+                if args.reason == "needs_information":
+                    # One question, written only when the note changes: a repeated note adds nothing.
+                    task.setdefault("comments", []).append({"id": "c_" + kt.uuid.uuid4().hex[:6], "at": kt.now(), "by": kt.who_am_i(task),
+                                                            "text": NEEDS_INFORMATION_QUESTION})
             if owner:
                 co["research"]["admission"]["active"] = False
                 kt.move_task_to_column(data, task, "backlog")

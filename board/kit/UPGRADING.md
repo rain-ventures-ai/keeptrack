@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v129 (schema 4)
+
+Two new host-only reasons for `work-research-note`, so a research request that cannot start tells the owner the right thing:
+
+- `needs_information`: the request has a blank or an open question. The card goes back to Backlog with `needs-human`, the
+  admission grant is withdrawn, and one comment asks the owner to add the detail and hand the card to Rook again.
+  The comment is written only when the note changes, so a repeated note adds none.
+- `awaiting_approval`: the request also asks for a change (a repository edit, a record change or other reversible work).
+  The research pilot only reads public sources and starts nothing else, so the card goes back to Backlog with `needs-human`
+  and a note that says to approve the change separately or remove it and hand the research again. No comment.
+
+Both behave like `request_rejected`: the note cannot replace an active or unresolved attempt, and the prelaunch note is
+recorded as `{reason, label_added}`. No new card field, no migration; an upgrade changes no card. A host that does not send
+the new reasons behaves as before.
+
 ### v128 (schema 4)
 
 Records work the owner asked for, so a finished request can be told to the owner once.
