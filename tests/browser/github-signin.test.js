@@ -10,6 +10,7 @@
 //  6. an app token near expiry is refreshed first; the refresh token goes only to the Worker
 //  7. a 401 refreshes once and retries; a refused refresh clears the app tokens (not the pasted token)
 //  8. Sign out clears the app tokens only
+// 14. a renewal that keeps failing shows "Sign in again" (repeated Worker refusals, or an expired access token) and keeps the refresh token
 // Run: node github-signin.test.js
 
 const assert = require('node:assert/strict');
@@ -313,6 +314,41 @@ const hasCard = page => page.evaluate(() => !!document.querySelector('.card'));
       assert.ok(page.api.bearers().every(b => b === 'Bearer ghu_old'), what);
       assert.deepEqual(page.errors, []); await page.close();
     }
+    // 14. a renewal that keeps failing is not silent: "Sign in again" after repeated Worker refusals or once the access token has expired;
+    //     passing failures alone never prompt; the refresh token is kept; the pasted token is still a choice. The page's clock is faked so the
+    //     one-minute hold between attempts can be skipped.
+    const retry = async (page, n = 1) => { for (let i = 0; i < n; i++) { await page.clock.fastForward(61 * 1000); await page.evaluate(() => document.getElementById('btnRefresh').click()); await page.waitForTimeout(350); } };
+    const prompted = page => page.evaluate(() => /could not be renewed/.test(document.getElementById('sSigninState').textContent));
+    const refreshes = page => page.worker.filter(w => w.path === '/refresh').length;
+    { const seed = { token: 'ghu_old', exp: Date.now() + 294 * 1000, refresh: 'ghr_old', rexp: Date.now() + 1e10 };
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed, refreshReply: [{ http: 503 }, { http: 503 }, { http: 429 }, { http: 503 }, GOOD_TOKENS(2)], configure: p => p.clock.install() });
+      for (let i = 0; i < 4; i++) { assert.equal(await prompted(page), false, 'passing failures (5xx, 429) never prompt while the token is valid'); await retry(page); }
+      assert.ok(refreshes(page) >= 2, 'it kept retrying: ' + refreshes(page));
+      assert.ok(await stored(page, 'kb_signin_app:acme/board'), 'and kept the sign-in'); assert.deepEqual(page.errors, []); await page.close(); }
+    { const seed = { token: 'ghu_old', exp: Date.now() + 294 * 1000, refresh: 'ghr_old', rexp: Date.now() + 1e10 };
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed, refreshReply: [{ error: 'not_configured' }, { error: 'redirect_not_allowed' }, { error: 'bad_request' }, GOOD_TOKENS(2)], configure: p => p.clock.install() });
+      assert.equal(await prompted(page), false, 'one Worker refusal is not enough');
+      for (let i = 0; i < 4 && !(await prompted(page)); i++) { await retry(page); if (await prompted(page)) assert.ok(refreshes(page) >= 3, 'three Worker refusals in a row before the prompt, not fewer: ' + refreshes(page)); }
+      assert.ok(await prompted(page), 'the Settings sign-in block asks to sign in again');
+      const rec = JSON.parse(await stored(page, 'kb_signin_app:acme/board')); assert.equal(rec.refresh, 'ghr_old', 'a Worker configuration problem never deletes the refresh token');
+      await openConn(page); assert.equal(await visible(page, '#sSigninGo'), true, 'Settings offers the button');
+      assert.equal(await page.locator('#sSigninGo').textContent(), 'Sign in again');
+      assert.match(await page.locator('#sSigninState').textContent(), /could not be renewed/);
+      await page.locator('#sAuthPat').check(); await page.waitForTimeout(500);
+      assert.ok(await hasCard(page), 'the person can still choose the pasted token and the board opens');
+      assert.ok(page.api.bearers().includes('Bearer test'), 'with the pasted token');
+      assert.equal(JSON.parse(await stored(page, 'kb_signin_app:acme/board')).refresh, 'ghr_old', 'the sign-in is still there for later');
+      assert.deepEqual(page.errors, []); await page.close(); }
+    { const seed = { token: 'ghu_old', exp: Date.now() - 1000, refresh: 'ghr_old', rexp: Date.now() + 1e10 };   // the access token has already expired
+      const page = await open(browser, { settings: { github_app_signin: BOARD_CFG }, meta: PAGE_DEFAULT, method: 'app', seed, refreshReply: [{ http: 503 }, { http: 503 }, GOOD_TOKENS(2)], configure: p => p.clock.install() });
+      assert.equal(await prompted(page), false, 'one failure is not enough');
+      for (let i = 0; i < 3 && !(await prompted(page)); i++) await retry(page);
+      assert.ok(await prompted(page), 'expired and renewal keeps failing: asks to sign in again');
+      assert.ok(refreshes(page) >= 2); assert.equal(JSON.parse(await stored(page, 'kb_signin_app:acme/board')).refresh, 'ghr_old', 'the refresh token is kept');
+      await retry(page, 2);   // the Worker answers again: renewed, and the prompt goes
+      assert.equal(JSON.parse(await stored(page, 'kb_signin_app:acme/board')).token, 'ghu_2');
+      await openConn(page); assert.equal(await visible(page, '#sSigninGo'), false, 'no prompt once it renewed');
+      assert.deepEqual(page.errors, []); await page.close(); }
     console.log('github-signin: ok');
   } finally { await browser.close(); server.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

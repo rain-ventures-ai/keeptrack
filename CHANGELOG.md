@@ -11,6 +11,13 @@ fine-grained token paste. New optional setting `settings.github_app_signin` `{cl
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code
 exchange. See `docs/help/github-signin.md`.
 
+Kit v130: `keeptrack.py settings-set --github-app-signin '{"client_id":"...","exchange_url":"https://..."}'` and
+`--clear-github-app-signin` set and clear `settings.github_app_signin`, validated like the web page does (client id shape,
+https only, no login, query or fragment, normalised). `settings` prints it. No schema change.
+The web page now shows a "Sign in again" prompt (a toast, the status line, and a button in Settings) when a sign-in cannot be renewed: the access
+token is past its expiry and renewal keeps failing, or the Worker keeps answering with a configuration refusal
+(`not_configured`, `redirect_not_allowed`, `bad_request`). The refresh token is kept and the pasted token stays available.
+
 Kit v129: two new `work-research-note` reasons. `needs_information` sends the card back to Backlog with `needs-human` and
 one question comment (the request has a blank such as TBD); `awaiting_approval` does the same without a comment (the request
 also asks for a change the research pilot never starts). Both settle like `request_rejected`. No schema change.

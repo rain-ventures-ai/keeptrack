@@ -193,10 +193,20 @@ const SIGNIN_REFRESH_HOLD_MS = 60 * 1000;
 // Only GitHub's real refusals end a sign-in. A 5xx, a 429 (the Worker's rate limit) and the Worker's own errors (not_configured,
 // redirect_not_allowed, bad_request, github_unreachable, a generic github_error ...) are passing: keep the tokens and retry after the hold.
 const SIGNIN_GITHUB_REFUSALS = new Set(['bad_refresh_token', 'bad_verification_code', 'incorrect_client_credentials', 'redirect_uri_mismatch', 'unverified_user_email', 'access_denied', 'application_suspended']);
+// 'refused': GitHub's own refusal, the sign-in ends. 'config': the Worker says it cannot do this (a setup problem, even on a 500):
+// kept like a passing failure, but a few in a row ask the person to sign in again. 'transient': everything else (network, 5xx, 429, github_unreachable ...).
+const SIGNIN_CONFIG_REFUSALS = new Set(['not_configured', 'redirect_not_allowed', 'bad_request']);
+const SIGNIN_PROMPT_CONFIG_FAILS = 3, SIGNIN_PROMPT_EXPIRED_FAILS = 2;
 function refreshFailureKind(status, data) {
-  if (status >= 500 || status === 429) return 'transient';
-  return data && typeof data === 'object' && SIGNIN_GITHUB_REFUSALS.has(data.error) ? 'refused' : 'transient';
+  if (status === 429) return 'transient';
+  const error = data && typeof data === 'object' ? data.error : undefined;
+  if (SIGNIN_CONFIG_REFUSALS.has(error)) return 'config';
+  if (status >= 500) return 'transient';
+  return SIGNIN_GITHUB_REFUSALS.has(error) ? 'refused' : 'transient';
 }
+// When a renewal that keeps failing must stop being silent: the Worker refused for its own reasons several times in a row, or the access
+// token has already expired (exp, ms; 0 = never) and renewal failed again. The tokens are kept either way; this only asks for a new sign-in.
+const signinPromptDue = ({ exp, now, fails, configFails }) => configFails >= SIGNIN_PROMPT_CONFIG_FAILS || (exp > 0 && exp <= now && fails >= SIGNIN_PROMPT_EXPIRED_FAILS);
 const refreshHeld = (holdUntil, now) => typeof holdUntil === 'number' && now < holdUntil;
 function refreshDecision(app, now, margin = SIGNIN_REFRESH_MARGIN_MS) {
   if (!app || !app.token) return 'signin';
@@ -213,7 +223,7 @@ function appRecordFromExchange(data, now) {
     refresh: typeof data.refresh_token === 'string' ? data.refresh_token : '', rexp: secs(data.refresh_token_expires_in) ? now + secs(data.refresh_token_expires_in) * 1000 : 0 };
 }
 if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText, similarScore, similarKind, similarScope, similarMatches,
-  parseSigninConfig, parsePageSignin, newOAuthState, newCodeVerifier, codeChallenge, refreshHeld, refreshFailureKind, SIGNIN_MAX_ORIGINS, SIGNIN_REFRESH_HOLD_MS, signinRedirectUri, authorizeUrl, stripOAuthParams, checkOAuthReturn, resolveAuthMethod, chooseToken, refreshDecision, appRecordFromExchange };
+  parseSigninConfig, parsePageSignin, newOAuthState, newCodeVerifier, codeChallenge, refreshHeld, refreshFailureKind, signinPromptDue, SIGNIN_MAX_ORIGINS, SIGNIN_REFRESH_HOLD_MS, signinRedirectUri, authorizeUrl, stripOAuthParams, checkOAuthReturn, resolveAuthMethod, chooseToken, refreshDecision, appRecordFromExchange };
 
 // A page and a board.js from different deploys (GitHub Pages and browsers cache index.html for ~10 minutes) never wire up:
 // refresh the cached page and reload once, and if the server still has the other version, say so. index.html has the same
@@ -316,8 +326,13 @@ if (typeof window !== 'undefined') (() => {
     if (p.config) lsPut(SK.cfg(repo), JSON.stringify(p.config)); else lsDrop(SK.cfg(repo));
     const was = signinNote; signinNote = p.note; if (was !== p.note) try { renderSignin(); } catch { /* Settings not built yet */ }
   }
+  let refreshFails = 0, configFails = 0, signinAgain = '';   // consecutive failed renewals, those of them the Worker's own configuration refusals, and the repo that was asked to sign in again
+  function signinPrompt(repo) {   // renewal keeps failing: keep every token, but say so (status line, Settings button "Sign in again")
+    const first = signinAgain !== repo; signinAgain = repo; if (LS.get('kb_repo', '') !== repo) return;
+    setStatus('Sign in again', 'err'); if (first) toast('Your GitHub sign-in could not be renewed. Sign in again in Settings, or use a token.', true); try { renderSignin(); } catch { /* Settings not built yet */ }
+  }
   function signinFailed(repo, why) {   // the sign-in cannot be renewed: forget it and say so
-    dropApp(repo); if (LS.get('kb_repo', '') !== repo) return;
+    signinAgain = ''; refreshFails = configFails = 0; dropApp(repo); if (LS.get('kb_repo', '') !== repo) return;
     lastSyncOk = false; setStatus('Not connected', 'err'); toast(why || 'Your GitHub sign-in ended. Sign in again in Settings.', true); try { renderSignin(); renderThis(); } catch { /* Settings not built yet */ }
   }
   let refreshing = null, refreshHold = 0;   // refreshHold: no refresh attempts before this time (after a network error or a 5xx)
@@ -333,12 +348,18 @@ if (typeof window !== 'undefined') (() => {
       if (!rec || !conf || refreshDecision(rec, Date.now()) === 'signin' || !rec.refresh) { signinFailed(repo); return null; }
       let res, data = null;
       if (refreshHeld(refreshHold, Date.now())) return null;
+      const held = kind => {   // a failure that is not GitHub's refusal: keep the sign-in and retry after the hold, but not silently for ever
+        refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; refreshFails++; configFails = kind === 'config' ? configFails + 1 : 0;
+        if (signinPromptDue({ exp: rec.exp, now: Date.now(), fails: refreshFails, configFails })) signinPrompt(repo);
+        return null;
+      };
       try { res = await window.fetch(conf.exchange_url + '/refresh', { method: 'POST', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: ghSignal('POST'),
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: rec.refresh }) }); } catch { refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; return null; }
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: rec.refresh }) }); } catch { return held('transient'); }
       try { data = await res.json(); } catch { /* no body */ }
       const next = res.ok ? appRecordFromExchange(data, Date.now()) : null;
-      if (next) { refreshHold = 0; writeApp(repo, next); return next; }
-      if (refreshFailureKind(res.status, data) === 'transient') { refreshHold = Date.now() + SIGNIN_REFRESH_HOLD_MS; return null; }   // 5xx, 429, the Worker's own errors: keep the sign-in, retry after the hold
+      if (next) { refreshHold = 0; refreshFails = configFails = 0; const was = signinAgain === repo; signinAgain = ''; writeApp(repo, next); if (was) try { renderSignin(); } catch { /* Settings not built yet */ } return next; }
+      const kind = refreshFailureKind(res.status, data);
+      if (kind !== 'refused') return held(kind);   // 5xx, 429, network, the Worker's own errors: keep the sign-in (and its refresh token)
       signinFailed(repo); return null;
     };
     refreshing = (async () => (navigator.locks ? navigator.locks.request('kb_signin_refresh:' + repo, run) : run()))().finally(() => { refreshing = null; });
@@ -479,7 +500,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 129;
+  const PAGE_KIT = 130;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -6446,10 +6467,11 @@ if (typeof window !== 'undefined') (() => {
     const method = authMethod(c.repo), rec = readApp(c.repo), app = method === 'app';
     $('sAuthApp').checked = app; $('sAuthPat').checked = !app;
     showPat(!app); if ($('sForgetRow')) $('sForgetRow').hidden = app || !c.token;   // Forget token is the pasted token's control; Sign out is the app's
-    const signedIn = app && !!c.token;
-    $('sSigninState').textContent = app ? (signedIn ? `Active: signed in with GitHub${rec && rec.exp ? ` (this sign-in renews itself; current one has ${minutesLeft(rec)} min left)` : ''}.` : 'Active: sign in with GitHub. You are not signed in yet.')
+    const signedIn = app && !!c.token, again = app && signinAgain === c.repo;
+    $('sSigninState').textContent = again ? 'Your GitHub sign-in could not be renewed. Sign in again, or choose "Use a fine-grained token" to carry on with a pasted one.'
+      : app ? (signedIn ? `Active: signed in with GitHub${rec && rec.exp ? ` (this sign-in renews itself; current one has ${minutesLeft(rec)} min left)` : ''}.` : 'Active: sign in with GitHub. You are not signed in yet.')
       : `Active: fine-grained token${LS.get('kb_token') ? '' : ' (none saved yet)'}.`;
-    $('sSigninGo').hidden = !app || signedIn; $('sSigninOut').hidden = !signedIn;
+    $('sSigninGo').hidden = !app || (signedIn && !again); $('sSigninGo').textContent = again ? 'Sign in again' : 'Sign in with GitHub'; $('sSigninOut').hidden = !signedIn;
   }
   function chooseAuthMethod(method) {
     const repo = cfg().repo; if (!repo || !signinConfig(repo)) return;
@@ -6467,7 +6489,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function signOutApp() {   // the app tokens only: a pasted token is not touched
     const repo = cfg().repo; if (boardWorking()) { setStatus('Waiting for the save to finish before signing out…'); await boardIdle(); }
-    dropApp(repo); loadGen++; LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); widgets = []; widgetMeta = { key: '', etag: '', problem: '' };
+    signinAgain = ''; refreshFails = configFails = 0; dropApp(repo); loadGen++; LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); widgets = []; widgetMeta = { key: '', etag: '', problem: '' };
     state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Signed out'); renderSignin(); renderThis(); toast('Signed out of GitHub in this browser.');
   }
   if ($('sSignin')) {
