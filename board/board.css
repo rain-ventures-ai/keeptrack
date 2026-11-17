@@ -1,3 +1,43 @@
+/* Flow uses the board's theme and confines wide chains to their own scroll surface. */
+#board.v-flow { display: block; overflow: auto; padding: 20px; }
+.flow-shell { max-width: 1800px; margin: auto; }
+.flow-heading, .flow-status { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.flow-heading h2 { margin: 0; font-size: 22px; }
+.flow-heading .ui-btn { margin-left: auto; }
+.flow-status { margin: 16px 0 24px; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--card); font-size: 12px; }
+.flow-content { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 24px; }
+.flow-main { min-width: 0; }
+.flow-main h3, .flow-feed h3 { margin: 0 0 12px; font-size: 14px; }
+.flow-main > p { margin: 12px 0 24px; }
+.flow-graph-scroll { overflow: auto; max-height: 65vh; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); }
+.flow-canvas { position: relative; }
+.flow-canvas > svg { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.flow-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+#flow-arrow path { fill: var(--muted); }
+.flow-edge-cycle { stroke: var(--warn); stroke-dasharray: 4 3; }
+.flow-card { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 264px; min-height: 144px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; font: inherit; cursor: pointer; }
+.flow-canvas .flow-card { position: absolute; height: 144px; }
+.flow-card:hover { background: var(--card-hover); border-color: var(--accent); }
+.flow-card:focus-visible, .flow-graph-scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.flow-card-title { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.flow-card-meta { color: var(--muted); font-size: 11px; line-height: 1.3; }
+.flow-deps { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow-run, .flow-cycle { font-size: 11px; color: var(--ok); }
+.flow-running { border-left: 4px solid var(--ok); }
+.flow-stale, .flow-blocked, .flow-stuck { border-left: 4px solid var(--warn); }
+.flow-stale .flow-run, .flow-blocked .flow-run, .flow-stuck .flow-run, .flow-cycle { color: var(--warn); }
+.flow-lanes { display: flex; align-items: flex-start; gap: 16px; overflow: auto; padding-bottom: 16px; }
+.flow-lane { flex: 0 0 264px; }
+.flow-lane h4 { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.flow-lane .flow-card { margin-bottom: 10px; }
+.flow-feed { min-width: 0; }
+.flow-event { padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.flow-event a { color: var(--text); font-size: 12px; line-height: 1.5; text-decoration: none; }
+.flow-event a:hover { text-decoration: underline; }
+.flow-event .hint { display: block; margin-top: 4px; }
+@media (max-width: 900px) { .flow-content { grid-template-columns: minmax(0, 1fr); } .flow-feed { border-top: 1px solid var(--border); padding-top: 16px; } }
+@media (max-width: 760px) { #board.v-flow { padding: 12px; } .flow-heading { gap: 8px; } .flow-heading .hint { flex-basis: 100%; order: 3; } }
+
 /* ---- design tokens -------------------------------------------------------
    Scales (spacing, type, radius, touch target, z-index) are theme-independent and live on :root.
    Colour roles are set per theme below. Every theme, including the paper/ink/hero packs and "custom", resolves the

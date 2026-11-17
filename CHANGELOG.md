@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: **Flow** beside Kanban shows dependency arrows, unlinked cards by column, and live claim states.
+Done is collapsed initially; existing project and label filters apply. GitHub boards also show the last 20 board
+commits and optional `automation/local-runner.json` status. Flow uses the board's 30-second refresh, pauses when
+hidden and catches up on return. No kit version or data schema change.
+
 Web board only, no kit version and no schema bump: optional "Sign in with GitHub" (a GitHub App user token) beside the unchanged
 fine-grained token paste. New optional setting `settings.github_app_signin` `{client_id, exchange_url}`; older pages and the
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code

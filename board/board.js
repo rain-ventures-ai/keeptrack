@@ -1178,7 +1178,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } return ok; }
+  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -2584,12 +2584,16 @@ if (typeof window !== 'undefined') (() => {
     applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox(); if ($('dlgSettings').open) syncDocsHome(undefined, !!$('secDocsHome')?.contains(document.activeElement));
     if (view !== 'board') {
       const listPos = listPosition();
+      const flowScroll = view === 'flow' ? [...$('board').querySelectorAll('.flow-graph-scroll, .flow-lanes')].map(n => [n.scrollLeft, n.scrollTop]) : [];
+      const flowFocus = view === 'flow' ? document.activeElement?.dataset.card : null;
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, archive: renderArchiveView, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
+      ({ flow: renderFlow, list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, archive: renderArchiveView, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
+      if (flowScroll.length) $('board').querySelectorAll('.flow-graph-scroll, .flow-lanes').forEach((n, i) => { if (flowScroll[i]) { n.scrollLeft = flowScroll[i][0]; n.scrollTop = flowScroll[i][1]; } });
+      if (flowFocus) [...$('board').querySelectorAll('.flow-card')].find(n => n.dataset.card === flowFocus)?.focus({ preventScroll: true });
       if ($('dlgCard').open) refreshDrawer(); return;
     }
     const board = $('board');
@@ -2625,6 +2629,116 @@ if (typeof window !== 'undefined') (() => {
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
     renderLegend(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
+  }
+
+  // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null;
+  const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
+  async function refreshFlow() {
+    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden) return;
+    const c = cfg(), key = flowKey(c);
+    if (flowMeta.key !== key) flowMeta = { key, checked: 0 };
+    if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
+    const ticket = flowRequest = { key }, previous = flowMeta;
+    const read = async (endpoint, tag) => {
+      const r = await githubApi('GET', endpoint, null, { etag: tag }, c);
+      if (r.status === 304) return { unchanged: true };
+      if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
+      if (!r.ok) throw new Error(`GitHub ${r.status}`);
+      return { data: endpoint.startsWith('/contents/') ? (await fileJson(r, 'automation/local-runner.json', c)).raw : await r.json(), tag: r.headers.get('ETag') };
+    };
+    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : c.path;
+    const results = await Promise.allSettled([
+      read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, previous.runnerTag),
+      read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(dir)}&per_page=20`, previous.commitsTag)
+    ]);
+    if (flowRequest !== ticket || flowKey(cfg()) !== key || cfg().token !== c.token) { if (flowRequest === ticket) flowRequest = null; return; }
+    const next = { ...previous, checked: Date.now() };
+    results.forEach((r, i) => {
+      const name = i ? 'commits' : 'runner';
+      if (r.status === 'rejected') next[name + 'Error'] = 'Could not refresh ' + (i ? 'activity' : 'runner status');
+      else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; } }
+    });
+    flowMeta = next; flowRequest = null;
+    if (view === 'flow' && !document.hidden) render();
+  }
+  // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
+  function flowLayout(tasks) {
+    const byId = new Map(tasks.map(t => [t.id, t])), edges = [], next = new Map(tasks.map(t => [t.id, []]));
+    tasks.forEach(t => [...new Set(t.after || [])].forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); } }));
+    let serial = 0; const index = new Map(), low = new Map(), stack = [], stacked = new Set(), groups = [], groupOf = new Map();
+    function visit(id) {
+      index.set(id, serial); low.set(id, serial++); stack.push(id); stacked.add(id);
+      next.get(id).forEach(to => { if (!index.has(to)) { visit(to); low.set(id, Math.min(low.get(id), low.get(to))); } else if (stacked.has(to)) low.set(id, Math.min(low.get(id), index.get(to))); });
+      if (low.get(id) === index.get(id)) { const group = []; let to; do { to = stack.pop(); stacked.delete(to); groupOf.set(to, groups.length); group.push(to); } while (to !== id); groups.push(group); }
+    }
+    tasks.forEach(t => { if (!index.has(t.id)) visit(t.id); });
+    const incoming = groups.map(() => new Set()), outgoing = groups.map(() => new Set()), ranks = groups.map(() => 0);
+    edges.forEach(([a, b]) => { const x = groupOf.get(a), y = groupOf.get(b); if (x !== y) { incoming[y].add(x); outgoing[x].add(y); } });
+    const degree = incoming.map(s => s.size), queue = degree.flatMap((n, i) => n ? [] : [i]);
+    for (let i = 0; i < queue.length; i++) { const x = queue[i]; outgoing[x].forEach(y => { ranks[y] = Math.max(ranks[y], ranks[x] + 1); if (!--degree[y]) queue.push(y); }); }
+    const rows = new Map(), positions = new Map();
+    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 170, cycle: groups[groupOf.get(t.id)].length > 1 || (t.after || []).includes(t.id) }); });
+    return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 170 + 24 };
+  }
+  function flowCard(t, position) {
+    const status = claimState(t.claim), node = el('button', 'flow-card' + (status ? ' flow-' + status : ''));
+    node.type = 'button'; node.dataset.card = t.id; node.title = t.title;
+    if (position) { node.style.left = position.x + 'px'; node.style.top = position.y + 'px'; }
+    const col = state.columns.find(c => c.id === t.column);
+    node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
+    if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
+    else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
+    const deps = afterLinks(t);
+    if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', '); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
+    if (position && position.cycle) node.append(el('span', 'flow-cycle', 'Dependency cycle'));
+    if (waitingOf(t)) node.append(el('span', 'flow-cycle', 'Waiting'));
+    node.onclick = () => openCard(t.id); return node;
+  }
+  function renderFlow() {
+    const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading');
+    top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
+    const toggle = ui.button({ label: flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); top.append(toggle); shell.append(top);
+    const meta = flowMeta.key === flowKey(cfg()) ? flowMeta : {}, strip = el('div', 'flow-status');
+    strip.setAttribute('role', 'status');
+    if (HOSTED || DEMO || ro === 'demo') strip.textContent = 'Runner status and commit activity are available on connected GitHub boards.';
+    else if (!meta.runner) strip.textContent = meta.runnerError || 'No runner status yet';
+    else {
+      const r = meta.runner, paused = r.paused === true || r.status === 'paused';
+      strip.append(el('strong', '', paused ? 'Runner paused' : r.status === 'active' || r.paused === false ? 'Runner active' : 'Runner status unknown'));
+      // Contract for automation/local-runner.json: status, paused_by, pause_reason, last_tick,
+      // engines_out [{engine, until}], sign_in {engine: boolean}. Unknown fields are never printed.
+      [r.paused_by && `by ${shortText(r.paused_by)}`, r.pause_reason && shortText(r.pause_reason), r.last_tick && `Last tick ${ago(r.last_tick) || 'unknown'}`].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
+      if (Array.isArray(r.engines_out)) r.engines_out.slice(0, 8).forEach(e => { if (e && typeof e === 'object') strip.append(el('span', '', `${shortText(e.engine, 'Engine')} out of usage${e.until ? ' until ' + shortText(e.until) : ''}`)); });
+      if (r.sign_in && typeof r.sign_in === 'object') Object.entries(r.sign_in).slice(0, 8).forEach(([engine, ok]) => strip.append(el('span', '', `${shortText(engine)} sign-in: ${ok === true ? 'passes' : ok === false ? 'fails' : 'unknown'}`)));
+      if (meta.runnerError) strip.append(el('span', '', meta.runnerError + ' · showing last copy'));
+    }
+    shell.append(strip);
+    const content = el('div', 'flow-content'), main = el('div', 'flow-main'), all = state.tasks.filter(t => filtered(t) && (flowDone || !isDoneTask(t)) && (!$('fHideDone').checked || !isDoneTask(t)));
+    const linkedIds = new Set(state.tasks.flatMap(t => (t.after || []).length ? [t.id, ...t.after] : []));
+    const linked = all.filter(t => linkedIds.has(t.id)), free = all.filter(t => !linkedIds.has(t.id));
+    main.append(el('h3', '', `Dependency chains · ${linked.length}`));
+    if (linked.length) {
+      const graphScroll = el('div', 'flow-graph-scroll'), canvas = el('div', 'flow-canvas'), layout = flowLayout(linked);
+      graphScroll.tabIndex = 0; graphScroll.setAttribute('aria-label', 'Dependency graph, scroll to explore');
+      canvas.style.width = layout.width + 'px'; canvas.style.height = layout.height + 'px';
+      const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('width', layout.width); svg.setAttribute('height', layout.height); svg.setAttribute('aria-hidden', 'true');
+      const defs = document.createElementNS(ns, 'defs'), marker = document.createElementNS(ns, 'marker'); marker.id = 'flow-arrow'; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto');
+      const arrow = document.createElementNS(ns, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); marker.append(arrow); defs.append(marker); svg.append(defs);
+      layout.edges.forEach(([a, b]) => { const x = layout.positions.get(a), y = layout.positions.get(b), path = document.createElementNS(ns, 'path'), sx = x.x + 264, sy = x.y + 72, tx = y.x, ty = y.y + 72, bend = Math.max(24, (tx - sx) / 2); path.setAttribute('d', `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`); path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (x.cycle && y.cycle) path.classList.add('flow-edge-cycle'); svg.append(path); });
+      canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, layout.positions.get(t.id)))); graphScroll.append(canvas); main.append(graphScroll);
+      main.append(el('p', 'hint', 'Dependencies outside the current filters or collapsed Done remain listed on each card. Cycles are marked; they cannot become ready.'));
+    } else main.append(el('p', 'hint', 'No dependency chains match these filters.'));
+    main.append(el('h3', '', `No dependency links · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
+    const lanes = el('div', 'flow-lanes');
+    state.columns.forEach(col => { const cards = free.filter(t => t.column === col.id); if (!cards.length) return; const lane = el('section', 'flow-lane'); lane.append(el('h4', '', `${col.name} · ${cards.length}`)); cards.forEach(t => lane.append(flowCard(t))); lanes.append(lane); }); main.append(lanes);
+    if (!all.length) main.append(el('p', 'empty', 'No cards match these filters.'));
+    const feed = el('aside', 'flow-feed'); feed.append(el('h3', '', 'Recent board activity'));
+    if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
+    const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
+    if (!commits.length) feed.append(el('p', 'hint', meta.checked ? 'No board commits found.' : 'Waiting for activity…'));
+    commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
+    content.append(main, feed); shell.append(content); board.append(shell);
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
@@ -3281,7 +3395,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'archive', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
+  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'flow', 'list', 'cal', 'sched', 'activity', 'mentions', 'archive', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
   let view = SS.get('kb_view') || boardContext().view || 'today'; if (!ALL_VIEWS.includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
@@ -3289,6 +3403,7 @@ if (typeof window !== 'undefined') (() => {
     { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
     { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'companies', icon: 'building-2', label: 'Companies', title: 'Companies: each with its stage, people and next step' }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people or companies by stage' }] },
     { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' },
+      { value: 'flow', icon: 'workflow', label: 'Flow', title: 'Flow: dependencies and live runs' },
       { value: 'list', icon: 'list', label: 'List', title: 'List' },
       { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' },
       { value: 'archive', icon: 'archive', label: 'Archive', title: 'Archive: archived cards, by archive year (newest year first)' }] }
@@ -3312,6 +3427,7 @@ if (typeof window !== 'undefined') (() => {
     if (was === 'list' && v !== 'list') listSel.clear();
     if (v !== was) { try { inboxPress.done.clear(); inboxPress.err.clear(); } catch { /* the Inbox code is not set up yet */ } }   // a press result shows for this visit only
     render();
+    if (v === 'flow' && !document.hidden) refreshFlow();
     if (fromHistory || v === was) return;
     const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search + '#view=' + v); } catch {} };
     if (backPending) backPending.then(push); else push();   // a dialog that just closed is still taking its own step off
@@ -6675,8 +6791,8 @@ if (typeof window !== 'undefined') (() => {
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
   ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fGoal', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
-  const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
-  let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
+  const canPoll = () => !busy && (!document.hidden || (view !== 'flow' && alertCfg().on)) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
+  let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (view === 'flow' || ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
   setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) render(); }, 60000); // refresh "ago" and stale flags
 
