@@ -122,7 +122,9 @@ on disk so a catch-up reads its compare range once.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has
-no history and is refused. Clock-only states are not history events. Like the
+no history and is refused. A replayed commit gives the same events and ids
+whenever it is replayed, so clock-only states (stale by age, chase, overdue) are
+not history events, and `at` (the poll's time) is not part of an `id`. Like the
 snapshot cursor, a history cursor or event is not authority and grants nothing.
 
 The separate browser capability and host signing key must remain inaccessible

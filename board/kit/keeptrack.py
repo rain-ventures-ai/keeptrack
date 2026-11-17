@@ -1516,18 +1516,29 @@ def _history_cache_read():
     return d
 
 
-def _history_cache_write(d):
-    if len(d["parents"]) > WATCH_HISTORY_CACHE_MAX:
-        return   # too big to keep; the next call compares again
+def _history_cache_text(d):
+    """The file text for d: only the trees its commits (and their parents) can still need."""
     keep = set(d["parents"]) | {d["base"]} | {p for ps in d["parents"].values() for p in ps}
-    d = {**d, "trees": {k: v for k, v in d["trees"].items() if k in keep}}
+    return json.dumps({**d, "trees": {k: v for k, v in d["trees"].items() if k in keep}}, separators=(",", ":"), sort_keys=True)
+
+
+def _history_cache_write(d, before=None):
+    """Save d, unless it is what the file already holds (`before`). Over the limit the file is removed, never left
+    stale: the next call compares from its own cursor."""
     path = _history_cache_file()
+    if len(d["parents"]) > WATCH_HISTORY_CACHE_MAX:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        return
+    text = _history_cache_text(d)
+    if text == before:
+        return
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
         if not os.path.exists(ignore):
             atomic_write(ignore, "# local board files for this project; never committed\n*\n")
-        atomic_write(path, json.dumps(d, separators=(",", ":")))
+        atomic_write(path, text)
     except OSError:
         pass
 
@@ -1596,10 +1607,11 @@ def _api_history(since):
     of catch-up polls against one head reads the compare range once, and a newer head only reads its new commits."""
     head = _api_head()
     cache, parents = _history_cache_read(), None
+    before = _history_cache_text(cache) if cache else None
     if cache and cache["head"] != head:
         tail = _api_compare(cache["head"], head, refuse=False)   # only the commits the head gained
-        if tail is None:
-            cache = None   # rewritten or too far: start again
+        if tail is None or len(cache["parents"]) + len(tail) > WATCH_HISTORY_CACHE_MAX:
+            cache = None   # rewritten, too far or too big: rebuild from this cursor
         else:
             cache["parents"].update(tail); cache["head"] = head
     if cache:
@@ -1607,7 +1619,6 @@ def _api_history(since):
     if parents is None:   # the compare also checks `since` is an ancestor of head, and refuses loudly
         parents = _api_compare(since, head)
         cache = {"v": 1, "base": since, "head": head, "parents": dict(parents), "trees": (cache or {}).get("trees", {})}
-    _history_cache_write(cache)
 
     def trees(commits):
         found = {}
@@ -1616,7 +1627,13 @@ def _api_history(since):
                 cache["trees"][c] = _api_board_tree(c, missing_ok=True)[1]
             found[c] = cache["trees"][c]
         return found
-    trees.flush = lambda: _history_cache_write(cache)
+
+    def flush(cursor):   # keep only what is left after the new cursor; write once, and only when something changed
+        left = _history_cache_range(cache, cursor)
+        if left is not None:
+            cache["parents"], cache["base"] = left, cursor
+        _history_cache_write(cache, before)
+    trees.flush = flush
     return head, list(parents), parents, trees
 
 
@@ -1684,7 +1701,7 @@ def board_history(since, limit=None):
             break   # never split a unit; the next call starts with it
         picked += items; examined += len(todo); last = tip
     if hasattr(trees, "flush"):   # the API transport keeps the board trees it read for the next call
-        trees.flush()
+        trees.flush(last)
     return {"head": head, "commits": picked, "next": last, "more": last != head}
 
 

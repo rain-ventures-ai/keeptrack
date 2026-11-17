@@ -51,12 +51,18 @@ own commits; there is no new event store. No new card field, no migration, no `m
   see one. A corrupt board at head still stops loudly. A cursor left on a commit without a readable board moves on.
 - API transport: commit facts (parents and board folder trees, which never change) are cached under the kit's cache folder
   (`history/` next to the blob cache, one bounded file per branch and board path), so a catch-up reads its compare range once
-  and a newer head reads only its new commits. A rewritten branch drops the cache.
+  and a newer head reads only its new commits. Each save keeps only the commits after the new cursor (the backlog), a poll that
+  learned nothing writes nothing, and a cache that would pass 20,000 commits is rebuilt from the cursor or removed, never left
+  stale. A rewritten branch drops the cache.
+- If the head's first-parent line differs from the old cursor's (a merge whose first parent is another branch), the cursor moves
+  to the new line and commits already delivered can be replayed again: a repeat, never a gap.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently
   re-baselined: start a fresh baseline and reconcile. A `--file` board has no history and is refused; hosted mode is unsupported.
   The API transport replays at most 5,000 commits behind; past that, use `BOARD_WRITE=git` or a fresh baseline.
-- Clock-only states (a stale claim, overdue, a wait due for a chase) are not events in history mode: every commit is projected with
-  the same clock. Snapshot mode reports them and is unchanged (no `--history`: same output, cursor and semantics).
+- A replayed commit gives the same events and the same ids whenever it is replayed. So clock-only states are not events in history
+  mode: the projection drops them (a claim stale by age counts as running; chase and overdue are never set). An event's `at` is
+  when the poll read it and is not part of its `id`. Snapshot mode reports clock states and is unchanged (no `--history`: same
+  output, cursor and semantics).
 - Internals: `_git_snapshot` and `_api_snapshot` take an optional `ref`, and `_github_load_board(ref=...)` reads a past commit
   through the same decoding and layout code. With no ref every existing caller behaves as before. A past commit is never registered
   for a save and never prunes the API blob cache.

@@ -314,6 +314,22 @@ class HistoryGit(GitBoard):
         self.assertEqual({"t_alpha", "t_beta"}, {t["id"] for t in data["tasks"]})
         self.assertNotIn(id(data), kt._BOARD_STATES); self.assertEqual(before, kt._BOARD_STATES)
 
+    def test_a_replayed_commit_gives_the_same_events_whenever_it_is_replayed(self):
+        cursor = self.poll()["cursor"]
+        at = kt.now()
+        claim = {"agent": "codex", "on_behalf_of": "owner", "session_id": "s", "generation": "g", "claimed_at": at,
+                 "heartbeat_at": at, "status": "running"}
+        self.change(lambda d: self.alpha(d).update(claim=claim, history=[{"at": at, "by": "codex@owner", "text": "claimed"}],
+                                                   due="2000-01-01"))
+        strip = lambda events: [{k: v for k, v in e.items() if k != "at"} for e in events]
+        early = self.poll(cursor)["events"]
+        with mock.patch.object(kt, "stale_limit", return_value=-1):   # long after the stale limit
+            late = self.poll(cursor)["events"]
+        self.assertEqual(strip(early), strip(late))
+        claimed = [e for e in late if e["kind"] == "claim"]
+        self.assertEqual([("claimed by codex", "codex@owner")], [(e["text"], e["by"]) for e in claimed])
+        self.assertFalse({"stale", "overdue", "chase"} & {e["kind"] for e in late})
+
     def test_snapshot_mode_is_unchanged(self):
         first = self.poll(history=False)
         self.assertEqual({"events", "cursor", "baseline", "semantics"}, set(first))
@@ -568,6 +584,45 @@ class ApiCost(GitBoard):
         self.calls.clear()
         self.poll(cursor)
         self.assertEqual(1, self.compares())
+
+    def cache(self):
+        try:
+            return json.loads(Path(kt._history_cache_file()).read_text())
+        except FileNotFoundError:
+            return None
+
+    def test_the_cache_holds_the_backlog_not_the_history(self):
+        cursor = self.poll()["cursor"]
+        self.empty_commits(1000)
+        sizes = []
+        with mock.patch.object(kt, "WATCH_HISTORY_SCAN", 20):   # 50 polls
+            for _ in range(50):
+                result = self.poll(cursor); cursor = result["cursor"]
+                sizes.append(len(self.cache()["parents"]))
+        self.assertFalse(result["more"])
+        self.assertEqual([1000 - 20 * k for k in range(1, 51)], sizes)
+        self.assertEqual((decode(cursor)["commit"], self.head()), (self.cache()["base"], self.cache()["head"]))
+        self.assertLessEqual(len(self.cache()["trees"]), 2)
+        writes = []
+        real = kt.atomic_write
+        with mock.patch.object(kt, "atomic_write", lambda path, text, *a, **k: (writes.append(path), real(path, text, *a, **k))):
+            self.poll(cursor); self.poll(cursor)
+        self.assertEqual([], writes)   # nothing new: no write
+
+    def test_over_the_limit_the_cache_is_rebuilt_never_left_stale(self):
+        cursor = self.poll()["cursor"]
+        self.empty_commits(100)
+        with mock.patch.object(kt, "WATCH_HISTORY_CACHE_MAX", 30), mock.patch.object(kt, "WATCH_HISTORY_SCAN", 20):
+            for extra in (0, 0, 0, 0, 0, 0, 45, 0, 0, 0):
+                if extra:
+                    self.empty_commits(extra)   # the head gains more than the cache may hold
+                result = self.poll(cursor); cursor = result["cursor"]
+                cache = self.cache()
+                if cache is not None:
+                    self.assertEqual((decode(cursor)["commit"], self.head()), (cache["base"], cache["head"]))
+                    self.assertLessEqual(len(cache["parents"]), 30)
+        self.assertEqual(self.head(), decode(cursor)["commit"])
+        self.assertIsNotNone(self.cache())
 
     def test_a_replayed_commit_is_read_once(self):
         cursor = self.poll()["cursor"]

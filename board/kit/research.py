@@ -763,8 +763,19 @@ def watch_projection_bound(kt, task):
         visit(task.get(key))
 
 
-def watch_project(kt, data, project, bound, today):
-    """One project's watch projection, bounded: 256 cards, each card's input, and 128 KiB encoded."""
+def without_clock(entry):
+    """Kit v133 history: the projection with its clock-only parts taken out, so a replayed commit gives the same events
+    and ids whenever it is replayed. A claim stale by age counts as running (a stored stuck/blocked/done stays), and
+    chase and overdue are never set: none of them is a change a commit made."""
+    if entry.get("claim") == "stale":
+        entry["claim"] = "running"
+    entry["chase"] = entry["overdue"] = False
+    return entry
+
+
+def watch_project(kt, data, project, bound, today, history=False):
+    """One project's watch projection, bounded: 256 cards, each card's input, and 128 KiB encoded. history (kit v133):
+    without the clock-only parts, see without_clock."""
     chosen = []
     for task in data.get("tasks") or []:
         if isinstance(task, dict) and task.get("id") and task.get("project") == project:
@@ -777,6 +788,8 @@ def watch_project(kt, data, project, bound, today):
     for task in chosen:
         watch_projection_bound(kt, task)
         entry = kt.watch_entry(data, task, today, True)
+        if history:
+            without_clock(entry)
         fragment = json.dumps({task["id"]: entry}, separators=(",", ":"), ensure_ascii=False).encode()
         size += len(fragment) - 2 + bool(current["cards"])
         if size > 131072:
@@ -813,7 +826,7 @@ def watch_poll_history(kt, args):
         head = kt.board_history_head()
         data = kt.load_board_at(head)
         project = kt.find_project(data, args.project)["id"]
-        watch_project(kt, data, project, {"v": 2, "board": board, "project": project}, kt.board_today(data).isoformat())
+        watch_project(kt, data, project, {"v": 2, "board": board, "project": project}, kt.board_today(data).isoformat(), history=True)
         token = {"v": 2, "board": board, "project": project, "commit": head}
         print(json.dumps({"events": [], "cursor": _history_token(token), "baseline": True, "more": False,
                           "semantics": "commit-replay"}, ensure_ascii=False))
@@ -838,14 +851,14 @@ def watch_poll_history(kt, args):
     if project != prior["project"]:
         fail("watch cursor belongs to another board, project or version")
     scope = {"v": 2, "board": board, "project": project}
-    today = kt.board_today(data).isoformat()
+    today = kt.board_today(data).isoformat()   # feeds only chase and overdue, which history projections drop
     projected = {}
 
     def project_at(commit):   # (projection, board) at one commit; a past commit is never registered for a save
         if commit not in projected:
             board_data = loaded.pop(commit, None) or kt.load_board_at(commit)
             projected.clear()   # keep at most one: each commit is usually the next one's first parent
-            projected[commit] = (watch_project(kt, board_data, project, scope, today), board_data)
+            projected[commit] = (watch_project(kt, board_data, project, scope, today, history=True), board_data)
         return projected[commit]
 
     events = []
