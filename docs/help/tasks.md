@@ -22,6 +22,10 @@ If you selected **Tasks** when you made your board, you also have these views. T
 - **Archive:** the cards that were archived, by archive year (newest year first), with search and filters. Open one to read it or put it back on the board. See [Search and archive](search-and-archive.md).
 - **@Mentions:** every comment that mentions you (`@your-github-username`), newest first, with the task, its description and the comment. A mention on a project opens that project. A reply says who it is replying to. Your own comments are not shown. **New** means posted since you last opened that task or project. Click a row to open it at that comment. Today shows an **@Mentions** tile when you have mentions. The filters apply to task mentions.
 
+Flow's runner status and commit feed require a GitHub token. Anonymous public boards keep their two-minute refresh
+and do not fetch that metadata. An absent runner file is checked again after five minutes. Existing background
+alerts, if you enabled them, continue to check the board while Flow's metadata polling pauses in hidden tabs.
+
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
 People, labels and **Client & project** use the full width. The client name opens the company, the project name opens the project, and **Edit** opens the picker. The picker filters projects after you choose a client and keeps long names readable on a phone.
 

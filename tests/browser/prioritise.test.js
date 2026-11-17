@@ -82,7 +82,14 @@ let base;
     await page.waitForFunction(() => new URL(location.href).searchParams.get('client') === 'Acme');
     await page.reload();
     await page.waitForFunction(() => document.getElementById('fClient').selectedOptions[0]?.value === 'Acme');
-    assert.equal(await page.locator('.cpill.on').first().textContent().then(s => s.includes('Acme')), true);
+    // The active client may move into overflow as task views and font metrics take header space.
+    if (await page.locator('.cpill.on').filter({ hasText: 'Acme' }).count()) {
+      assert.equal(await page.locator('.cpill.on').filter({ hasText: 'Acme' }).getAttribute('aria-pressed'), 'true');
+    } else {
+      await page.locator('.cpill.more').click();
+      assert.equal(await page.locator('.cmenu[data-client="Acme"]').getAttribute('aria-pressed'), 'true');
+      await page.keyboard.press('Escape');
+    }
     await page.locator('#listStatus').selectOption('__open');
     await page.waitForFunction(() => new URL(location.href).searchParams.get('status') === '__open');
     await page.goBack();

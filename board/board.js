@@ -2632,53 +2632,69 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
-  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null;
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
+  const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
+  function resetFlowMeta() {
+    flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
+    if (view === 'flow') { $('board').querySelector('.flow-status')?.replaceWith(flowStatus({})); $('board').querySelector('.flow-feed')?.replaceWith(flowFeed({})); }
+  }
   async function refreshFlow() {
-    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden) return;
-    const c = cfg(), key = flowKey(c);
-    if (flowMeta.key !== key) flowMeta = { key, checked: 0 };
+    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public') return;
+    const c = { ...cfg() }, key = flowKey(c); // Snapshot the token getter for this request's auth context.
+    if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
     if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
     const ticket = flowRequest = { key }, previous = flowMeta;
     const read = async (endpoint, tag) => {
       const r = await githubApi('GET', endpoint, null, { etag: tag }, c);
       if (r.status === 304) return { unchanged: true };
       if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-      if (!r.ok) throw new Error(`GitHub ${r.status}`);
+      if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
       return { data: endpoint.startsWith('/contents/') ? (await fileJson(r, 'automation/local-runner.json', c)).raw : await r.json(), tag: r.headers.get('ETag') };
     };
     const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : c.path;
     const results = await Promise.allSettled([
-      read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, previous.runnerTag),
+      previous.runnerMissingUntil > Date.now() ? Promise.resolve({ unchanged: true }) : read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, previous.runnerTag),
       read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(dir)}&per_page=20`, previous.commitsTag)
     ]);
     if (flowRequest !== ticket || flowKey(cfg()) !== key || cfg().token !== c.token) { if (flowRequest === ticket) flowRequest = null; return; }
     const next = { ...previous, checked: Date.now() };
     results.forEach((r, i) => {
       const name = i ? 'commits' : 'runner';
-      if (r.status === 'rejected') next[name + 'Error'] = 'Could not refresh ' + (i ? 'activity' : 'runner status');
-      else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; } }
+      if (r.status === 'rejected') { next[name + 'Error'] = 'Could not refresh ' + (i ? 'activity' : 'runner status'); if ([401, 403].includes(r.reason?.status)) { delete next[name]; delete next[name + 'Tag']; } }
+      else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; if (!i) next.runnerMissingUntil = r.value.data === null ? Date.now() + 300000 : 0; } }
     });
     flowMeta = next; flowRequest = null;
-    if (view === 'flow' && !document.hidden) render();
+    if (view === 'flow' && !document.hidden && ['runner', 'commits', 'runnerError', 'commitsError'].some(k => JSON.stringify(next[k]) !== JSON.stringify(previous[k]))) {
+      // Optional metadata never rebuilds the graph or disturbs its focus and scroll.
+      $('board').querySelector('.flow-status')?.replaceWith(flowStatus(next));
+      $('board').querySelector('.flow-feed')?.replaceWith(flowFeed(next));
+    }
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowLayout(tasks) {
     const byId = new Map(tasks.map(t => [t.id, t])), edges = [], next = new Map(tasks.map(t => [t.id, []]));
-    tasks.forEach(t => [...new Set(t.after || [])].forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); } }));
-    let serial = 0; const index = new Map(), low = new Map(), stack = [], stacked = new Set(), groups = [], groupOf = new Map();
-    function visit(id) {
-      index.set(id, serial); low.set(id, serial++); stack.push(id); stacked.add(id);
-      next.get(id).forEach(to => { if (!index.has(to)) { visit(to); low.set(id, Math.min(low.get(id), low.get(to))); } else if (stacked.has(to)) low.set(id, Math.min(low.get(id), index.get(to))); });
-      if (low.get(id) === index.get(id)) { const group = []; let to; do { to = stack.pop(); stacked.delete(to); groupOf.set(to, groups.length); group.push(to); } while (to !== id); groups.push(group); }
-    }
-    tasks.forEach(t => { if (!index.has(t.id)) visit(t.id); });
+    const reverse = new Map(tasks.map(t => [t.id, []]));
+    tasks.forEach(t => afterIds(t).forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); } }));
+    const visited = new Set(), order = [], groups = [], groupOf = new Map();
+    // Iterative Kosaraju traversal: deep chains use heap storage rather than the browser call stack.
+    tasks.forEach(t => {
+      if (visited.has(t.id)) return;
+      visited.add(t.id); const stack = [[t.id, 0]];
+      while (stack.length) { const frame = stack[stack.length - 1], children = next.get(frame[0]); if (frame[1] < children.length) { const id = children[frame[1]++]; if (!visited.has(id)) { visited.add(id); stack.push([id, 0]); } } else { order.push(frame[0]); stack.pop(); } }
+    });
+    order.reverse().forEach(id => {
+      if (groupOf.has(id)) return;
+      const group = [], stack = [id]; groupOf.set(id, groups.length);
+      while (stack.length) { const at = stack.pop(); group.push(at); reverse.get(at).forEach(to => { if (!groupOf.has(to)) { groupOf.set(to, groups.length); stack.push(to); } }); }
+      groups.push(group);
+    });
     const incoming = groups.map(() => new Set()), outgoing = groups.map(() => new Set()), ranks = groups.map(() => 0);
     edges.forEach(([a, b]) => { const x = groupOf.get(a), y = groupOf.get(b); if (x !== y) { incoming[y].add(x); outgoing[x].add(y); } });
     const degree = incoming.map(s => s.size), queue = degree.flatMap((n, i) => n ? [] : [i]);
     for (let i = 0; i < queue.length; i++) { const x = queue[i]; outgoing[x].forEach(y => { ranks[y] = Math.max(ranks[y], ranks[x] + 1); if (!--degree[y]) queue.push(y); }); }
     const rows = new Map(), positions = new Map();
-    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 170, cycle: groups[groupOf.get(t.id)].length > 1 || (t.after || []).includes(t.id) }); });
+    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 170, cycle: groups[groupOf.get(t.id)].length > 1 || afterIds(t).includes(t.id) }); });
     return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 170 + 24 };
   }
   function flowCard(t, position) {
@@ -2695,13 +2711,11 @@ if (typeof window !== 'undefined') (() => {
     if (waitingOf(t)) node.append(el('span', 'flow-cycle', 'Waiting'));
     node.onclick = () => openCard(t.id); return node;
   }
-  function renderFlow() {
-    const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading');
-    top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
-    const toggle = ui.button({ label: flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); top.append(toggle); shell.append(top);
-    const meta = flowMeta.key === flowKey(cfg()) ? flowMeta : {}, strip = el('div', 'flow-status');
+  function flowStatus(meta) {
+    const strip = el('div', 'flow-status');
     strip.setAttribute('role', 'status');
     if (HOSTED || DEMO || ro === 'demo') strip.textContent = 'Runner status and commit activity are available on connected GitHub boards.';
+    else if (!cfg().token || ro === 'public') strip.textContent = 'Sign in to see runner status and commit activity. Public boards refresh every two minutes.';
     else if (!meta.runner) strip.textContent = meta.runnerError || 'No runner status yet';
     else {
       const r = meta.runner, paused = r.paused === true || r.status === 'paused';
@@ -2713,9 +2727,15 @@ if (typeof window !== 'undefined') (() => {
       if (r.sign_in && typeof r.sign_in === 'object') Object.entries(r.sign_in).slice(0, 8).forEach(([engine, ok]) => strip.append(el('span', '', `${shortText(engine)} sign-in: ${ok === true ? 'passes' : ok === false ? 'fails' : 'unknown'}`)));
       if (meta.runnerError) strip.append(el('span', '', meta.runnerError + ' · showing last copy'));
     }
-    shell.append(strip);
+    return strip;
+  }
+  function renderFlow() {
+    const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading'), meta = flowCurrentMeta();
+    top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
+    const doneVisible = flowDone && !$('fHideDone').checked;
+    const toggle = ui.button({ label: doneVisible ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !doneVisible; if (flowDone) { $('fHideDone').checked = false; if ($('fStatus').value === '__open') $('fStatus').value = ''; } render(); } }); top.append(toggle); shell.append(top, flowStatus(meta));
     const content = el('div', 'flow-content'), main = el('div', 'flow-main'), all = state.tasks.filter(t => filtered(t) && (flowDone || !isDoneTask(t)) && (!$('fHideDone').checked || !isDoneTask(t)));
-    const linkedIds = new Set(state.tasks.flatMap(t => (t.after || []).length ? [t.id, ...t.after] : []));
+    const linkedIds = new Set(state.tasks.flatMap(t => afterIds(t).length ? [t.id, ...afterIds(t)] : []));
     const linked = all.filter(t => linkedIds.has(t.id)), free = all.filter(t => !linkedIds.has(t.id));
     main.append(el('h3', '', `Dependency chains · ${linked.length}`));
     if (linked.length) {
@@ -2726,19 +2746,24 @@ if (typeof window !== 'undefined') (() => {
       const defs = document.createElementNS(ns, 'defs'), marker = document.createElementNS(ns, 'marker'); marker.id = 'flow-arrow'; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto');
       const arrow = document.createElementNS(ns, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); marker.append(arrow); defs.append(marker); svg.append(defs);
       layout.edges.forEach(([a, b]) => { const x = layout.positions.get(a), y = layout.positions.get(b), path = document.createElementNS(ns, 'path'), sx = x.x + 264, sy = x.y + 72, tx = y.x, ty = y.y + 72, bend = Math.max(24, (tx - sx) / 2); path.setAttribute('d', `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`); path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (x.cycle && y.cycle) path.classList.add('flow-edge-cycle'); svg.append(path); });
-      canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, layout.positions.get(t.id)))); graphScroll.append(canvas); main.append(graphScroll);
+      const full = flowLayout(state.tasks); // Detect cycles before project/label/Done filters hide an edge.
+      canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, { ...layout.positions.get(t.id), cycle: full.positions.get(t.id)?.cycle }))); graphScroll.append(canvas); main.append(graphScroll);
       main.append(el('p', 'hint', 'Dependencies outside the current filters or collapsed Done remain listed on each card. Cycles are marked; they cannot become ready.'));
     } else main.append(el('p', 'hint', 'No dependency chains match these filters.'));
     main.append(el('h3', '', `No dependency links · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
     const lanes = el('div', 'flow-lanes');
     state.columns.forEach(col => { const cards = free.filter(t => t.column === col.id); if (!cards.length) return; const lane = el('section', 'flow-lane'); lane.append(el('h4', '', `${col.name} · ${cards.length}`)); cards.forEach(t => lane.append(flowCard(t))); lanes.append(lane); }); main.append(lanes);
     if (!all.length) main.append(el('p', 'empty', 'No cards match these filters.'));
+    content.append(main, flowFeed(meta)); shell.append(content); board.append(shell);
+  }
+  function flowFeed(meta) {
     const feed = el('aside', 'flow-feed'); feed.append(el('h3', '', 'Recent board activity'));
+    if (HOSTED || DEMO || ro === 'demo' || !cfg().token || ro === 'public') { feed.append(el('p', 'hint', 'Commit activity requires a signed-in GitHub board.')); return feed; }
     if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
     const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
     if (!commits.length) feed.append(el('p', 'hint', meta.checked ? 'No board commits found.' : 'Waiting for activity…'));
     commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
-    content.append(main, feed); shell.append(content); board.append(shell);
+    return feed;
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
@@ -6574,7 +6599,7 @@ if (typeof window !== 'undefined') (() => {
     const archSwitch = !moved && (branch !== cfg().branch || path !== cfg().path); if (archSwitch) { resetArchUi(); archHold = 1; }   // until a load succeeds (load() ends it)
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
-    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
+    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); resetFlowMeta(); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
     if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
@@ -6791,8 +6816,8 @@ if (typeof window !== 'undefined') (() => {
     if (wrap && window.ResizeObserver) new ResizeObserver(() => { const w = Math.round(wrap.clientWidth); if (w !== lastW) { lastW = w; refit(); } }).observe(wrap);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit); }
   ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fGoal', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
-  const canPoll = () => !busy && (!document.hidden || (view !== 'flow' && alertCfg().on)) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
-  let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (view === 'flow' || ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
+  const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
+  let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
   setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) render(); }, 60000); // refresh "ago" and stale flags
 
