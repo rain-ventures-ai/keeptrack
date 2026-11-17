@@ -116,7 +116,9 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     }
     await page.locator('[data-card="t_2"]').focus(); await page.keyboard.press('Enter'); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(counts.writes, 0); assert.deepEqual(errors, []);
-    await page.locator('#cClose').click();
+    // Start the remaining projection tests on an explicit view route, independent of drawer history.
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`);
+    await page.locator('.flow-event').first().waitFor();
     await page.selectOption('#fStatus', 'done', { force: true });
     assert.equal(await page.locator('[data-card="t_5"]').count(), 1);
     assert.equal(await page.getByRole('button', { name: 'Done selected' }).isDisabled(), true);
