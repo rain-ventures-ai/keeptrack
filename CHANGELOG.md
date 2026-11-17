@@ -11,6 +11,20 @@ Done is collapsed initially; existing project and label filters apply. GitHub bo
 commits and optional `automation/local-runner.json` status. Flow uses the board's 30-second refresh, pauses when
 hidden and catches up on return. No kit version or data schema change.
 
+Kit v136: `wait --until` stores a checkable condition (`pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
+`release:<owner>/<repo>@<tag>`). A condition is not an owner-authority wait. `reconcile --dry-run` adds an audit line
+when that condition is met or still unresolved, and an expiry line when a wait has no condition and its start date is
+at least seven days ago. Expiry and a met condition are not an approval, and the dry run does not clear the wait.
+The same dry run adds a row for an unattended claim with no heartbeat for 24 hours. It does not release a live claim.
+A run without `--dry-run` is still refused. No schema change and no scheduled job.
+
+Kit v135: `keeptrack.py reconcile --dry-run` prints one row per open card older than a day. The verb is close when every
+linked pull request is merged, every to-do is ticked, and there is no open question, wait or live claim; ask when the
+pull requests are merged and a to-do, wait or question remains; leave when a pull request is still open, a to-do is
+open without that merged evidence, or a claim is live; park when a wait has no chase date and is older than seven days.
+Pull-request evidence is one read of state and mergedAt. A run without `--dry-run` is refused. The command writes
+nothing. No data change and no migration.
+
 Web board only, no kit version and no schema bump: optional "Sign in with GitHub" (a GitHub App user token) beside the unchanged
 fine-grained token paste. New optional setting `settings.github_app_signin` `{client_id, exchange_url}`; older pages and the
 CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code

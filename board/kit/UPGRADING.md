@@ -25,6 +25,27 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v136 (schema 4)
+
+`wait --until` stores one checkable condition on the wait: `pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
+`release:<owner>/<repo>@<tag>`. A condition is not an owner-authority wait. `reconcile --dry-run` prints the same verb
+row as v135, then an audit line for that condition (met or unresolved) or, when the wait has no condition and started
+at least seven days ago, an expiry line. Neither line is an approval, and the command does not clear the wait. It also
+prints a row for an unattended claim with no heartbeat for 24 hours, and does not release a claim that is still live.
+Without `--dry-run` the command refuses. The web page keeps a condition already stored when someone edits the wait; it
+does not add a field for typing one. No new required card field, no migration, no `min_kit` change, and no scheduled job.
+
+- Check: `kit-check` says v136. `reconcile --dry-run` on a `--file` board prints the rows and leaves the file unchanged.
+  A run without `--dry-run` is refused.
+
+### v135 (schema 4)
+
+`keeptrack.py reconcile --dry-run` prints one row per open card whose last update is more than a day old. It reads the
+board and one batched pull-request state (state and mergedAt only). It does not close a card, open an Inbox item, merge,
+deploy or write a rule. Without `--dry-run` it refuses. No new card field, no migration, no `min_kit` change.
+
+- Check: `kit-check` says v135. `reconcile --dry-run` on a `--file` board prints the rows and leaves the file unchanged.
+
 ### v134 (schema 4)
 
 `watch-poll --project ID --history`: a watcher that never misses a board change between polls. It replays the board branch's

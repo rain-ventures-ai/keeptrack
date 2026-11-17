@@ -511,7 +511,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 134;
+  const PAGE_KIT = 136;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -3703,6 +3703,14 @@ if (typeof window !== 'undefined') (() => {
   // Waiting-for (kit v43): the same rules as keeptrack.py's wait / unwait. A waiting card stays in its column, keeps its due
   // date, and is never sent to an agent (claim refuses it); its chase day is the nudge, else since + settings.waiting_days.
   const WAITING_KIT = 43, DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  function keptWaitUntil(value) {   // a condition already stored; the page does not invent one, and a bad value is dropped
+    const text = String(value || '');
+    if (/^pr:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#[0-9]+:merged$/.test(text)) return text;
+    if (/^release:[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[A-Za-z0-9._+-]{1,64}$/.test(text)) return text;
+    const day = /^date:(\d{4}-\d{2}-\d{2})$/.exec(text);
+    if (day) { const parsed = new Date(day[1] + 'T00:00:00Z'); if (!Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day[1]) return text; }
+    return '';
+  }
   const waitingOf = t => t && t.column !== doneColId() && t.waiting && typeof t.waiting === 'object' && !Array.isArray(t.waiting) && Object.keys(t.waiting).length ? t.waiting : null;
   const waitingDays = () => { const v = state.settings.waiting_days; return Number.isInteger(v) && v >= 0 && v <= 365 ? v : 7; };
   const dayNum = s => Math.round(new Date(s + 'T00:00:00Z').getTime() / 864e5);
@@ -3731,7 +3739,7 @@ if (typeof window !== 'undefined') (() => {
     const w = waitingOf(t); if (!w) return null;
     const days = DAY_RE.test(w.since || '') ? Math.max(0, dayNum(todayIso()) - dayNum(w.since)) : 0, on = waitingOnMe(w) ? 'you' : String(w.on || '?');
     const c = elI('span', 'chip waitchip' + (chaseNow(t) ? ' late' : ''), 'alarm-clock', `waiting on ${on.length > 40 ? on.slice(0, 39) + '…' : on}, ${days}d`);
-    const chase = chaseDate(w); c.title = `Waiting on ${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} since ${w.since || '?'}${chase ? ', chase ' + chase : ''}${w.note ? '\n' + w.note : ''}`; return c;
+    const chase = chaseDate(w); c.title = `Waiting on ${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} since ${w.since || '?'}${chase ? ', chase ' + chase : ''}${keptWaitUntil(w.until) ? ', until ' + keptWaitUntil(w.until) : ''}${w.note ? '\n' + w.note : ''}`; return c;
   }
   // After (card dependencies): the card ids a card runs after, the same rules as keeptrack.py's after_links. A hint and a
   // gate, never a trigger: the page only shows them; relay's can-start refuses a card while any of them is not done. An
@@ -5040,7 +5048,7 @@ if (typeof window !== 'undefined') (() => {
   function renderWaiting(t) {
     const box = $('cWaitVal'); box.textContent = ''; const w = waitingOf(t);
     if (w) {
-      const chase = chaseDate(w), p = ui.pill({ text: `${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} · since ${w.since || '?'}${chase ? ' · chase ' + chase : ''}`, icon: 'alarm-clock',
+      const chase = chaseDate(w), until = keptWaitUntil(w.until), p = ui.pill({ text: `${w.on || '?'}${w.who ? ' (' + w.who + ')' : ''} · since ${w.since || '?'}${until ? ' · ' + until : ''}${chase ? ' · chase ' + chase : ''}`, icon: 'alarm-clock',
         tone: chaseNow(t) ? 'warn' : 'neutral', onClick: () => openWaitSheet(t), removeLabel: 'Clear the wait', onRemove: () => clearWait(t.id) });
       p.id = 'cWaitPill'; if (w.note) p.title = w.note; box.append(p); return;
     }
@@ -5070,8 +5078,9 @@ if (typeof window !== 'undefined') (() => {
   function setWait(id, on, who, nudge) {
     on = String(on || '').replace(/\s+/g, ' ').trim().slice(0, 200); if (!on) return false;
     return edit(id, (t, n) => {
-      const old = waitingOf(t);
+      const old = waitingOf(t), until = keptWaitUntil(old && old.until);
       t.waiting = { on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
+      if (until) t.waiting.until = until;   // editing the chase date keeps a checkable condition; it is not an approval
       if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= WAITING_KIT)) n.settings.min_kit = WAITING_KIT;   // tells v43+ tools (doctor, relay) a card relies on it
       const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked' || c.status === 'stuck')) { if (c.status === 'stuck') c.before_wait = 'stuck'; c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
     }, `Waiting: ${titleOf(id)}`);
