@@ -720,7 +720,9 @@ def parser(sub, callback):
     p = sub.add_parser("work-research-candidates", help="read the current opted-in project's research requests; no queue or admission")
     p.add_argument("--project", required=True); p.set_defaults(f=callback, work_action="research-candidates")
     p = sub.add_parser("watch-poll", help="one read-only watch snapshot diff; cursor is not authority or an event log")
-    p.add_argument("--project", required=True); p.set_defaults(f=callback, work_action="watch-poll")
+    p.add_argument("--project", required=True)
+    p.add_argument("--history", action="store_true", help="kit v133: replay board commits since the cursor's commit (git or API transport)")
+    p.set_defaults(f=callback, work_action="watch-poll")
     for name in ("snapshot", "draft", "admit", "check", "handover"):
         p = sub.add_parser("work-research-" + name, help="disabled-by-default read-only public research pilot")
         p.add_argument("id"); p.set_defaults(f=callback, work_action="research-" + name)
@@ -761,25 +763,8 @@ def watch_projection_bound(kt, task):
         visit(task.get(key))
 
 
-def watch_poll(kt, args):
-    """Transport for the existing watch projection, not a second event mechanism.
-
-    The client carries an untrusted bounded snapshot. It can invent its own old
-    state, but this read-only call cannot grant admission or execute anything.
-    Missed intermediate transitions require reconciliation against work-status.
-    """
-    raw = kt.sys.stdin.read(196609)
-    if len(raw.encode()) > 196608: fail("watch cursor input is oversized")
-    try:
-        cursor = json.loads(raw) if raw.strip() else None
-    except ValueError:
-        fail("watch cursor input must be a JSON string or null")
-    if cursor is not None and (not isinstance(cursor, str) or len(cursor) > 180000):
-        fail("invalid watch cursor")
-    data, _ = kt.load()
-    project = kt.find_project(data, args.project)["id"]
-    bound = {"v": 1, "board": kt._current_board(), "project": project}
-    today = kt.board_today(data).isoformat()
+def watch_project(kt, data, project, bound, today):
+    """One project's watch projection, bounded: 256 cards, each card's input, and 128 KiB encoded."""
     chosen = []
     for task in data.get("tasks") or []:
         if isinstance(task, dict) and task.get("id") and task.get("project") == project:
@@ -797,6 +782,93 @@ def watch_poll(kt, args):
         if size > 131072:
             fail("watch project exceeds the pilot cursor bound; use a smaller project")
         current["cards"][task["id"]] = entry
+    return current
+
+
+def _watch_cursor_input(kt):
+    raw = kt.sys.stdin.read(196609)
+    if len(raw.encode()) > 196608: fail("watch cursor input is oversized")
+    try:
+        cursor = json.loads(raw) if raw.strip() else None
+    except ValueError:
+        fail("watch cursor input must be a JSON string or null")
+    if cursor is not None and (not isinstance(cursor, str) or len(cursor) > 180000):
+        fail("invalid watch cursor")
+    return cursor
+
+
+def watch_poll_history(kt, args):
+    """Kit v133 `watch-poll --history`: replay the board branch's commits instead of diffing two snapshots.
+
+    The cursor is one commit, no snapshot. Each call replays at most kt.WATCH_HISTORY_PAGE commits that changed the
+    board folder, oldest first, and diffs the same projection at each consecutive pair, so a change made and undone
+    between polls gives both events. A cursor commit that is not an ancestor of the branch head is refused, never
+    silently re-baselined. Read-only: neither a cursor nor an event grants anything.
+    """
+    cursor = _watch_cursor_input(kt)
+    board = kt._current_board()
+    if cursor is None:   # a quiet baseline at head
+        head = kt.board_history_head()
+        data = kt.load_board_at(head)
+        project = kt.find_project(data, args.project)["id"]
+        watch_project(kt, data, project, {"v": 2, "board": board, "project": project}, kt.board_today(data).isoformat())
+        token = {"v": 2, "board": board, "project": project, "commit": head}
+        print(json.dumps({"events": [], "cursor": _history_token(token), "baseline": True, "more": False,
+                          "semantics": "commit-replay"}, ensure_ascii=False))
+        return
+    try:
+        prior = json.loads(base64.b64decode(cursor.encode(), altchars=b"-_", validate=True))
+    except (ValueError, UnicodeError):
+        fail("invalid watch cursor encoding")
+    if not isinstance(prior, dict) or set(prior) != {"v", "board", "project", "commit"} or prior["v"] != 2 or \
+            type(prior["v"]) is not int or prior["board"] != board or not isinstance(prior["project"], str):
+        fail("watch cursor belongs to another board, project or version")
+    if not isinstance(prior["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", prior["commit"]):
+        fail("invalid watch cursor commit")
+    page = kt.board_history(prior["commit"])
+    data = kt.load_board_at(prior["commit"])
+    project = kt.find_project(data, args.project)["id"]
+    if project != prior["project"]:
+        fail("watch cursor belongs to another board, project or version")
+    scope = {"v": 2, "board": board, "project": project}
+    today = kt.board_today(data).isoformat()
+    previous = watch_project(kt, data, project, scope, today)
+    events = []
+    for commit in page["commits"]:
+        data = kt.load_board_at(commit)
+        current = watch_project(kt, data, project, scope, today)
+        for event in kt.watch_events(previous, current, data, me=""):
+            card = event.get("card") or {}
+            event["commit"] = commit
+            event["id"] = hashlib.sha256(json.dumps([board, commit, card.get("id"), event.get("kind"), event.get("text")],
+                                                    ensure_ascii=False).encode()).hexdigest()[:32]
+            events.append(event)
+        previous = current
+    token = {"v": 2, "board": board, "project": project, "commit": page["next"]}
+    print(json.dumps({"events": events, "cursor": _history_token(token), "baseline": False, "more": page["more"],
+                      "semantics": "commit-replay"}, ensure_ascii=False))
+
+
+def _history_token(token):
+    return base64.urlsafe_b64encode(json.dumps(token, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+
+
+def watch_poll(kt, args):
+    """Transport for the existing watch projection, not a second event mechanism.
+
+    The client carries an untrusted bounded snapshot. It can invent its own old
+    state, but this read-only call cannot grant admission or execute anything.
+    Missed intermediate transitions require reconciliation against work-status;
+    `--history` (kit v133) replays board commits instead.
+    """
+    if getattr(args, "history", False):
+        return watch_poll_history(kt, args)
+    cursor = _watch_cursor_input(kt)
+    data, _ = kt.load()
+    project = kt.find_project(data, args.project)["id"]
+    bound = {"v": 1, "board": kt._current_board(), "project": project}
+    today = kt.board_today(data).isoformat()
+    current = watch_project(kt, data, project, bound, today)
     old = None
     if cursor:
         try:

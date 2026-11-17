@@ -99,6 +99,20 @@ must reconcile the current task/run after a wake or restart. Hosted mode is
 unsupported. `work-research-snapshot` and `work-research-check` give the host a
 bounded request projection without activity/comment history.
 
+`watch-poll --project ID --history` (kit v133) replays board commits instead of
+diffing two snapshots, so an intermediate change is never lost. Its cursor is one
+commit, `{"v":2,"board","project","commit"}` in base64url, with no snapshot; no
+cursor is a quiet baseline at the branch head. Each call verifies the commit is an
+ancestor of the head, then replays at most 20 later first-parent commits that
+changed the board folder, oldest first, with the same projection and bounds at
+each commit. Every event carries its `commit` and an `id` hashed from board,
+commit, card, kind and text, so a repeat can be dropped; a gap cannot happen.
+The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
+non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
+silently re-baselined; start a fresh baseline and reconcile. A `--file` board has
+no history and is refused. Clock-only states are not history events. Like the
+snapshot cursor, a history cursor or event is not authority and grants nothing.
+
 The separate browser capability and host signing key must remain inaccessible
 to workers and other repository agents. Settings → Rook owner approval stores
 the endpoint/capability only in this browser for the connected board, outside
