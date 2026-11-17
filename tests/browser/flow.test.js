@@ -49,7 +49,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -112,9 +112,12 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     // even though the 25-second network throttle is still active.
     let releaseRunner, runnerArrived;
     const arrived = new Promise(resolve => { runnerArrived = resolve; });
-    runnerGate = { arrived: runnerArrived, wait: new Promise(resolve => { releaseRunner = resolve; }) };
+    const heldUpdate = runnerGate = { arrived: runnerArrived, wait: new Promise(resolve => { releaseRunner = resolve; }) };
+    commits[0].commit.message = 'Activity arrives independently';
     runnerVersion++; runner.pause_reason = 'Updated while hidden';
     await page.clock.fastForward(31000); await arrived;
+    await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Activity arrives independently'), null, { timeout: 1000 });
+    assert.equal(heldUpdate.request.failure(), null, 'successful activity is visible while runner status is still pending');
     await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
     const completed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 200);
     releaseRunner(); await (await completed).finished(); await page.evaluate(() => Promise.resolve());
@@ -165,6 +168,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.locator('#sBranch').fill('dev'); await page.locator('#sSave').click(); await branchStarted;
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
     assert.equal(await page.locator('.flow-event').count(), 0);
+    assert.equal(await page.locator('.flow-card').count(), 0, 'old board cards clear while the new branch load is pending');
     releaseBranch(); await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Could not refresh'));
     await page.locator('#btnSettings').click(); await page.locator('#tabConn').click();
     if (!(await page.locator('#bEditFold').evaluate(n => n.open))) await page.locator('#bEditFold > summary').click();

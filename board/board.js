@@ -906,7 +906,7 @@ if (typeof window !== 'undefined') (() => {
   async function githubApi(method, endpoint, body, opt = {}, over) {
     if (HOSTED) throw new Error('capability_unavailable: GitHub API is disabled in hosted mode');
     const c = over || cfg();
-    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
+    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: opt.signal || ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
@@ -1178,7 +1178,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
+  async function load(quiet, first) { const at = { ...cfg() }, ok = await loadBoard(quiet, first); if (ok && flowKey(at) === flowKey(cfg()) && at.token === cfg().token) { const changed = flowBoardScope !== flowKey(at) || flowBoardToken !== at.token; flowBoardScope = flowKey(at); flowBoardToken = at.token; if (changed && view === 'flow') render(); } if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -1211,8 +1211,8 @@ if (typeof window !== 'undefined') (() => {
       const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
       if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
-      if (res.status === 404) { resetFlowMeta(); await diagnose404(); return false; }
-      if (res.status === 401 || res.status === 403) { resetFlowMeta(); lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
+      if (res.status === 404) { resetFlowMeta(true); await diagnose404(); return false; }
+      if (res.status === 401 || res.status === 403) { resetFlowMeta(true); lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
       const { d: data, raw: raw0 } = await fileJson(res); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = res.headers.get('ETag'); let raw = raw0;
       fileDemo = !!raw.demo_base;
@@ -1224,7 +1224,7 @@ if (typeof window !== 'undefined') (() => {
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
       setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
       if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
-    } catch (e) { if (stale()) return false; resetFlowMeta(); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+    } catch (e) { if (stale()) return false; resetFlowMeta(true); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
@@ -2632,15 +2632,16 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
-  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowPage = 0, flowPageKey = '';
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowPage = 0, flowPageKey = '', flowBoardScope = '', flowBoardToken = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
   const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
-  function resetFlowMeta() {
+  function resetFlowMeta(clearBoard = false) {
     flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
+    if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); } }
     if (view === 'flow') { $('board').querySelector('.flow-status')?.replaceWith(flowStatus({})); $('board').querySelector('.flow-feed')?.replaceWith(flowFeed({})); }
   }
   function syncFlowLive() {
-    if (view !== 'flow' || document.hidden) return;
+    if (view !== 'flow' || document.hidden || (!HOSTED && !DEMO && (flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token))) return;
     const meta = flowCurrentMeta();
     for (const [selector, fresh] of [['.flow-status', flowStatus(meta)], ['.flow-feed', flowFeed(meta)]]) { const old = $('board').querySelector(selector); if (old && !old.isEqualNode(fresh)) old.replaceWith(fresh); }
     const byId = flowBoardGraph().byId;
@@ -2653,40 +2654,65 @@ if (typeof window !== 'undefined') (() => {
     });
   }
   async function refreshFlow() {
-    syncFlowLive(); // Reconcile cached hidden-tab responses even when the next request is throttled.
-    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public') return;
-    const c = { ...cfg() }, key = flowKey(c); // Snapshot the token getter for this request's auth context.
+    syncFlowLive(); // Reconcile hidden-tab responses before applying the network throttle.
+    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public' || flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token) return;
+    const c = { ...cfg() }, key = flowKey(c);
     if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
     if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
-    const ticket = flowRequest = { key }, previous = flowMeta;
-    const read = async (endpoint, tag) => {
-      const r = await githubApi('GET', endpoint, null, { etag: tag }, c);
-      if (r.status === 304) return { unchanged: true };
-      if ([401, 403, 404].includes(r.status) && flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token) {
-        const name = endpoint.startsWith('/contents/') ? 'runner' : 'commits';
-        flowMeta = { ...flowMeta, [name + 'Error']: r.status === 404 && name === 'runner' ? '' : 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
-        delete flowMeta[name]; delete flowMeta[name + 'Tag']; syncFlowLive(); // Do not wait for the other endpoint to settle.
+    const ticket = flowRequest = { key, deniedCommits: false };
+    flowMeta = { ...flowMeta, checked: Date.now() };
+    const current = () => flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token;
+    const publish = patch => { if (current()) { flowMeta = { ...flowMeta, ...patch }; syncFlowLive(); } };
+    const failed = (name, error) => {
+      if (!current()) return;
+      const next = { ...flowMeta, [name + 'Error']: 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
+      if ([401, 403, 404].includes(error.status)) {
+        delete next[name]; delete next[name + 'Tag'];
+        if (name === 'commits') { next.commitParts = new Map(); ticket.deniedCommits = true; }
       }
-      if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-      if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
-      let data = await r.json();
-      if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
-      return { data, tag: r.headers.get('ETag') };
+      flowMeta = next; syncFlowLive();
     };
-    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : c.path;
-    const results = await Promise.allSettled([
-      previous.runnerMissingUntil > Date.now() ? Promise.resolve({ unchanged: true }) : read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, previous.runnerTag),
-      read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(dir)}&per_page=20`, previous.commitsTag)
-    ]);
-    if (flowRequest !== ticket || flowKey(cfg()) !== key || cfg().token !== c.token) { if (flowRequest === ticket) flowRequest = null; return; }
-    const next = { ...previous, checked: Date.now() };
-    results.forEach((r, i) => {
-      const name = i ? 'commits' : 'runner';
-      if (r.status === 'rejected') { next[name + 'Error'] = 'Could not refresh ' + (i ? 'activity' : 'runner status'); if ([401, 403, 404].includes(r.reason?.status)) { delete next[name]; delete next[name + 'Tag']; } }
-      else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; if (!i) next.runnerMissingUntil = r.value.data === null ? Date.now() + 300000 : 0; } }
+    const read = async (endpoint, tag) => {
+      // Each endpoint owns its deadline; a stalled optional resource cannot pin the other panel.
+      const controller = new AbortController(); let timer;
+      const deadline = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('Flow request timed out')); }, 12000); });
+      try {
+        const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
+        if (r.status === 304) return { unchanged: true };
+        if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
+        let data = await r.json();
+        if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
+        return { data, tag: r.headers.get('ETag') };
+      } finally { clearTimeout(timer); }
+    };
+    const runnerRead = async () => {
+      if (flowMeta.runnerMissingUntil > Date.now()) return;
+      try {
+        const r = await read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, flowMeta.runnerTag);
+        if (r.unchanged) publish({ runnerError: '' });
+        else publish({ runner: r.data, runnerTag: r.tag, runnerError: '', runnerMissingUntil: r.data === null ? Date.now() + 300000 : 0 });
+      } catch (e) { failed('runner', e); }
+    };
+    const base = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
+    // A one-file board owns its file. A split board also owns its schema-defined cards/ prefix.
+    // Never query the parent directory: it can contain other boards.
+    const paths = [c.path];
+    if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
+    const commitReads = paths.map(async path => {
+      try {
+        const old = flowMeta.commitParts?.get(path);
+        const r = await read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(path)}&per_page=20`, old?.tag);
+        if (!current() || ticket.deniedCommits) return;
+        const parts = new Map(flowMeta.commitParts || []);
+        if (!r.unchanged) parts.set(path, { tag: r.tag, data: Array.isArray(r.data) ? r.data.slice(0, 20) : [] });
+        const unique = new Map(); parts.forEach(part => part.data.forEach(commit => { if (commit && typeof commit.sha === 'string') unique.set(commit.sha, commit); }));
+        const commits = [...unique.values()].sort((a, b) => Date.parse(b.commit?.committer?.date || b.commit?.author?.date || '') - Date.parse(a.commit?.committer?.date || a.commit?.author?.date || '')).slice(0, 20);
+        publish({ commitParts: parts, commits, commitsError: '' });
+      } catch (e) { failed('commits', e); }
     });
-    flowMeta = next; flowRequest = null;
-    syncFlowLive();
+    await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
+    if (current()) flowRequest = null;
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowComponents(tasks) {
@@ -2777,6 +2803,7 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderFlow() {
     const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading'), meta = flowCurrentMeta();
+    if (!HOSTED && !DEMO && (flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token)) { shell.append(el('h2', '', 'Live flow'), el('p', 'hint', 'Waiting for this board to load.')); board.append(shell); return; }
     if (flowPageKey !== flowKey(cfg())) { flowPageKey = flowKey(cfg()); flowPage = 0; }
     top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
     const explicitDone = $('fStatus').value === doneColId();
@@ -2833,7 +2860,7 @@ if (typeof window !== 'undefined') (() => {
     if (HOSTED || DEMO || ro === 'demo' || !cfg().token || ro === 'public') { feed.append(el('p', 'hint', 'Commit activity requires a signed-in GitHub board.')); return feed; }
     if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
     const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
-    if (!commits.length && !meta.commitsError) feed.append(el('p', 'hint', meta.checked ? 'No board commits found.' : 'Waiting for activity…'));
+    if (!commits.length && !meta.commitsError) feed.append(el('p', 'hint', Array.isArray(meta.commits) ? 'No board commits found.' : 'Waiting for activity…'));
     commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
     return feed;
   }
@@ -6671,7 +6698,7 @@ if (typeof window !== 'undefined') (() => {
     const archSwitch = !moved && (branch !== cfg().branch || path !== cfg().path); if (archSwitch) { resetArchUi(); archHold = 1; }   // until a load succeeds (load() ends it)
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
-    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (newTok || moved || archSwitch) resetFlowMeta(); if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
+    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (newTok || moved || archSwitch) resetFlowMeta(true); if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
     if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
