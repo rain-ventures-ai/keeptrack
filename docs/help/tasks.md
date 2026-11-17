@@ -25,6 +25,7 @@ If you selected **Tasks** when you made your board, you also have these views. T
 Flow's runner status and commit feed require a GitHub token. Anonymous public boards keep their two-minute refresh
 and do not fetch that metadata. An absent runner file is checked again after five minutes. Existing background
 alerts, if you enabled them, continue to check the board while Flow's metadata polling pauses in hidden tabs.
+Flow initially draws up to 500 matching cards. Use project or label filters, or **Show 500 more**, for larger boards.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
 People, labels and **Client & project** use the full width. The client name opens the company, the project name opens the project, and **Edit** opens the picker. The picker filters projects after you choose a client and keeps long names readable on a phone.
