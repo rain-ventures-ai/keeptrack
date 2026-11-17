@@ -25,7 +25,7 @@ If you selected **Tasks** when you made your board, you also have these views. T
 Flow's runner status and commit feed require a GitHub token. Anonymous public boards keep their two-minute refresh
 and do not fetch that metadata. An absent runner file is checked again after five minutes. Existing background
 alerts, if you enabled them, continue to check the board while Flow's metadata polling pauses in hidden tabs.
-Flow initially draws up to 500 matching cards. Use project or label filters, or **Show 500 more**, for larger boards.
+Flow draws up to 500 matching cards per page. Use project or label filters, or **Next 500** and **Previous 500**, for larger boards.
 It draws up to 1,500 arrows. Boards with more than 10,000 dependency links show card summaries instead; open a card
 to inspect its complete dependency list.
 

@@ -1178,7 +1178,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (!ok) resetFlowMeta(); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
+  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -1211,8 +1211,8 @@ if (typeof window !== 'undefined') (() => {
       const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
       if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
-      if (res.status === 404) { await diagnose404(); return false; }
-      if (res.status === 401 || res.status === 403) { lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
+      if (res.status === 404) { resetFlowMeta(); await diagnose404(); return false; }
+      if (res.status === 401 || res.status === 403) { resetFlowMeta(); lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
       const { d: data, raw: raw0 } = await fileJson(res); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = res.headers.get('ETag'); let raw = raw0;
       fileDemo = !!raw.demo_base;
@@ -1224,7 +1224,7 @@ if (typeof window !== 'undefined') (() => {
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
       setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
       if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
-    } catch (e) { if (stale()) return false; console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+    } catch (e) { if (stale()) return false; resetFlowMeta(); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
@@ -2632,14 +2632,28 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
-  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowLimit = 500;
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowPage = 0, flowPageKey = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
   const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta() {
     flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
     if (view === 'flow') { $('board').querySelector('.flow-status')?.replaceWith(flowStatus({})); $('board').querySelector('.flow-feed')?.replaceWith(flowFeed({})); }
   }
+  function syncFlowLive() {
+    if (view !== 'flow' || document.hidden) return;
+    const meta = flowCurrentMeta();
+    for (const [selector, fresh] of [['.flow-status', flowStatus(meta)], ['.flow-feed', flowFeed(meta)]]) { const old = $('board').querySelector(selector); if (old && !old.isEqualNode(fresh)) old.replaceWith(fresh); }
+    const byId = flowBoardGraph().byId;
+    $('board').querySelectorAll('.flow-card').forEach(node => {
+      const t = byId.get(node.dataset.card), label = node.querySelector('.flow-run'); if (!t?.claim || !label) return;
+      const status = claimState(t.claim);
+      ['running', 'stale', 'blocked', 'stuck', 'done'].forEach(s => node.classList.toggle('flow-' + s, s === status));
+      const text = `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`;
+      if (label.textContent !== text) label.textContent = text;
+    });
+  }
   async function refreshFlow() {
+    syncFlowLive(); // Reconcile cached hidden-tab responses even when the next request is throttled.
     if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public') return;
     const c = { ...cfg() }, key = flowKey(c); // Snapshot the token getter for this request's auth context.
     if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
@@ -2667,10 +2681,7 @@ if (typeof window !== 'undefined') (() => {
       else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; if (!i) next.runnerMissingUntil = r.value.data === null ? Date.now() + 300000 : 0; } }
     });
     flowMeta = next; flowRequest = null;
-    if (view === 'flow' && !document.hidden) {
-      // Ages can change on a 304 too. Compare the small metadata elements, never rebuild the graph.
-      for (const [selector, fresh] of [['.flow-status', flowStatus(next)], ['.flow-feed', flowFeed(next)]]) { const old = $('board').querySelector(selector); if (old && !old.isEqualNode(fresh)) old.replaceWith(fresh); }
-    }
+    syncFlowLive();
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowComponents(tasks) {
@@ -2679,10 +2690,13 @@ if (typeof window !== 'undefined') (() => {
     // Bound edge allocation independently of the visible-card limit. Dense boards use summaries.
     let budget = 10000;
     for (const t of tasks) {
-      const ids = afterIds(t); budget -= ids.length;
-      if (budget < 0) return { byId, edges: [], groups: [], groupOf: new Map(), cycles: new Set(), linkedIds, limited: true };
-      if (ids.length) { linkedIds.add(t.id); ids.forEach(id => linkedIds.add(id)); }
-      ids.forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); } });
+      const seen = new Set();
+      for (const id of Array.isArray(t.after) ? t.after : []) {
+        if (--budget < 0) return { byId, edges: [], groups: [], groupOf: new Map(), cycles: new Set(), linkedIds, limited: true };
+        if (typeof id !== 'string' || !id || seen.has(id)) continue;
+        seen.add(id); linkedIds.add(t.id); linkedIds.add(id);
+        if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); }
+      }
     }
     const visited = new Set(), order = [], groups = [], groupOf = new Map();
     // Iterative Kosaraju traversal: deep chains use heap storage rather than the browser call stack.
@@ -2697,7 +2711,7 @@ if (typeof window !== 'undefined') (() => {
       while (stack.length) { const at = stack.pop(); group.push(at); reverse.get(at).forEach(to => { if (!groupOf.has(to)) { groupOf.set(to, groups.length); stack.push(to); } }); }
       groups.push(group);
     });
-    const cycles = new Set(); groups.forEach(g => { if (g.length > 1 || afterIds(byId.get(g[0])).includes(g[0])) g.forEach(id => cycles.add(id)); });
+    const cycles = new Set(); groups.forEach(g => { if (g.length > 1 || next.get(g[0]).includes(g[0])) g.forEach(id => cycles.add(id)); });
     return { byId, edges, groups, groupOf, cycles, linkedIds };
   }
   function flowBoardGraph() {
@@ -2722,8 +2736,10 @@ if (typeof window !== 'undefined') (() => {
     node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
     if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
     else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
-    const ids = afterIds(t), deps = afterLinks({ ...t, after: ids.slice(0, 20) }, flowBoardGraph().byId);
-    if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (ids.length > deps.length ? ` · ${ids.length - deps.length} more (open card)` : ''); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
+    const raw = Array.isArray(t.after) ? t.after : [], ids = [];
+    for (let i = 0; i < Math.min(raw.length, 10000) && ids.length < 20; i++) if (typeof raw[i] === 'string' && raw[i] && !ids.includes(raw[i])) ids.push(raw[i]);
+    const deps = afterLinks({ ...t, after: ids }, flowBoardGraph().byId);
+    if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (raw.length > deps.length ? ' · more (open card)' : ''); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
     if (position && position.cycle) node.append(el('span', 'flow-cycle', 'Dependency cycle'));
     if (waitingOf(t)) node.append(el('span', 'flow-cycle', 'Waiting'));
     node.onclick = () => openCard(t.id); return node;
@@ -2748,14 +2764,19 @@ if (typeof window !== 'undefined') (() => {
   }
   function renderFlow() {
     const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading'), meta = flowCurrentMeta();
+    if (flowPageKey !== flowKey(cfg())) { flowPageKey = flowKey(cfg()); flowPage = 0; }
     top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
     const explicitDone = $('fStatus').value === doneColId();
     const toggle = ui.button({ label: explicitDone ? 'Done selected' : flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); toggle.disabled = explicitDone; if (explicitDone) toggle.title = 'Clear the status filter to collapse Done'; top.append(toggle); shell.append(top, flowStatus(meta));
     const content = el('div', 'flow-content'), main = el('div', 'flow-main'), status = $('fStatus').value;
     let matching;
     try { if (flowDone && status === '__open') $('fStatus').value = ''; matching = state.tasks.filter(t => filtered(t) && (flowDone || explicitDone || !isDoneTask(t))); } finally { $('fStatus').value = status; }
-    const all = matching.slice(0, flowLimit);
-    if (matching.length > all.length) { const limit = el('div', 'flow-limit', `Showing ${all.length} of ${matching.length} matching cards. Filter by project or label, or show more.`); limit.append(ui.button({ label: 'Show 500 more', size: 'sm', onClick: () => { flowLimit += 500; render(); } })); main.append(limit); }
+    flowPage = Math.min(flowPage, Math.max(0, Math.ceil(matching.length / 500) - 1));
+    const all = matching.slice(flowPage * 500, (flowPage + 1) * 500);
+    if (matching.length > 500) {
+      const limit = el('div', 'flow-limit', `Showing ${all.length} of ${matching.length} matching cards · page ${flowPage + 1}. Filter by project or label, or choose a page.`);
+      const prev = ui.button({ label: 'Previous 500', size: 'sm', onClick: () => { flowPage--; render(); } }), next = ui.button({ label: 'Next 500', size: 'sm', onClick: () => { flowPage++; render(); } }); prev.disabled = flowPage === 0; next.disabled = (flowPage + 1) * 500 >= matching.length; limit.append(prev, next); main.append(limit);
+    }
     const graph = flowBoardGraph(), linkedIds = graph.linkedIds;
     const linked = graph.limited ? [] : all.filter(t => linkedIds.has(t.id)), free = graph.limited ? all : all.filter(t => !linkedIds.has(t.id));
     if (graph.limited) main.append(el('p', 'hint', 'More than 10,000 dependency links: showing card summaries to keep this view responsive. Open a card to inspect all its dependencies.'));
@@ -6630,7 +6651,7 @@ if (typeof window !== 'undefined') (() => {
     const archSwitch = !moved && (branch !== cfg().branch || path !== cfg().path); if (archSwitch) { resetArchUi(); archHold = 1; }   // until a load succeeds (load() ends it)
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
-    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); resetFlowMeta(); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
+    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (newTok || moved || archSwitch) resetFlowMeta(); if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
     if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
@@ -6850,7 +6871,7 @@ if (typeof window !== 'undefined') (() => {
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
   document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
-  setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) render(); }, 60000); // refresh "ago" and stale flags
+  setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) { if (view === 'flow') syncFlowLive(); else render(); } }, 60000); // refresh "ago" and stale flags
 
 
   const projectsOf = () => state.projects || [];

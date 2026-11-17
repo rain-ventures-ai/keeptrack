@@ -20,7 +20,7 @@ const tasks = [card(1, { title: 'Prepare a complete launch plan with a deliberat
 tasks.find(t => t.num === 3).after.push('t_1');
 tasks.find(t => t.num === 10).after = ['t_10'];
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false;
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
@@ -38,15 +38,17 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (req.method() !== 'GET') counts.writes++;
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json') { counts.board++; if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json') { counts.board++; if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
+        if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.arrived(); await gate.wait; }
+        if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
         if (!runner) return json({}, 404);
-        if (req.headers()['if-none-match'] === 'runner1') { conditional++; return route.fulfill({ status: 304 }); }
-        return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner1' });
+        if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
+        return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), 'board/'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), 'board/'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -79,9 +81,16 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.equal(counts.runner, initial.runner); assert.equal(counts.commits, initial.commits);
     // One 30s poll refreshes board and optional metadata; tab hidden stops all polling.
     runner = { status: 'paused', paused_by: 'owner', pause_reason: 'Maintenance', last_tick: now, engines_out: [{ engine: 'claude', until: 'tomorrow' }], sign_in: { claude: true, codex: false }, secret: 'DO NOT RENDER' };
-    raw.tasks[0].claim.status = 'blocked'; revision++;
-    await page.clock.fastForward(301000); // An absent runner is retried after five minutes, not every poll.
+    await page.clock.fastForward(31000);
+    assert.equal(counts.runner, initial.runner, 'absent runner is not retried on each poll');
+    await page.evaluate(() => { window.unchangedGraph = document.querySelector('.flow-canvas'); });
+    await page.clock.fastForward(31 * 60000); // An unchanged board can cross the stale threshold.
     await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Maintenance'));
+    assert.match(await page.locator('[data-card="t_1"]').innerText(), /STALE/);
+    assert.ok(await page.evaluate(() => window.unchangedGraph === document.querySelector('.flow-canvas')), 'time-only refresh preserves graph');
+    raw.tasks[0].claim.status = 'blocked'; revision++;
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(() => document.querySelector('[data-card="t_1"]').textContent.includes('BLOCKED'));
     assert.match(await page.locator('[data-card="t_1"]').innerText(), /BLOCKED/);
     assert.match(await page.locator('.flow-status').innerText(), /codex sign-in: fails/);
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('DO NOT RENDER'));
@@ -97,6 +106,21 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     // An unchanged board and metadata refresh keeps the exact same graph DOM.
     assert.ok(await page.evaluate(() => window.flowGraph === document.querySelector('.flow-canvas')));
     assert.notEqual(await page.locator('.flow-event .hint').first().textContent(), oldAge);
+    // A response arriving while hidden is reconciled from cache on immediate return,
+    // even though the 25-second network throttle is still active.
+    let releaseRunner, runnerArrived;
+    const arrived = new Promise(resolve => { runnerArrived = resolve; });
+    runnerGate = { arrived: runnerArrived, wait: new Promise(resolve => { releaseRunner = resolve; }) };
+    runnerVersion++; runner.pause_reason = 'Updated while hidden';
+    await page.clock.fastForward(31000); await arrived;
+    await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
+    const completed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 200);
+    releaseRunner(); await (await completed).finished(); await page.evaluate(() => Promise.resolve());
+    assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
+    const hiddenResponseCount = counts.runner;
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
+    await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Updated while hidden'));
+    assert.equal(counts.runner, hiddenResponseCount);
     // The Done button overrides the existing Hide Done switch.
     await page.getByRole('button', { name: 'Collapse Done', exact: true }).click();
     await page.selectOption('#fStatus', '__open', { force: true });
@@ -130,6 +154,19 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.selectOption('#fProject', 'p_blue', { force: true });
     assert.equal(await page.locator('[data-card="t_8"] .flow-cycle').textContent(), 'Dependency cycle');
     await page.selectOption('#fProject', '', { force: true });
+    // Changing branch with the same token clears the old metadata before the new load returns.
+    let releaseBranch, branchArrived;
+    const branchStarted = new Promise(resolve => { branchArrived = resolve; });
+    branchGate = { arrived: branchArrived, wait: new Promise(resolve => { releaseBranch = resolve; }) };
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.locator('#btnSettings').click(); await page.locator('#tabConn').click(); await page.locator('#bEditFold > summary').click();
+    await page.locator('#sBranch').fill('dev'); await page.locator('#sSave').click(); await branchStarted;
+    assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
+    assert.equal(await page.locator('.flow-event').count(), 0);
+    releaseBranch(); await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Could not refresh'));
+    await page.locator('#btnSettings').click(); await page.locator('#tabConn').click();
+    if (!(await page.locator('#bEditFold').evaluate(n => n.open))) await page.locator('#bEditFold > summary').click();
+    await page.locator('#sBranch').fill('main'); await page.locator('#sSave').click(); await page.locator('.flow-event').first().waitFor();
     // GitHub can conceal inaccessible repository activity with 404, not just 401/403.
     commitsLost = true;
     const lost = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 404);
@@ -140,10 +177,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     // Changing credentials in the real connection form clears metadata from the old token.
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.locator('#btnSettings').click(); await page.locator('#tabConn').click();
-    await page.locator('#bEditFold > summary').click();
+    if (!(await page.locator('#bEditFold').evaluate(n => n.open))) await page.locator('#bEditFold > summary').click();
     await page.locator('#sToken').fill('denied'); await page.locator('#sSave').click();
     await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Could not refresh'));
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('Maintenance'));
+    assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
     assert.equal(await page.locator('.flow-event').count(), 0);
     // Existing explicitly enabled alerts still poll the board in the background,
     // independently of Flow metadata, which always pauses while hidden.
@@ -165,8 +203,15 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached', timeout: 60000 });
     assert.equal(await page.locator('.flow-card').count(), 500);
     assert.match(await page.locator('.flow-limit').innerText(), /Showing 500 of 12000/);
-    await page.getByRole('button', { name: 'Show 500 more', exact: true }).click();
-    assert.equal(await page.locator('.flow-card').count(), 1000);
+    await page.getByRole('button', { name: 'Next 500', exact: true }).click();
+    assert.equal(await page.locator('.flow-card').count(), 500);
+    assert.equal(await page.locator('[data-card="t_501"]').count(), 1);
+    assert.equal(await page.locator('[data-card="t_1"]').count(), 0);
+    // Exercise the iterative traversal within the edge budget, rather than summary fallback.
+    raw.tasks = Array.from({ length: 9000 }, (_, n) => card(n + 1, { after: n ? ['t_' + n] : [] })); revision++;
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached' });
+    assert.equal(await page.locator('.flow-canvas').count(), 1);
+    assert.equal(await page.locator('.flow-edge').count(), 499);
     // Dense graphs must not allocate a quadratic SVG tree.
     raw.tasks = Array.from({ length: 500 }, (_, n) => card(n + 1, { after: Array.from({ length: n }, (_, i) => 't_' + (i + 1)) })); revision++;
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached' });
