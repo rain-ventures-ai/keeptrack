@@ -129,8 +129,8 @@ test('method: a saved choice wins; otherwise a saved token keeps being used, and
   assert.equal(k.resolveAuthMethod({ configured: true, stored: 'app', hasPat: true }), 'app');
   assert.equal(k.resolveAuthMethod({ configured: true, stored: 'pat', hasPat: false }), 'pat');
   assert.equal(k.resolveAuthMethod({ configured: true, stored: null, hasPat: true }), 'pat');
-  assert.equal(k.resolveAuthMethod({ configured: true, stored: null, hasPat: false }), 'app');
-  assert.equal(k.resolveAuthMethod({ configured: true, stored: 'weird', hasPat: false }), 'app');
+  assert.equal(k.resolveAuthMethod({ configured: true, boardConfigured: true, stored: null, hasPat: false }), 'app', 'only the boards own settings start it on sign-in');
+  assert.equal(k.resolveAuthMethod({ configured: true, boardConfigured: true, stored: 'weird', hasPat: false }), 'app');
 });
 
 test('token choice: the active method decides, and the other method is never used as a fallback', () => {
@@ -230,4 +230,59 @@ test('source: token is a lazy getter, PAT-only pages do no sign-in storage reads
   assert.ok(forget.indexOf("authMethod(cfg().repo) === 'app'") > -1 && forget.indexOf("authMethod(cfg().repo) === 'app'") < forget.indexOf('ask('), 'the handler checks the method before it asks or deletes');
   assert.equal([...source.matchAll(/code_verifier: verifier/g)].length, 1, 'the verifier is sent in exactly one place');
   assert.match(source, /refreshHeld\(refreshHold, Date\.now\(\)\)/);
+});
+
+test('default method (owner decision): the pasted token is the default; only a board\'s own settings start on sign-in', () => {
+  const r = o => k.resolveAuthMethod({ configured: true, boardConfigured: false, stored: null, hasPat: false, ...o });
+  assert.equal(r({}), 'pat', 'a page meta alone makes sign-in a choice, not the default');
+  assert.equal(r({ boardConfigured: true }), 'app', 'a valid github_app_signin in the board settings starts on sign-in');
+  assert.equal(r({ boardConfigured: true, hasPat: true }), 'pat', 'a saved token keeps the token');
+  assert.equal(r({ boardConfigured: true, hasPat: true, stored: 'app' }), 'app', 'a stored choice wins over everything');
+  assert.equal(r({ stored: 'app' }), 'app');
+  assert.equal(r({ boardConfigured: true, stored: 'pat' }), 'pat');
+  assert.equal(r({ configured: false, boardConfigured: true, stored: 'app' }), 'pat', 'no configuration at all: always the token');
+  assert.match(source, /boardConfigured: !!boardSigninConfig\(repo\)/);
+});
+
+test('callback: a page opened as .../board/index.html sends .../board/', () => {
+  const want = 'https://rain-ventures-ai.github.io/keeptrack/board/';
+  for (const href of [want + 'index.html', want + 'index.html?repo=a/b#x', want, want + '?code=1', 'https://rain-ventures-ai.github.io/keeptrack/board/index.html?code=x&state=y'])
+    assert.equal(k.signinRedirectUri(href), want, href);
+  assert.equal(k.signinRedirectUri('https://pages.example/x/myindex.html'), 'https://pages.example/x/myindex.html', 'only a real index.html is folded');
+  assert.equal(k.signinRedirectUri('http://127.0.0.1:5000/board/index.html'), 'http://127.0.0.1:5000/board/');
+});
+
+test('refresh failures: only GitHub\'s real refusals end the sign-in; 5xx, 429 and the Worker\'s own errors hold', () => {
+  for (const [status, data] of [[500, {}], [503, { error: 'bad_refresh_token' }], [502, { error: 'github_unreachable' }], [429, { error: 'rate_limited' }], [429, { error: 'bad_refresh_token' }],
+    [500, { error: 'not_configured' }], [400, { error: 'not_configured' }], [400, { error: 'redirect_not_allowed' }], [400, { error: 'bad_request' }], [400, { error: 'github_error' }],
+    [403, { error: 'origin_not_allowed' }], [415, { error: 'json_only' }], [400, null], [400, 'x'], [400, {}], [400, { error: 5 }]])
+    assert.equal(k.refreshFailureKind(status, data), 'transient', status + ' ' + JSON.stringify(data));
+  for (const error of ['bad_refresh_token', 'bad_verification_code', 'incorrect_client_credentials', 'redirect_uri_mismatch', 'unverified_user_email', 'access_denied', 'application_suspended'])
+    assert.equal(k.refreshFailureKind(400, { error }), 'refused', error);
+  // the page's list is a subset of the Worker's GitHub error list, so a Worker code can never be mistaken for a GitHub refusal
+  const worker = fs.readFileSync(path.join(__dirname, '..', 'signin-worker', 'worker.js'), 'utf8');
+  const listed = /new Set\(\[([^\]]*)\]\)/.exec(worker.slice(worker.indexOf('GITHUB_ERRORS')))[1].match(/'[a-z_]+'/g).map(x => x.slice(1, -1));
+  for (const e of listed) assert.equal(k.refreshFailureKind(400, { error: e }), 'refused', 'Worker passes through ' + e);
+  assert.match(source, /refreshFailureKind\(res\.status, data\) === 'transient'/);
+});
+
+test('origins: the default exchange origin comes first and the page and the policy cap at 8 the same way', () => {
+  const many = Array.from({ length: 12 }, (_, i) => `https://w${i}.example`);
+  const p = k.parsePageSignin(JSON.stringify({ ...GOOD, origins: many }));
+  assert.equal(p.origins.length, k.SIGNIN_MAX_ORIGINS); assert.equal(k.SIGNIN_MAX_ORIGINS, 8);
+  assert.equal(p.origins[0], WORKER, 'the exchange_url origin survives the cap');
+  assert.deepEqual(p.origins.slice(1), many.slice(0, 7));
+  assert.deepEqual(p.def, GOOD, 'so the default still parses');
+  assert.deepEqual(k.parsePageSignin(JSON.stringify({ ...GOOD, origins: [WORKER, WORKER] })).origins, [WORKER], 'no duplicates');
+  // index.html's bootstrap (which builds the policy) applies the same order and cap
+  const html = fs.readFileSync(path.join(__dirname, '..', 'board', 'index.html'), 'utf8');
+  const m = /kb-github-app-signin"\]'\), sign = [\s\S]*?\n  \} catch \(_\) \{\}/.exec(html);
+  assert.ok(m, 'bootstrap block found');
+  const run = (meta) => { let content = "connect-src 'self'"; const policy = { get content() { return content; }, set content(v) { content = v; } };
+    const document = { querySelector: () => ({ getAttribute: () => JSON.stringify(meta) }) };
+    new Function('document', 'policy', 'URL', 'try {\n var meta = document.querySelector(\'meta[name="kb-github-app-signin"]\'), sign = meta ? JSON.parse(meta.getAttribute(\'content\')) : null, extra = [], list = [];' + m[0].split('list = [];')[1])(document, policy, URL);
+    return content.replace("connect-src 'self'", '').trim().split(/\s+/).filter(Boolean); };
+  const fromPolicy = run({ ...GOOD, origins: many });
+  assert.deepEqual(fromPolicy, p.origins, 'the policy allows exactly the origins the page does');
+  assert.deepEqual(run({ ...GOOD }), [WORKER]);
 });
