@@ -2632,7 +2632,7 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
-  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowPage = 0, flowPageKey = '';
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowPage = 0, flowPageKey = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
   const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta() {
@@ -2662,13 +2662,18 @@ if (typeof window !== 'undefined') (() => {
     const read = async (endpoint, tag) => {
       const r = await githubApi('GET', endpoint, null, { etag: tag }, c);
       if (r.status === 304) return { unchanged: true };
+      if ([401, 403, 404].includes(r.status) && flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token) {
+        const name = endpoint.startsWith('/contents/') ? 'runner' : 'commits';
+        flowMeta = { ...flowMeta, [name + 'Error']: r.status === 404 && name === 'runner' ? '' : 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
+        delete flowMeta[name]; delete flowMeta[name + 'Tag']; syncFlowLive(); // Do not wait for the other endpoint to settle.
+      }
       if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
       if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
       let data = await r.json();
       if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
       return { data, tag: r.headers.get('ETag') };
     };
-    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
+    const dir = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : c.path;
     const results = await Promise.allSettled([
       previous.runnerMissingUntil > Date.now() ? Promise.resolve({ unchanged: true }) : read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, previous.runnerTag),
       read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(dir)}&per_page=20`, previous.commitsTag)
@@ -2715,7 +2720,15 @@ if (typeof window !== 'undefined') (() => {
     return { byId, edges, groups, groupOf, cycles, linkedIds };
   }
   function flowBoardGraph() {
-    if (!flowGraphCache || flowGraphCache.tasks !== state.tasks) flowGraphCache = { tasks: state.tasks, ...flowComponents(state.tasks) };
+    if (!flowGraphCache || flowGraphCache.tasks !== state.tasks) {
+      // Heartbeats replace task records without changing topology. Keep graph traversals cached
+      // independently, while refreshing the record map used for labels and dependency summaries.
+      let budget = 10001;
+      const shape = state.tasks.map(t => { const raw = Array.isArray(t.after) ? t.after : [], count = Math.min(raw.length, Math.max(0, budget)); budget -= count; return [t.id, raw.length, raw.slice(0, count).map(id => typeof id === 'string' ? id : null)]; });
+      const topology = JSON.stringify(shape);
+      if (flowGraphCache?.topology === topology) flowGraphCache = { ...flowGraphCache, tasks: state.tasks, byId: new Map(state.tasks.map(t => [t.id, t])) };
+      else flowGraphCache = { tasks: state.tasks, topology, ...flowComponents(state.tasks) };
+    }
     return flowGraphCache;
   }
   function flowLayout(tasks) {
@@ -2725,8 +2738,8 @@ if (typeof window !== 'undefined') (() => {
     const degree = incoming.map(s => s.size), queue = degree.flatMap((n, i) => n ? [] : [i]);
     for (let i = 0; i < queue.length; i++) { const x = queue[i]; outgoing[x].forEach(y => { ranks[y] = Math.max(ranks[y], ranks[x] + 1); if (!--degree[y]) queue.push(y); }); }
     const rows = new Map(), positions = new Map();
-    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 170, cycle: cycles.has(t.id) }); });
-    return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 170 + 24 };
+    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 194, cycle: cycles.has(t.id), component: groupOf.get(t.id) }); });
+    return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 194 + 24 };
   }
   function flowCard(t, position) {
     const status = claimState(t.claim), node = el('button', 'flow-card' + (status ? ' flow-' + status : ''));
@@ -2740,8 +2753,8 @@ if (typeof window !== 'undefined') (() => {
     for (let i = 0; i < Math.min(raw.length, 10000) && ids.length < 20; i++) if (typeof raw[i] === 'string' && raw[i] && !ids.includes(raw[i])) ids.push(raw[i]);
     const deps = afterLinks({ ...t, after: ids }, flowBoardGraph().byId);
     if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (raw.length > deps.length ? ' · more (open card)' : ''); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
-    if (position && position.cycle) node.append(el('span', 'flow-cycle', 'Dependency cycle'));
-    if (waitingOf(t)) node.append(el('span', 'flow-cycle', 'Waiting'));
+    const flags = [position?.cycle && 'Dependency cycle', waitingOf(t) && 'Waiting'].filter(Boolean);
+    if (flags.length) node.append(el('span', 'flow-cycle', flags.join(' · ')));
     node.onclick = () => openCard(t.id); return node;
   }
   function flowStatus(meta) {
@@ -2782,8 +2795,14 @@ if (typeof window !== 'undefined') (() => {
     if (graph.limited) main.append(el('p', 'hint', 'More than 10,000 dependency links: showing card summaries to keep this view responsive. Open a card to inspect all its dependencies.'));
     main.append(el('h3', '', graph.limited ? 'Dependency summaries' : `Dependency chains · ${linked.length}`));
     if (linked.length) {
-      const graphScroll = el('div', 'flow-graph-scroll'), canvas = el('div', 'flow-canvas'), layout = flowLayout(linked);
+      const graphScroll = el('div', 'flow-graph-scroll');
       graphScroll.tabIndex = 0; graphScroll.setAttribute('aria-label', 'Dependency graph, scroll to explore');
+      const canvasKey = JSON.stringify([flowKey(cfg()), graph.topology, state.columns, state.tasks.map(t => [t.id, t.num, t.column, t.outcome]), linked.map(t => [t.id, t.num, t.title, t.column, !!(t.claim && claimState(t.claim) !== 'done'), t.last_run?.agent, t.last_run?.status, !!waitingOf(t)])]);
+      if (flowCanvasCache?.key === canvasKey && flowCanvasCache.auth === cfg().token && flowCanvasCache.archived === archived && flowCanvasCache.archFresh === archFresh()) {
+        graphScroll.append(flowCanvasCache.canvas); main.append(graphScroll);
+        main.append(el('p', 'hint', flowCanvasCache.caption));
+      } else {
+      const canvas = el('div', 'flow-canvas'), layout = flowLayout(linked);
       const arrows = layout.edges.slice(0, 1500), skips = arrows.filter(([a, b]) => layout.positions.get(b).x - layout.positions.get(a).x > 312).length, height = layout.height + skips * 12 + 24;
       canvas.style.width = layout.width + 'px'; canvas.style.height = height + 'px';
       const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('width', layout.width); svg.setAttribute('height', height); svg.setAttribute('aria-hidden', 'true');
@@ -2795,25 +2814,26 @@ if (typeof window !== 'undefined') (() => {
         // Same-rank cycles and self-links enter from the right-hand gutter, outside the boxes.
         const routeY = layout.height + (tx - sx > 312 ? ++skip : 0) * 12;
         path.setAttribute('d', tx - sx > 312 ? `M${sx},${sy} H${sx + 12} V${routeY} H${tx - 12} V${ty} H${tx}` : x.x === y.x ? `M${sx},${sy} C${sx + 24},${sy} ${tx + 24},${ty} ${tx},${ty}` : `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
-        path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (x.cycle && y.cycle) path.classList.add('flow-edge-cycle'); svg.append(path);
+        path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (graph.cycles.has(a) && graph.groupOf.get(a) === graph.groupOf.get(b)) path.classList.add('flow-edge-cycle'); svg.append(path);
       });
       const full = flowBoardGraph(); // Cached cycle membership survives project/label/Done filters.
       canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, { ...layout.positions.get(t.id), cycle: full.cycles.has(t.id) }))); graphScroll.append(canvas); main.append(graphScroll);
-      main.append(el('p', 'hint', 'Dependencies outside this view remain listed on each card. Cycles are marked; they cannot become ready.'));
-      if (layout.edges.length > arrows.length) main.append(el('p', 'hint', `Showing ${arrows.length} of ${layout.edges.length} arrows. Open a card for its complete dependency list.`));
+      const caption = 'Dependencies outside this view remain listed on each card. Cycles are marked; they cannot become ready.' + (layout.edges.length > arrows.length ? ` Showing ${arrows.length} of ${layout.edges.length} arrows. Open a card for its complete dependency list.` : '');
+      main.append(el('p', 'hint', caption)); flowCanvasCache = { key: canvasKey, auth: cfg().token, canvas, caption, archived, archFresh: archFresh() };
+      }
     } else if (!graph.limited) main.append(el('p', 'hint', 'No dependency chains match these filters.'));
     main.append(el('h3', '', `${graph.limited ? 'Cards by column' : 'No dependency links'} · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
     const lanes = el('div', 'flow-lanes');
     state.columns.forEach(col => { const cards = free.filter(t => t.column === col.id); if (!cards.length) return; const lane = el('section', 'flow-lane'); lane.append(el('h4', '', `${col.name} · ${cards.length}`)); cards.forEach(t => lane.append(flowCard(t))); lanes.append(lane); }); main.append(lanes);
     if (!all.length) main.append(el('p', 'empty', 'No cards match these filters.'));
-    content.append(main, flowFeed(meta)); shell.append(content); board.append(shell);
+    content.append(main, flowFeed(meta)); shell.append(content); board.append(shell); syncFlowLive();
   }
   function flowFeed(meta) {
     const feed = el('aside', 'flow-feed'); feed.append(el('h3', '', 'Recent board activity'));
     if (HOSTED || DEMO || ro === 'demo' || !cfg().token || ro === 'public') { feed.append(el('p', 'hint', 'Commit activity requires a signed-in GitHub board.')); return feed; }
     if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
     const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
-    if (!commits.length) feed.append(el('p', 'hint', meta.checked ? 'No board commits found.' : 'Waiting for activity…'));
+    if (!commits.length && !meta.commitsError) feed.append(el('p', 'hint', meta.checked ? 'No board commits found.' : 'Waiting for activity…'));
     commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
     return feed;
   }

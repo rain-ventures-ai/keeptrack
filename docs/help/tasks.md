@@ -28,6 +28,7 @@ alerts, if you enabled them, continue to check the board while Flow's metadata p
 Flow draws up to 500 matching cards per page. Use project or label filters, or **Next 500** and **Previous 500**, for larger boards.
 It draws up to 1,500 arrows. Boards with more than 10,000 dependency links show card summaries instead; open a card
 to inspect its complete dependency list.
+For a board JSON file at the repository root, activity is limited to commits affecting that file.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
 People, labels and **Client & project** use the full width. The client name opens the company, the project name opens the project, and **Edit** opens the picker. The picker filters projects after you choose a client and keeps long names readable on a phone.

@@ -15,14 +15,16 @@
 .flow-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
 #flow-arrow path { fill: var(--muted); }
 .flow-edge-cycle { stroke: var(--warn); stroke-dasharray: 4 3; }
-.flow-card { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 264px; min-height: 144px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; font: inherit; cursor: pointer; }
-.flow-canvas .flow-card { position: absolute; height: 144px; }
+.flow-card { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 264px; min-height: 168px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r-lg); background: var(--card); color: var(--text); box-shadow: var(--shadow); text-align: left; font: inherit; cursor: pointer; }
+.flow-canvas .flow-card { position: absolute; height: 168px; }
 .flow-card:hover { background: var(--card-hover); border-color: var(--accent); }
 .flow-card:focus-visible, .flow-graph-scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .flow-card-title { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .flow-card-meta { color: var(--muted); font-size: 11px; line-height: 1.3; }
 .flow-deps { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .flow-run, .flow-cycle { font-size: 11px; color: var(--ok); }
+.flow-run { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.flow-card > .flow-card-meta:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .flow-running { border-left: 4px solid var(--ok); }
 .flow-stale, .flow-blocked, .flow-stuck { border-left: 4px solid var(--warn); }
 .flow-stale .flow-run, .flow-blocked .flow-run, .flow-stuck .flow-run, .flow-cycle { color: var(--warn); }

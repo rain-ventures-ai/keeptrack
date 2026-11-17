@@ -19,8 +19,9 @@ const card = (n, extra = {}) => ({ id: 't_' + n, num: n, title: 'Task ' + n, col
 const tasks = [card(1, { title: 'Prepare a complete launch plan with a deliberately long title that wraps', claim: { agent: 'codex', status: 'running', heartbeat_at: now, claimed_at: now } }), card(2, { after: ['t_1'], project: 'p_blue', labels: ['launch'] }), card(3, { after: ['t_2'], claim: { agent: 'claude', status: 'blocked', heartbeat_at: now } }), card(4, { after: ['t_2'], claim: { agent: 'codex', status: 'running', heartbeat_at: '2020-01-01T00:00:00Z' } }), card(5, { column: 'done' }), card(6, { after: ['t_5'] }), card(7, { after: ['t_missing'] }), card(8, { after: ['t_9'] }), card(9, { after: ['t_8'] }), ...Array.from({ length: 105 }, (_, i) => card(i + 10))];
 tasks.find(t => t.num === 3).after.push('t_1');
 tasks.find(t => t.num === 10).after = ['t_10'];
+tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null;
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
@@ -38,23 +39,24 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (req.method() !== 'GET') counts.writes++;
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json') { counts.board++; if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
-        if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.arrived(); await gate.wait; }
+        if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
         if (!runner) return json({}, 404);
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), 'board/'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
     await page.locator('.flow-event').first().waitFor();
     assert.equal(await page.locator('.flow-card').count(), 113);
-    assert.equal(await page.locator('.flow-edge').count(), 7);
+    assert.equal(await page.locator('.flow-edge').count(), 8);
+    assert.equal(await page.locator('.flow-edge-cycle').count(), 3, 'only links inside one cycle are dashed');
     assert.equal(await page.locator('.flow-edge').evaluateAll(nodes => nodes.filter(n => n.getAttribute('d').includes(' V')).length), 1, 'skip-rank arrow uses an outside gutter');
     const routes = await page.locator('.flow-edge-cycle').evaluateAll(nodes => nodes.map(n => n.getAttribute('d').match(/[\d.]+/g).map(Number)));
     routes.forEach(n => { assert.equal(n[0], n[6]); assert.ok(n[2] > n[0] && n[4] > n[6], 'cycle arrows use a right-hand gutter'); });
@@ -168,10 +170,19 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     if (!(await page.locator('#bEditFold').evaluate(n => n.open))) await page.locator('#bEditFold > summary').click();
     await page.locator('#sBranch').fill('main'); await page.locator('#sSave').click(); await page.locator('.flow-event').first().waitFor();
     // GitHub can conceal inaccessible repository activity with 404, not just 401/403.
+    await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
+    await page.clock.fastForward(31000); // Advance before creating the deliberately pending request.
+    let releaseDeniedRunner, deniedArrived, deniedReleased;
+    const deniedStarted = new Promise(resolve => { deniedArrived = resolve; }), peerReleased = new Promise(resolve => { deniedReleased = resolve; });
+    const heldPeer = runnerGate = { arrived: deniedArrived, released: deniedReleased, wait: new Promise(resolve => { releaseDeniedRunner = resolve; }) };
     commitsLost = true;
     const lost = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 404);
-    await page.clock.fastForward(31000); await lost;
-    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 0);
+    await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); }); await lost;
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 0, null, { timeout: 1000 });
+    await deniedStarted;
+    assert.equal(heldPeer.request.failure(), null, 'the other metadata endpoint is genuinely still pending');
+    const deniedPeer = page.waitForResponse(r => r.url().includes('local-runner.json'));
+    releaseDeniedRunner(); await peerReleased; await deniedPeer; await page.evaluate(() => Promise.resolve());
     commitsLost = false; await page.clock.fastForward(31000);
     await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20);
     // Changing credentials in the real connection form clears metadata from the old token.
@@ -209,14 +220,26 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.equal(await page.locator('[data-card="t_1"]').count(), 0);
     // Exercise the iterative traversal within the edge budget, rather than summary fallback.
     raw.tasks = Array.from({ length: 9000 }, (_, n) => card(n + 1, { after: n ? ['t_' + n] : [] })); revision++;
+    raw.tasks[0].claim = { agent: 'codex', status: 'running', heartbeat_at: await page.evaluate(() => new Date().toISOString()) };
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached' });
+    await page.waitForFunction(() => document.querySelector('.flow-limit')?.textContent.includes('9000') && document.querySelector('.flow-canvas'));
     assert.equal(await page.locator('.flow-canvas').count(), 1);
     assert.equal(await page.locator('.flow-edge').count(), 499);
+    await page.evaluate(() => { window.pulseCanvas = document.querySelector('.flow-canvas'); });
+    raw.tasks[0].claim.agent = 'claude'; raw.tasks[0].claim.heartbeat_at = await page.evaluate(() => new Date().toISOString()); revision++;
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(() => document.querySelector('[data-card="t_1"] .flow-run')?.textContent.includes('claude'));
+    assert.ok(await page.evaluate(() => window.pulseCanvas === document.querySelector('.flow-canvas')), 'claim-only record updates reuse the graph');
     // Dense graphs must not allocate a quadratic SVG tree.
     raw.tasks = Array.from({ length: 500 }, (_, n) => card(n + 1, { after: Array.from({ length: n }, (_, i) => 't_' + (i + 1)) })); revision++;
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached' });
+    await page.waitForFunction(() => document.querySelector('.flow-main')?.textContent.includes('More than 10,000 dependency links'));
     assert.equal(await page.locator('.flow-edge').count(), 0);
     assert.match(await page.locator('.flow-main').innerText(), /More than 10,000 dependency links/);
+    rootBoard = true;
+    await page.evaluate(() => localStorage.setItem('kb_path', 'tasks.json'));
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
+    await page.locator('.flow-event').first().waitFor(); // The mock asserts a file-scoped commit query.
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
