@@ -524,8 +524,10 @@ def admit(kt, work, args):
         owner = policy(current, args.policy_digest)["owner"]
         if owner not in card.setdefault("assignees", []):
             card["assignees"].append(owner)
-        previous_note = (co.get("research") or {}).get("prelaunch_note") or {}
-        if previous_note.get("label_added") and "needs-human" in card.get("labels", []):
+        # Handing the card to Rook is the owner's answer to any needs-human on it, whoever put it there (an earlier note,
+        # a person or another agent). Left on, a later hold would add no label and no "labels:" line, so the relay event id
+        # would not change and the owner would never be told (review 17 Nov, round 3).
+        if "needs-human" in card.get("labels", []):
             card["labels"].remove("needs-human")
             # Same history line task-set writes: a later hold is then a new occurrence with its own owner event id.
             kt.hist(card, "labels: " + (", ".join(card["labels"]) or "none"))

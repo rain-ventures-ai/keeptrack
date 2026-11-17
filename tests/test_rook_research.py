@@ -656,6 +656,21 @@ class ResearchTests(unittest.TestCase):
         history = [h["text"] for h in task["history"]]
         self.assertEqual([t for t in history if t.startswith("labels:")], ["labels: needs-human", "labels: none"])
 
+    def test_a_card_labelled_needs_human_by_someone_else_still_raises_its_own_owner_event_when_held(self):
+        # Invariant: every hold that needs the owner raises its own owner event. A label put on before the owner handed
+        # the card over is answered by the hand-over: admission takes it off with a "labels:" line, so the note adds it again.
+        self.ready()
+        data = self.read(); data["tasks"][0].setdefault("labels", []).append("needs-human"); self.write(data)
+        self.admit()
+        task = self.read()["tasks"][0]
+        self.assertNotIn("needs-human", task["labels"])
+        self.invoke("research-note", reason="needs_information")
+        task = self.read()["tasks"][0]
+        self.assertEqual(task["labels"].count("needs-human"), 1)
+        self.assertEqual(task["coordination"]["research"]["prelaunch_note"], {"reason": "needs_information", "label_added": True})
+        history = [h["text"] for h in task["history"] if h["text"].startswith("labels:")]
+        self.assertEqual(history[-2:], ["labels: none", "labels: needs-human"])
+
     def test_awaiting_approval_holds_for_the_owner_without_a_comment(self):
         self.ready(); self.admit(); self.invoke("research-note", reason="awaiting_approval")
         task = self.read()["tasks"][0]
