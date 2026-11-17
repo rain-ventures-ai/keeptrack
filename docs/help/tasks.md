@@ -28,7 +28,7 @@ alerts, if you enabled them, continue to check the board while Flow's metadata p
 Flow draws up to 500 matching cards per page. Use project or label filters, or **Next 500** and **Previous 500**, for larger boards.
 It draws up to 1,500 arrows. Boards with more than 10,000 dependency links show card summaries instead; open a card
 to inspect its complete dependency list.
-Activity reads this board's JSON file and, for split boards, its cards folder. A board at the repository root uses its JSON file only.
+Activity reads this board's JSON file and, for split boards, its cards folder. A single-file board at the repository root uses its JSON file only; a split board there also includes `cards/`.
 Activity refreshes once a minute. GitHub commit subjects and links describe the complete commit, including any other files it changed.
 The runner strip is repository-wide, from `automation/local-runner.json`. Boards in the same GitHub repository share repository access;
 the board selector provides a view of that data rather than a separate permission boundary.

@@ -1227,7 +1227,7 @@ if (typeof window !== 'undefined') (() => {
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
       setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
       if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
-    } catch (e) { if (stale()) return false; if (e?.limited) { setStatus('GitHub rate limit · showing the last loaded board', 'err'); return false; } resetFlowMeta(true); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+    } catch (e) { if (stale()) return false; if (e?.limited) { setStatus('GitHub rate limit · showing the last loaded board', 'err'); return false; } if ([401, 403, 404].includes(e?.status)) resetFlowMeta(true); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error · showing the last loaded board', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
@@ -2640,13 +2640,24 @@ if (typeof window !== 'undefined') (() => {
   const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta(clearBoard = false) {
     flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
-    if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; flowCardCache = new Map(); if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); } }
+    if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; flowCardCache = new Map(); if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); discardFlowCard(); } }
     if (view === 'flow') { $('board').querySelector('.flow-status')?.replaceWith(flowStatus({})); $('board').querySelector('.flow-feed')?.replaceWith(flowFeed({})); }
   }
-  function syncFlowLive() {
-    if (view !== 'flow' || document.hidden || (!HOSTED && !DEMO && (flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token))) return;
+  function discardFlowCard() {
+    if (!$('dlgCard').open) return;
+    // A forced close must not auto-save old edits through the newly selected connection.
+    editing = null; commentsFor = null; editingDesc = false; activeDraft = { title: false, details: false };
+    $('dlgCard').close();
+    fillDrawer({ id: '', num: 0, title: '', details: '', column: '', priority: 'medium', due: '', goal: '', client: '', project: '', assignees: [], labels: [], todos: [], links: [], contacts: [], comments: [], history: [], after: [], related: [], claim: null }, true);
+    $('dlgCard').querySelectorAll('input, textarea').forEach(n => { n.value = ''; });
+    ['cTodos', 'cmStream', 'cmCount', 'dSaved', 'dCreated'].forEach(id => { $(id).textContent = ''; });
+    $('cLastRun').removeAttribute('title');
+  }
+  function syncFlowLive(force = false) {
+    if (view !== 'flow' || (document.hidden && !force) || (!HOSTED && !DEMO && (flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token))) return;
     const meta = flowCurrentMeta();
     for (const [selector, fresh] of [['.flow-status', flowStatus(meta)], ['.flow-feed', flowFeed(meta)]]) { const old = $('board').querySelector(selector); if (old && !old.isEqualNode(fresh)) old.replaceWith(fresh); }
+    if (document.hidden) return;
     const byId = flowBoardGraph().byId;
     $('board').querySelectorAll('.flow-card').forEach(node => {
       const t = byId.get(node.dataset.card), label = node.querySelector('.flow-run'); if (!t?.claim || !label) return;
@@ -2662,19 +2673,22 @@ if (typeof window !== 'undefined') (() => {
     const c = { ...cfg() }, key = flowKey(c);
     if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
     if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
-    const ticket = flowRequest = { key, deniedCommits: false };
+    const ticket = flowRequest = { key, deniedCommits: false, failed: false, attempted: false };
     flowMeta = { ...flowMeta, checked: Date.now() };
     const current = () => flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token;
     const publish = patch => { if (current()) { flowMeta = { ...flowMeta, ...patch }; syncFlowLive(); } };
     const failed = (name, error, path) => {
       if (!current()) return;
+      ticket.failed = true;
       const next = { ...flowMeta, [name + 'Error']: 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
       if (name === 'commits') { next.commitErrors = new Map(flowMeta.commitErrors || []); next.commitErrors.set(path, true); }
+      next.rateFailures = (flowMeta.rateFailures || 0) + 1;
+      next.cooldownUntil = Math.max(next.cooldownUntil || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next.rateFailures - 1)));
       if ([401, 403, 404].includes(error.status) && !error.limited) {
         delete next[name]; delete next[name + 'Tag'];
         if (name === 'commits') { next.commitParts = new Map(); ticket.deniedCommits = true; }
       }
-      flowMeta = next; syncFlowLive();
+      flowMeta = next; syncFlowLive([401, 403, 404].includes(error.status) && !error.limited);
     };
     const read = async (endpoint, tag) => {
       // Each endpoint owns its deadline; a stalled optional resource cannot pin the other panel.
@@ -2684,14 +2698,15 @@ if (typeof window !== 'undefined') (() => {
         const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
         if (r.status === 304) return { unchanged: true };
         if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); throw e; }
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
         let data = await r.json();
         if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
         return { data, tag: r.headers.get('ETag') };
       } finally { clearTimeout(timer); }
     };
     const runnerRead = async () => {
-      if (flowMeta.runnerMissingUntil > Date.now()) return;
+      if (flowMeta.runnerMissingUntil > Date.now() || flowMeta.cooldownUntil > Date.now()) return;
+      ticket.attempted = true;
       try {
         const r = await read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, flowMeta.runnerTag);
         if (r.unchanged) publish({ runnerError: '' });
@@ -2703,9 +2718,10 @@ if (typeof window !== 'undefined') (() => {
     // Never query the parent directory: it can contain other boards.
     const paths = [c.path];
     if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
-    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute;
+    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute && !(flowMeta.cooldownUntil > Date.now());
     if (commitDue) publish({ commitsMinute: minute, commitsPending: paths.length });
     const commitReads = !commitDue ? [] : paths.map(async path => {
+      ticket.attempted = true;
       try {
         const old = flowMeta.commitParts?.get(path);
         const r = await read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(path)}&per_page=20`, old?.tag);
@@ -2720,7 +2736,7 @@ if (typeof window !== 'undefined') (() => {
       finally { if (current()) publish({ commitsPending: Math.max(0, (flowMeta.commitsPending || 0) - 1) }); }
     });
     await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
-    if (current()) flowRequest = null;
+    if (current()) { if (ticket.attempted && !ticket.failed) flowMeta = { ...flowMeta, rateFailures: 0 }; flowRequest = null; }
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowComponents(tasks) {
@@ -6933,7 +6949,7 @@ if (typeof window !== 'undefined') (() => {
   ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fGoal', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
-  document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && view === 'flow') syncFlowLive(); if (canPoll()) load(true); });  // reconcile cached data before the board request
   setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) { if (view === 'flow') syncFlowLive(); else render(); } }, 60000); // refresh "ago" and stale flags
 
 

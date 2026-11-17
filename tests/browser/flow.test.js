@@ -22,7 +22,7 @@ tasks.find(t => t.num === 10).after = ['t_10'];
 tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
 tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false, boardLimited = false;
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
@@ -40,7 +40,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (req.method() !== 'GET') counts.writes++;
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardNetwork) return route.abort('failed'); if (boardLost) return json({}, 401); if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
@@ -50,7 +50,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsLimited) return json({}, 429, { 'retry-after': '120' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -88,7 +88,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.equal(counts.runner, initial.runner, 'absent runner is not retried on each poll');
     await page.evaluate(() => { window.unchangedGraph = document.querySelector('.flow-canvas'); window.laneCard = document.querySelector('[data-card="t_11"]'); });
     await page.clock.fastForward(31 * 60000); // An unchanged board can cross the stale threshold.
-    await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Maintenance'));
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Maintenance'));
     assert.match(await page.locator('[data-card="t_1"]').innerText(), /STALE/);
     assert.ok(await page.evaluate(() => window.unchangedGraph === document.querySelector('.flow-canvas')), 'time-only refresh preserves graph');
     raw.tasks[0].claim.status = 'blocked'; revision++;
@@ -108,7 +108,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.evaluate(() => { window.flowGraph = document.querySelector('.flow-canvas'); });
     const refreshed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 304);
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
-    await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Maintenance'));
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Maintenance'));
     await refreshed; assert.ok(counts.board > hidden.board); assert.ok(conditional > 0);
     // An unchanged board and metadata refresh keeps the exact same graph DOM.
     assert.ok(await page.evaluate(() => window.flowGraph === document.querySelector('.flow-canvas')));
@@ -129,14 +129,26 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
     const hiddenResponseCount = counts.runner;
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
-    await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Updated while hidden'));
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Updated while hidden'));
     assert.equal(counts.runner, hiddenResponseCount);
     boardLimited = true;
     await page.evaluate(() => { window.rateCanvas = document.querySelector('.flow-canvas'); });
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => document.querySelector('#status').textContent.includes('rate limit'));
     assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'rate limiting preserves the loaded graph');
-    boardLimited = false; await page.clock.fastForward(31000);
+    boardLimited = false; boardNetwork = true;
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Network or parse error'));
+    assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'transient network failures preserve the loaded graph');
+    boardNetwork = false; await page.clock.fastForward(31000);
+    commitsLimited = true;
+    await page.clock.fastForward(61000);
+    await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
+    const limitedCount = counts.commits;
+    await page.clock.fastForward(61000);
+    assert.equal(counts.commits, limitedCount, 'Retry-After prevents metadata retries for 120 seconds');
+    commitsLimited = false; await page.clock.fastForward(91000);
+    await page.waitForFunction(() => !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     // The Done button overrides the existing Hide Done switch.
     await page.getByRole('button', { name: 'Collapse Done', exact: true }).click();
     await page.selectOption('#fStatus', '__open', { force: true });
@@ -156,6 +168,13 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     }
     await page.locator('[data-card="t_2"]').focus(); await page.keyboard.press('Enter'); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(counts.writes, 0); assert.deepEqual(errors, []);
+    boardLost = true;
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(() => !document.querySelector('#dlgCard').open);
+    assert.equal(await page.locator('.flow-card').count(), 0);
+    assert.equal(await page.locator('#cTitle').inputValue(), '', 'lost access scrubs the open drawer');
+    assert.equal(counts.writes, 0, 'forced drawer close does not save');
+    boardLost = false;
     // Start the remaining projection tests on an explicit view route, independent of drawer history.
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`);
     await page.locator('.flow-event').first().waitFor();
@@ -180,7 +199,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
     assert.equal(await page.locator('.flow-event').count(), 0);
     assert.equal(await page.locator('.flow-card').count(), 0, 'old board cards clear while the new branch load is pending');
-    releaseBranch(); await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Could not refresh'));
+    releaseBranch(); await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     await page.locator('#btnSettings').click(); await page.locator('#tabConn').click();
     if (!(await page.locator('#bEditFold').evaluate(n => n.open))) await page.locator('#bEditFold > summary').click();
     await page.locator('#sBranch').fill('main'); await page.locator('#sSave').click(); await page.locator('.flow-event').first().waitFor();
@@ -205,7 +224,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.locator('#btnSettings').click(); await page.locator('#tabConn').click();
     if (!(await page.locator('#bEditFold').evaluate(n => n.open))) await page.locator('#bEditFold > summary').click();
     await page.locator('#sToken').fill('denied'); await page.locator('#sSave').click();
-    await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Could not refresh'));
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('Maintenance'));
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('Updated while hidden'));
     assert.equal(await page.locator('.flow-event').count(), 0);
