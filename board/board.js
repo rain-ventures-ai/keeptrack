@@ -2667,17 +2667,23 @@ if (typeof window !== 'undefined') (() => {
       else { next[name + 'Error'] = ''; if (!r.value.unchanged) { next[name] = r.value.data; next[name + 'Tag'] = r.value.tag; if (!i) next.runnerMissingUntil = r.value.data === null ? Date.now() + 300000 : 0; } }
     });
     flowMeta = next; flowRequest = null;
-    if (view === 'flow' && !document.hidden && ['runner', 'commits', 'runnerError', 'commitsError'].some(k => JSON.stringify(next[k]) !== JSON.stringify(previous[k]))) {
-      // Optional metadata never rebuilds the graph or disturbs its focus and scroll.
-      $('board').querySelector('.flow-status')?.replaceWith(flowStatus(next));
-      $('board').querySelector('.flow-feed')?.replaceWith(flowFeed(next));
+    if (view === 'flow' && !document.hidden) {
+      // Ages can change on a 304 too. Compare the small metadata elements, never rebuild the graph.
+      for (const [selector, fresh] of [['.flow-status', flowStatus(next)], ['.flow-feed', flowFeed(next)]]) { const old = $('board').querySelector(selector); if (old && !old.isEqualNode(fresh)) old.replaceWith(fresh); }
     }
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowComponents(tasks) {
     const byId = new Map(tasks.map(t => [t.id, t])), edges = [], next = new Map(tasks.map(t => [t.id, []])), linkedIds = new Set();
     const reverse = new Map(tasks.map(t => [t.id, []]));
-    tasks.forEach(t => { const ids = afterIds(t); if (ids.length) { linkedIds.add(t.id); ids.forEach(id => linkedIds.add(id)); } ids.forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); } }); });
+    // Bound edge allocation independently of the visible-card limit. Dense boards use summaries.
+    let budget = 10000;
+    for (const t of tasks) {
+      const ids = afterIds(t); budget -= ids.length;
+      if (budget < 0) return { byId, edges: [], groups: [], groupOf: new Map(), cycles: new Set(), linkedIds, limited: true };
+      if (ids.length) { linkedIds.add(t.id); ids.forEach(id => linkedIds.add(id)); }
+      ids.forEach(id => { if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); } });
+    }
     const visited = new Set(), order = [], groups = [], groupOf = new Map();
     // Iterative Kosaraju traversal: deep chains use heap storage rather than the browser call stack.
     tasks.forEach(t => {
@@ -2716,8 +2722,8 @@ if (typeof window !== 'undefined') (() => {
     node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
     if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
     else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
-    const deps = afterLinks(t, flowBoardGraph().byId);
-    if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', '); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
+    const ids = afterIds(t), deps = afterLinks({ ...t, after: ids.slice(0, 20) }, flowBoardGraph().byId);
+    if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (ids.length > deps.length ? ` · ${ids.length - deps.length} more (open card)` : ''); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
     if (position && position.cycle) node.append(el('span', 'flow-cycle', 'Dependency cycle'));
     if (waitingOf(t)) node.append(el('span', 'flow-cycle', 'Waiting'));
     node.onclick = () => openCard(t.id); return node;
@@ -2743,33 +2749,39 @@ if (typeof window !== 'undefined') (() => {
   function renderFlow() {
     const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading'), meta = flowCurrentMeta();
     top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
-    const toggle = ui.button({ label: flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); top.append(toggle); shell.append(top, flowStatus(meta));
+    const explicitDone = $('fStatus').value === doneColId();
+    const toggle = ui.button({ label: explicitDone ? 'Done selected' : flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); toggle.disabled = explicitDone; if (explicitDone) toggle.title = 'Clear the status filter to collapse Done'; top.append(toggle); shell.append(top, flowStatus(meta));
     const content = el('div', 'flow-content'), main = el('div', 'flow-main'), status = $('fStatus').value;
     let matching;
-    try { if (flowDone && status === '__open') $('fStatus').value = ''; matching = state.tasks.filter(t => filtered(t) && (flowDone || !isDoneTask(t))); } finally { $('fStatus').value = status; }
+    try { if (flowDone && status === '__open') $('fStatus').value = ''; matching = state.tasks.filter(t => filtered(t) && (flowDone || explicitDone || !isDoneTask(t))); } finally { $('fStatus').value = status; }
     const all = matching.slice(0, flowLimit);
     if (matching.length > all.length) { const limit = el('div', 'flow-limit', `Showing ${all.length} of ${matching.length} matching cards. Filter by project or label, or show more.`); limit.append(ui.button({ label: 'Show 500 more', size: 'sm', onClick: () => { flowLimit += 500; render(); } })); main.append(limit); }
-    const linkedIds = flowBoardGraph().linkedIds;
-    const linked = all.filter(t => linkedIds.has(t.id)), free = all.filter(t => !linkedIds.has(t.id));
-    main.append(el('h3', '', `Dependency chains · ${linked.length}`));
+    const graph = flowBoardGraph(), linkedIds = graph.linkedIds;
+    const linked = graph.limited ? [] : all.filter(t => linkedIds.has(t.id)), free = graph.limited ? all : all.filter(t => !linkedIds.has(t.id));
+    if (graph.limited) main.append(el('p', 'hint', 'More than 10,000 dependency links: showing card summaries to keep this view responsive. Open a card to inspect all its dependencies.'));
+    main.append(el('h3', '', graph.limited ? 'Dependency summaries' : `Dependency chains · ${linked.length}`));
     if (linked.length) {
       const graphScroll = el('div', 'flow-graph-scroll'), canvas = el('div', 'flow-canvas'), layout = flowLayout(linked);
       graphScroll.tabIndex = 0; graphScroll.setAttribute('aria-label', 'Dependency graph, scroll to explore');
-      canvas.style.width = layout.width + 'px'; canvas.style.height = layout.height + 'px';
-      const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('width', layout.width); svg.setAttribute('height', layout.height); svg.setAttribute('aria-hidden', 'true');
+      const arrows = layout.edges.slice(0, 1500), skips = arrows.filter(([a, b]) => layout.positions.get(b).x - layout.positions.get(a).x > 312).length, height = layout.height + skips * 12 + 24;
+      canvas.style.width = layout.width + 'px'; canvas.style.height = height + 'px';
+      const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('width', layout.width); svg.setAttribute('height', height); svg.setAttribute('aria-hidden', 'true');
       const defs = document.createElementNS(ns, 'defs'), marker = document.createElementNS(ns, 'marker'); marker.id = 'flow-arrow'; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto');
       const arrow = document.createElementNS(ns, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); marker.append(arrow); defs.append(marker); svg.append(defs);
-      layout.edges.forEach(([a, b]) => {
+      let skip = 0;
+      arrows.forEach(([a, b]) => {
         const x = layout.positions.get(a), y = layout.positions.get(b), path = document.createElementNS(ns, 'path'), sx = x.x + 264, sy = x.y + (a === b ? 40 : 72), tx = x.x === y.x ? y.x + 264 : y.x, ty = y.y + (a === b ? 104 : 72), bend = Math.max(24, (tx - sx) / 2);
         // Same-rank cycles and self-links enter from the right-hand gutter, outside the boxes.
-        path.setAttribute('d', x.x === y.x ? `M${sx},${sy} C${sx + 24},${sy} ${tx + 24},${ty} ${tx},${ty}` : `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
+        const routeY = layout.height + (tx - sx > 312 ? ++skip : 0) * 12;
+        path.setAttribute('d', tx - sx > 312 ? `M${sx},${sy} H${sx + 12} V${routeY} H${tx - 12} V${ty} H${tx}` : x.x === y.x ? `M${sx},${sy} C${sx + 24},${sy} ${tx + 24},${ty} ${tx},${ty}` : `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
         path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (x.cycle && y.cycle) path.classList.add('flow-edge-cycle'); svg.append(path);
       });
       const full = flowBoardGraph(); // Cached cycle membership survives project/label/Done filters.
       canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, { ...layout.positions.get(t.id), cycle: full.cycles.has(t.id) }))); graphScroll.append(canvas); main.append(graphScroll);
       main.append(el('p', 'hint', 'Dependencies outside this view remain listed on each card. Cycles are marked; they cannot become ready.'));
-    } else main.append(el('p', 'hint', 'No dependency chains match these filters.'));
-    main.append(el('h3', '', `No dependency links · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
+      if (layout.edges.length > arrows.length) main.append(el('p', 'hint', `Showing ${arrows.length} of ${layout.edges.length} arrows. Open a card for its complete dependency list.`));
+    } else if (!graph.limited) main.append(el('p', 'hint', 'No dependency chains match these filters.'));
+    main.append(el('h3', '', `${graph.limited ? 'Cards by column' : 'No dependency links'} · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
     const lanes = el('div', 'flow-lanes');
     state.columns.forEach(col => { const cards = free.filter(t => t.column === col.id); if (!cards.length) return; const lane = el('section', 'flow-lane'); lane.append(el('h4', '', `${col.name} · ${cards.length}`)); cards.forEach(t => lane.append(flowCard(t))); lanes.append(lane); }); main.append(lanes);
     if (!all.length) main.append(el('p', 'empty', 'No cards match these filters.'));

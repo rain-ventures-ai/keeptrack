@@ -17,6 +17,8 @@ const server = http.createServer((req, res) => {
 const now = new Date().toISOString();
 const card = (n, extra = {}) => ({ id: 't_' + n, num: n, title: 'Task ' + n, column: 'todo', assignees: [], labels: [], todos: [], comments: [], history: [], links: [], contacts: [], created: now, updated: now, ...extra });
 const tasks = [card(1, { title: 'Prepare a complete launch plan with a deliberately long title that wraps', claim: { agent: 'codex', status: 'running', heartbeat_at: now, claimed_at: now } }), card(2, { after: ['t_1'], project: 'p_blue', labels: ['launch'] }), card(3, { after: ['t_2'], claim: { agent: 'claude', status: 'blocked', heartbeat_at: now } }), card(4, { after: ['t_2'], claim: { agent: 'codex', status: 'running', heartbeat_at: '2020-01-01T00:00:00Z' } }), card(5, { column: 'done' }), card(6, { after: ['t_5'] }), card(7, { after: ['t_missing'] }), card(8, { after: ['t_9'] }), card(9, { after: ['t_8'] }), ...Array.from({ length: 105 }, (_, i) => card(i + 10))];
+tasks.find(t => t.num === 3).after.push('t_1');
+tasks.find(t => t.num === 10).after = ['t_10'];
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
 let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
@@ -50,10 +52,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
     await page.locator('.flow-event').first().waitFor();
     assert.equal(await page.locator('.flow-card').count(), 113);
-    assert.equal(await page.locator('.flow-edge').count(), 5);
+    assert.equal(await page.locator('.flow-edge').count(), 7);
+    assert.equal(await page.locator('.flow-edge').evaluateAll(nodes => nodes.filter(n => n.getAttribute('d').includes(' V')).length), 1, 'skip-rank arrow uses an outside gutter');
     const routes = await page.locator('.flow-edge-cycle').evaluateAll(nodes => nodes.map(n => n.getAttribute('d').match(/[\d.]+/g).map(Number)));
     routes.forEach(n => { assert.equal(n[0], n[6]); assert.ok(n[2] > n[0] && n[4] > n[6], 'cycle arrows use a right-hand gutter'); });
-    assert.equal(await page.locator('.flow-cycle').count(), 2);
+    assert.equal(await page.locator('.flow-cycle').count(), 3);
     assert.match(await page.locator('.flow-status').innerText(), /No runner status yet/);
     assert.match(await page.locator('[data-card="t_4"]').innerText(), /STALE/);
     assert.match(await page.locator('[data-card="t_3"]').innerText(), /BLOCKED/);
@@ -83,7 +86,8 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.match(await page.locator('.flow-status').innerText(), /codex sign-in: fails/);
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('DO NOT RENDER'));
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
-    const hidden = { ...counts }; await page.clock.fastForward(31000);
+    const oldAge = await page.locator('.flow-event .hint').first().textContent();
+    const hidden = { ...counts }; await page.clock.fastForward(61000);
     assert.deepEqual(counts, hidden);
     await page.evaluate(() => { window.flowGraph = document.querySelector('.flow-canvas'); });
     const refreshed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 304);
@@ -92,6 +96,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await refreshed; assert.ok(counts.board > hidden.board); assert.ok(conditional > 0);
     // An unchanged board and metadata refresh keeps the exact same graph DOM.
     assert.ok(await page.evaluate(() => window.flowGraph === document.querySelector('.flow-canvas')));
+    assert.notEqual(await page.locator('.flow-event .hint').first().textContent(), oldAge);
     // The Done button overrides the existing Hide Done switch.
     await page.getByRole('button', { name: 'Collapse Done', exact: true }).click();
     await page.selectOption('#fStatus', '__open', { force: true });
@@ -112,6 +117,10 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.locator('[data-card="t_2"]').focus(); await page.keyboard.press('Enter'); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(counts.writes, 0); assert.deepEqual(errors, []);
     await page.locator('#cClose').click();
+    await page.selectOption('#fStatus', 'done', { force: true });
+    assert.equal(await page.locator('[data-card="t_5"]').count(), 1);
+    assert.equal(await page.getByRole('button', { name: 'Done selected' }).isDisabled(), true);
+    await page.selectOption('#fStatus', '__open', { force: true });
     // Filtering one side of a cycle does not erase the warning.
     Object.assign(raw.tasks.find(t => t.num === 8), { project: 'p_blue', title: 'Blue launch cycle' }); revision++;
     await page.clock.fastForward(31000);
@@ -151,11 +160,16 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     // Stress a chain far beyond a recursive traversal's normal stack depth.
     raw.tasks = Array.from({ length: 12000 }, (_, n) => card(n + 1, { after: n ? ['t_' + n] : [] })); revision++;
     await page.evaluate(() => localStorage.setItem('kb_token', 'test'));
-    await page.reload(); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached', timeout: 60000 });
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached', timeout: 60000 });
     assert.equal(await page.locator('.flow-card').count(), 500);
     assert.match(await page.locator('.flow-limit').innerText(), /Showing 500 of 12000/);
     await page.getByRole('button', { name: 'Show 500 more', exact: true }).click();
     assert.equal(await page.locator('.flow-card').count(), 1000);
+    // Dense graphs must not allocate a quadratic SVG tree.
+    raw.tasks = Array.from({ length: 500 }, (_, n) => card(n + 1, { after: Array.from({ length: n }, (_, i) => 't_' + (i + 1)) })); revision++;
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`); await page.locator('[data-card="t_500"]').waitFor({ state: 'attached' });
+    assert.equal(await page.locator('.flow-edge').count(), 0);
+    assert.match(await page.locator('.flow-main').innerText(), /More than 10,000 dependency links/);
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
