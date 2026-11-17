@@ -1685,7 +1685,7 @@ if (typeof window !== 'undefined') (() => {
     const P = byId(pre), who = cfg().me || 'someone';
     post.tasks.forEach(t => {
       const p = P.get(t.id), add = text => { t.history.push({ at: nowIso(), by: who, text }); if (t.history.length > 200) t.history.splice(0, t.history.length - 200); };
-      if (!p) { add('created'); return; }
+      if (!p) { add('created'); if ((t.labels || []).length) add('labels: ' + t.labels.join(', ')); return; }   // a card made with labels: same line as keeptrack.py hist_labels
       if (p.column !== t.column) add(`moved ${colName(p.column)} → ${colName(t.column)}`);
       if (p.value !== t.value) add('value: ' + (t.value ?? 'not scored'));
       if (p.effort !== t.effort) add('effort: ' + (t.effort || 'not estimated'));

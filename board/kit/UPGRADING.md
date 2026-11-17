@@ -32,10 +32,20 @@ Every change to a card's label set now leaves a `labels:` history line carrying 
 
 - New writers of the line: `research-lock` (adds `researching`), `label-set --rename` and `label-rm --force` (one line per
   affected card, just before the existing "label X renamed to Y" / "label X removed" line), `merge-card` (only when the target card
-  gains labels) and `add --label` (a card created with labels). `task-set --label/--unlabel` and the web page already wrote it.
+  gains labels) and `add --label` (a card created with labels). Review Inbox accept writes it for a new card with labels and for an
+  update that changes labels (not for one that leaves them as they were); `proposal-merge` writes it when `--fields` changed labels;
+  an inbound card created with labels, `todo-move` (the new card copies the parent's labels), `import` and the kit-upgrade card
+  write it too. The web page now writes it for any new card created with labels, in the same format (card split from a to-do,
+  board and relay cards, a card accepted from the Review Inbox). `task-set --label/--unlabel`, and the web page's edits and
+  board-wide rename/delete, already wrote it.
+- Each board-wide rename or delete now leaves two history lines per affected card (`labels: ...` and the existing "label X ..."
+  line), from the CLI and from the web page.
+- Relay note: a board-wide `label-rm needs-human --force` or `label-set --rename` now writes a `labels:` line per card, which relay's
+  owner bridge (`_owner_reset`) counts as an owner dispatch-count reset on those cards.
 - Rook research writes the full list when it adds `needs-human`, not the literal `labels: needs-human`; the two agree when
   that is the card's only label.
-- Not yet covered: proposal merge, inbound create and web-page board-wide rename/delete or create.
+- Not covered: the hosted `add` path (`keeptrack.py add` on a hosted board) posts a create-card command and leaves the card's
+  history to the server; this release does not claim a `labels:` line there.
 
 ### v131 (schema 4)
 

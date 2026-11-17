@@ -4394,6 +4394,8 @@ def cmd_todo_move(a):
             o["rank"] = append_rank(ranks)
         append_priority_rank(data, o)
         hist(o, f"created: split from {t['id']}, its to-do {n}")
+        if o["labels"]:
+            hist_labels(o)
         data["tasks"].append(o); assign_nums(data); new = o.get("num")
         link_follow_up(t, o)
         d["text"] = f"Moved to #{new} ({o['id']}): {text}"
@@ -6112,6 +6114,8 @@ def cmd_kit_check(a):
             if data.get("layout") == "split":
                 t["rank"] = append_rank(ranks)
             hist(t, "created by kit-check")
+            if t["labels"]:
+                hist_labels(t)
             data["tasks"].append(t); assign_nums(data); tid = t["id"]
             _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} for @{owner or '?'}: {title}"))   # the saved #number
         mutate(fn, f"Add task: Upgrade board tools to kit v{want}")
@@ -10306,7 +10310,10 @@ def apply_staging(data, st, label):
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
             x["rank"] = append_rank(ranks)
         append_priority_rank(data, x)
-        hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
+        hist(x, f"imported ({_s(t.get('evidence')) or label})", by)
+        if x["labels"]:
+            hist_labels(x, by)
+        tasks.append(x); add_client(client)
         say(f"+ task     {clean(title, 120)}{' [' + clean(client, 80) + ']' if client else ''}"); out["added"] += 1
     return out
 
@@ -11379,6 +11386,8 @@ def inbound_card(data, item, plan):
     task["rank"] = append_rank(ranks)
     append_priority_rank(data, task)
     hist(task, mark)
+    if task["labels"]:
+        hist_labels(task)
     data.setdefault("tasks", []).append(task); assign_nums(data)
     marks = mark_similar(data, task)
     _MUT["after"].append(lambda d: print(f"  added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid), tid)))
@@ -12050,6 +12059,8 @@ def _new_task(data, proposal, change):
     if "priority_rank" not in task:
         append_priority_rank(data, task)
     hist(task, f"created from proposal {proposal['id']}")
+    if task["labels"]:
+        hist_labels(task)
     data.setdefault("tasks", []).append(task); assign_nums(data)
     return task, False
 
@@ -12110,6 +12121,7 @@ def _apply_touch(person, proposal, change):
 
 def _apply_update(data, record, proposal, change):
     was_done = record.get("column") == "done"
+    labels_before = list(record.get("labels") or [])
     for key, value in change.items():
         if key in ("comments", "todos", "links") and isinstance(value, list):
             _append_unique(record, key, value)
@@ -12131,6 +12143,8 @@ def _apply_update(data, record, proposal, change):
     elif record.get("id", "").startswith("t_") and was_done and record.get("column") != "done":
         drop_leftover_wait(record, "reopening", data)
     record["updated"] = now(); record["updatedBy"] = who_am_i()
+    if list(record.get("labels") or []) != labels_before:
+        hist_labels(record)
     hist(record, f"accepted proposal {proposal['id']}")
 
 
@@ -12266,6 +12280,7 @@ def cmd_proposal_merge(a):
         record = _target_record(data, target); before = copy.deepcopy(record)
         selected = set(x.strip() for x in (a.fields or "").split(",") if x.strip())
         was_done = record.get("column") == "done"
+        labels_before = list(record.get("labels") or [])
         for key, value in proposal["change"].items():
             if key in ("comments", "todos", "links") and isinstance(value, list): _append_unique(record, key, value)
             elif key == "owner" and key in selected and record.get("id", "").startswith("t_"):
@@ -12282,7 +12297,10 @@ def cmd_proposal_merge(a):
             elif key in selected: record[key] = copy.deepcopy(value)
         if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
             drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update
-        record["updated"] = now(); record["updatedBy"] = who_am_i(); hist(record, f"merged from proposal {proposal['id']}")
+        record["updated"] = now(); record["updatedBy"] = who_am_i()
+        if list(record.get("labels") or []) != labels_before:
+            hist_labels(record)
+        hist(record, f"merged from proposal {proposal['id']}")
         _decide(proposal, "merge", record, {k: proposal["change"][k] for k in selected if k in proposal["change"]},
                 {"before": before, "after": copy.deepcopy(record), "created": False})
         print(f"merged {proposal['id']} -> {record['id']}")
