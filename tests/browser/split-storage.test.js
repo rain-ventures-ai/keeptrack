@@ -267,7 +267,7 @@ let base;
     assert(noToken.calls.some(x => x.path === '' && x.auth === 'Bearer reusable-token'), 'the saved candidate must be tested against the target repo'); await reuse.close();
 
     const blankApi = new Github(true), blank = await browser.newPage(); blank.on('pageerror', e => console.error('page error:', e.message));
-    await blank.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); });
+    await blank.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_signin_method:acme/board', 'pat'); });   // the page ships Sign in with GitHub; this case tests the pasted-token form
     await blank.route('https://api.test/**', r => blankApi.route(r)); await blank.goto(base + '/board/index.html'); await blank.locator('#dlgSettings').waitFor();
     assert.equal(await blank.locator('#sTokenState').textContent(), 'No token saved'); assert.equal(await blank.locator('#sTokenBtns').isHidden(), true);
     await blank.locator('#sToken').evaluate(el => { el.value = 'password-manager-value'; }); await blank.waitForTimeout(1300);

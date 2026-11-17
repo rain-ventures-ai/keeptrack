@@ -80,6 +80,9 @@ async function open(browser, { settings = {}, meta = null, token = 'test', seed 
   await page.route(/\/board\/index\.html(\?.*)?$/, async r => {
     const headers = { ...r.request().headers() }; delete headers['if-none-match']; delete headers['if-modified-since'];   // a reload must get the whole page, not a 304
     const resp = await r.fetch({ headers }); let body = await resp.text();
+    // index.html ships the owner's own meta; every case starts from a page without it, then adds its own (or none)
+    const shipped = /^<meta name="kb-github-app-signin"[^\n]*\n/m;
+    assert.ok(shipped.test(body), 'index.html carries the shipped sign-in meta'); body = body.replace(shipped, '');
     if (meta) body = body.replace('<meta charset="UTF-8">', `<meta charset="UTF-8">\n<meta name="kb-github-app-signin" content='${JSON.stringify(meta)}'>`);
     await r.fulfill({ response: resp, body });
   });

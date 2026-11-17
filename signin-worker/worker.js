@@ -53,9 +53,11 @@ async function readLimited(request, max) {
 async function callGithub(fields, env, fetchImpl) {
   let res, data;
   try {
-    res = await fetchImpl(TOKEN_URL, { method: 'POST', redirect: 'error',
+    // Workers accept only 'follow' or 'manual' here ('error' throws), so redirects are refused by hand: never follow one.
+    res = await fetchImpl(TOKEN_URL, { method: 'POST', redirect: 'manual',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'keeptrack-signin-worker' },
       body: JSON.stringify({ client_id: env.GITHUB_CLIENT_ID, client_secret: env.GITHUB_CLIENT_SECRET, ...fields }) });
+    if (res.status >= 300 && res.status < 400) return { status: 502, body: { error: 'github_error' } };
     data = await res.json();
   } catch { return { status: 502, body: { error: 'github_unreachable' } }; }
   if (!data || typeof data !== 'object') return { status: 502, body: { error: 'github_error' } };

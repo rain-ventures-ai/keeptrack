@@ -200,3 +200,15 @@ test('rate limit: used when the binding is present (keyed by IP), 429 over the l
   await handle(post('/exchange', {}, { origin: 'https://evil.example' }), env, mockGithub(GOOD));
   assert.equal(keys.length, before);
 });
+
+test('the GitHub call uses a redirect mode Workers support, and a redirect is never followed', async () => {
+  // Workers throw on redirect: 'error' (found live, 17 Nov), so every sign-in failed as github_unreachable.
+  const gh = mockGithub(GOOD);
+  await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, gh);
+  assert.ok(['follow', 'manual'].includes(gh.calls[0].init.redirect), 'Workers accept only follow or manual');
+  assert.equal(gh.calls[0].init.redirect, 'manual');
+  const moved = async () => new Response(JSON.stringify(GOOD), { status: 302, headers: { Location: 'https://evil.example/', 'Content-Type': 'application/json' } });
+  const res = await handle(post('/exchange', { code: 'abc123', redirect_uri: REDIRECT, code_verifier: VERIFIER }), ENV, moved);
+  assert.equal(res.status, 502);
+  assert.deepEqual(await res.json(), { error: 'github_error' });
+});
