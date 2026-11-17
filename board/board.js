@@ -928,6 +928,8 @@ if (typeof window !== 'undefined') (() => {
   const storage = () => HOSTED ? hostedStorage : githubStorage;
   async function gh(...args) { return storage().contents(...args); }
   async function ghApi(...args) { return storage().api(...args); }
+  const githubRateLimited = r => r.status === 429 || (r.status === 403 && (r.headers.get('x-ratelimit-remaining') === '0' || r.headers.has('retry-after')));
+  const githubReadError = (r, message) => Object.assign(new Error(message), { status: r.status, limited: githubRateLimited(r) });
   async function splitSnapshot(...args) { return storage().snapshot(...args); }
   async function save(...args) { return HOSTED ? hostedSave(...args) : storage().commit(...args); }
 
@@ -1044,7 +1046,7 @@ if (typeof window !== 'undefined') (() => {
     const key = `kb_blob:${at.repo}:${item.sha}`;
     let text = await idb.get(key);
     if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while reading a blob.');
-    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`, null, {}, at); if (!r.ok) throw new Error(`GitHub error ${r.status} reading ${item.path}`);
+    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`, null, {}, at); if (!r.ok) throw githubReadError(r, `GitHub error ${r.status} reading ${item.path}`);
       const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || '';
       if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while reading a blob.');
       await idb.set(key, text); }
@@ -1092,15 +1094,15 @@ if (typeof window !== 'undefined') (() => {
     const c = Object.assign({}, cfg()), gen = archGen, ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
     const rr = await ghApi('GET', `/git/ref/heads/${ref}`, null, !force && sameBoard && splitMeta.headEtag ? { etag: splitMeta.headEtag } : {});
     if (rr.status === 304 && sameBoard) return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta };
-    if (!rr.ok) throw new Error(`GitHub error ${rr.status} reading branch`);
+    if (!rr.ok) throw githubReadError(rr, `GitHub error ${rr.status} reading branch`);
     const rd = await rr.json(), head = rd.object.sha, headEtag = rr.headers.get('ETag');
     if (sameBoard && head === splitMeta.head) { splitMeta.headEtag = headEtag || splitMeta.headEtag; return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta }; }
-    const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw new Error(`GitHub error ${cr.status} reading commit`);
+    const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw githubReadError(cr, `GitHub error ${cr.status} reading commit`);
     let tree = (await cr.json()).tree.sha, rootTree = tree;
     const p = c.path, slash = p.lastIndexOf('/'), parts = (slash < 0 ? '' : p.slice(0, slash)).split('/').filter(Boolean);
-    for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board folder`);
+    for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw githubReadError(tr, `GitHub error ${tr.status} reading board folder`);
       tree = ((await tr.json()).tree || []).find(x => x.type === 'tree' && x.path === part)?.sha; if (!tree) throw new Error(`cannot read ${c.path}`); }
-    const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board files`);
+    const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw githubReadError(tr, `GitHub error ${tr.status} reading board files`);
     const td = await tr.json(); if (td.truncated) throw new Error('The board file list was too large for GitHub.');
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
     const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !x.path.startsWith('archive/') && (!old.has(x.path) || old.get(x.path).sha !== x.sha));
@@ -1211,6 +1213,7 @@ if (typeof window !== 'undefined') (() => {
       const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
       if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
+      if (githubRateLimited(res)) { setStatus('GitHub rate limit · showing the last loaded board', 'err'); return false; }
       if (res.status === 404) { resetFlowMeta(true); await diagnose404(); return false; }
       if (res.status === 401 || res.status === 403) { resetFlowMeta(true); lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
@@ -1224,7 +1227,7 @@ if (typeof window !== 'undefined') (() => {
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
       setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
       if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
-    } catch (e) { if (stale()) return false; resetFlowMeta(true); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+    } catch (e) { if (stale()) return false; if (e?.limited) { setStatus('GitHub rate limit · showing the last loaded board', 'err'); return false; } resetFlowMeta(true); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
@@ -2663,10 +2666,11 @@ if (typeof window !== 'undefined') (() => {
     flowMeta = { ...flowMeta, checked: Date.now() };
     const current = () => flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token;
     const publish = patch => { if (current()) { flowMeta = { ...flowMeta, ...patch }; syncFlowLive(); } };
-    const failed = (name, error) => {
+    const failed = (name, error, path) => {
       if (!current()) return;
       const next = { ...flowMeta, [name + 'Error']: 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
-      if ([401, 403, 404].includes(error.status)) {
+      if (name === 'commits') { next.commitErrors = new Map(flowMeta.commitErrors || []); next.commitErrors.set(path, true); }
+      if ([401, 403, 404].includes(error.status) && !error.limited) {
         delete next[name]; delete next[name + 'Tag'];
         if (name === 'commits') { next.commitParts = new Map(); ticket.deniedCommits = true; }
       }
@@ -2680,7 +2684,7 @@ if (typeof window !== 'undefined') (() => {
         const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
         if (r.status === 304) return { unchanged: true };
         if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; throw e; }
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); throw e; }
         let data = await r.json();
         if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
         return { data, tag: r.headers.get('ETag') };
@@ -2699,7 +2703,9 @@ if (typeof window !== 'undefined') (() => {
     // Never query the parent directory: it can contain other boards.
     const paths = [c.path];
     if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
-    const commitReads = paths.map(async path => {
+    const commitDue = Date.now() - (flowMeta.commitsChecked || 0) >= 60000;
+    if (commitDue) publish({ commitsChecked: Date.now(), commitsPending: paths.length });
+    const commitReads = !commitDue ? [] : paths.map(async path => {
       try {
         const old = flowMeta.commitParts?.get(path);
         const r = await read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(path)}&per_page=20`, old?.tag);
@@ -2708,8 +2714,10 @@ if (typeof window !== 'undefined') (() => {
         if (!r.unchanged) parts.set(path, { tag: r.tag, data: Array.isArray(r.data) ? r.data.slice(0, 20) : [] });
         const unique = new Map(); parts.forEach(part => part.data.forEach(commit => { if (commit && typeof commit.sha === 'string') unique.set(commit.sha, commit); }));
         const commits = [...unique.values()].sort((a, b) => Date.parse(b.commit?.committer?.date || b.commit?.author?.date || '') - Date.parse(a.commit?.committer?.date || a.commit?.author?.date || '')).slice(0, 20);
-        publish({ commitParts: parts, commits, commitsError: '' });
-      } catch (e) { failed('commits', e); }
+        const errors = new Map(flowMeta.commitErrors || []); errors.delete(path);
+        publish({ commitParts: parts, commits, commitErrors: errors, commitsError: errors.size ? 'Could not refresh all activity' : '' });
+      } catch (e) { failed('commits', e, path); }
+      finally { if (current()) publish({ commitsPending: Math.max(0, (flowMeta.commitsPending || 0) - 1) }); }
     });
     await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
     if (current()) flowRequest = null;
@@ -2794,7 +2802,7 @@ if (typeof window !== 'undefined') (() => {
     else if (!meta.runner) strip.textContent = meta.runnerError || 'No runner status yet';
     else {
       const r = meta.runner, paused = r.paused === true || r.status === 'paused';
-      strip.append(el('strong', '', paused ? 'Runner paused' : r.status === 'active' || r.paused === false ? 'Runner active' : 'Runner status unknown'));
+      strip.append(el('strong', '', paused ? 'Repository runner paused' : r.status === 'active' || r.paused === false ? 'Repository runner active' : 'Repository runner status unknown'));
       // Contract for automation/local-runner.json: status, paused_by, pause_reason, last_tick,
       // engines_out [{engine, until}], sign_in {engine: boolean}. Unknown fields are never printed.
       [r.paused_by && `by ${shortText(r.paused_by)}`, r.pause_reason && shortText(r.pause_reason), r.last_tick && `Last tick ${ago(r.last_tick) || 'unknown'}`].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
@@ -2866,8 +2874,9 @@ if (typeof window !== 'undefined') (() => {
     const feed = el('aside', 'flow-feed'); feed.append(el('h3', '', 'Recent board activity'));
     if (HOSTED || DEMO || ro === 'demo' || !cfg().token || ro === 'public') { feed.append(el('p', 'hint', 'Commit activity requires a signed-in GitHub board.')); return feed; }
     if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
+    if (meta.commitsPending) feed.append(el('p', 'hint', 'Refreshing activity…'));
     const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
-    if (!commits.length && !meta.commitsError) feed.append(el('p', 'hint', Array.isArray(meta.commits) ? 'No board commits found.' : 'Waiting for activity…'));
+    if (!commits.length && !meta.commitsError && !meta.commitsPending) feed.append(el('p', 'hint', Array.isArray(meta.commits) ? 'No board commits found.' : 'Waiting for activity…'));
     commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
     return feed;
   }

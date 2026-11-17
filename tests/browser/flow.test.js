@@ -22,7 +22,7 @@ tasks.find(t => t.num === 10).after = ['t_10'];
 tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
 tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false;
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false, boardLimited = false;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
@@ -36,11 +36,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     });
     await page.route('https://api.test/**', async route => {
       const req = route.request(), u = new URL(req.url()), p = u.pathname.replace('/repos/acme/board', '');
-      const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag', ...headers }, body: JSON.stringify(data) });
+      const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag, X-RateLimit-Remaining, Retry-After', ...headers }, body: JSON.stringify(data) });
       if (req.method() !== 'GET') counts.writes++;
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
@@ -120,7 +120,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     const heldUpdate = runnerGate = { arrived: runnerArrived, wait: new Promise(resolve => { releaseRunner = resolve; }) };
     commits[0].commit.message = 'Activity arrives independently';
     runnerVersion++; runner.pause_reason = 'Updated while hidden';
-    await page.clock.fastForward(31000); await arrived;
+    await page.clock.fastForward(61000); await arrived;
     await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Activity arrives independently'), null, { timeout: 1000 });
     assert.equal(heldUpdate.request.failure(), null, 'successful activity is visible while runner status is still pending');
     await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
@@ -131,6 +131,12 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
     await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Updated while hidden'));
     assert.equal(counts.runner, hiddenResponseCount);
+    boardLimited = true;
+    await page.evaluate(() => { window.rateCanvas = document.querySelector('.flow-canvas'); });
+    await page.clock.fastForward(31000);
+    await page.waitForFunction(() => document.querySelector('#status').textContent.includes('rate limit'));
+    assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'rate limiting preserves the loaded graph');
+    boardLimited = false; await page.clock.fastForward(31000);
     // The Done button overrides the existing Hide Done switch.
     await page.getByRole('button', { name: 'Collapse Done', exact: true }).click();
     await page.selectOption('#fStatus', '__open', { force: true });
@@ -180,7 +186,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.locator('#sBranch').fill('main'); await page.locator('#sSave').click(); await page.locator('.flow-event').first().waitFor();
     // GitHub can conceal inaccessible repository activity with 404, not just 401/403.
     await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
-    await page.clock.fastForward(31000); // Advance before creating the deliberately pending request.
+    await page.clock.fastForward(61000); // Activity has its own one-minute cadence.
     let releaseDeniedRunner, deniedArrived, deniedReleased;
     const deniedStarted = new Promise(resolve => { deniedArrived = resolve; }), peerReleased = new Promise(resolve => { deniedReleased = resolve; });
     const heldPeer = runnerGate = { arrived: deniedArrived, released: deniedReleased, wait: new Promise(resolve => { releaseDeniedRunner = resolve; }) };
@@ -192,7 +198,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.equal(heldPeer.request.failure(), null, 'the other metadata endpoint is genuinely still pending');
     const deniedPeer = page.waitForResponse(r => r.url().includes('local-runner.json'));
     releaseDeniedRunner(); await peerReleased; await deniedPeer; await page.evaluate(() => Promise.resolve());
-    commitsLost = false; await page.clock.fastForward(31000);
+    commitsLost = false; await page.clock.fastForward(61000);
     await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20);
     // Changing credentials in the real connection form clears metadata from the old token.
     await page.setViewportSize({ width: 1440, height: 1000 });

@@ -29,6 +29,9 @@ Flow draws up to 500 matching cards per page. Use project or label filters, or *
 It draws up to 1,500 arrows. Boards with more than 10,000 dependency links show card summaries instead; open a card
 to inspect its complete dependency list.
 Activity reads this board's JSON file and, for split boards, its cards folder. A board at the repository root uses its JSON file only.
+Activity refreshes once a minute. GitHub commit subjects and links describe the complete commit, including any other files it changed.
+The runner strip is repository-wide, from `automation/local-runner.json`. Boards in the same GitHub repository share repository access;
+the board selector provides a view of that data rather than a separate permission boundary.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
 People, labels and **Client & project** use the full width. The client name opens the company, the project name opens the project, and **Edit** opens the picker. The picker filters projects after you choose a client and keeps long names readable on a phone.
