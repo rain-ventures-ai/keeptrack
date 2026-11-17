@@ -492,12 +492,89 @@ class Probe:
         self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
 
 
+    def no_board_then_back(self, *rm):
+        cursor = self.poll()["cursor"]
+        self.run_git(self.writer, "rm", "-q", "-r", *rm)
+        self.run_git(self.writer, "commit", "-qm", "no board")
+        gone = self.run_git(self.writer, "rev-parse", "HEAD")
+        self.run_git(self.writer, "revert", "--no-edit", "HEAD")
+        back = self.run_git(self.writer, "rev-parse", "HEAD")
+        moved = self.split_card("t_alpha", 1, "Alpha again")
+        self.push()
+        with mock.patch.object(kt, "WATCH_HISTORY_PAGE", 1):   # the page ends on the commit without a board
+            first = self.poll(cursor)
+        self.assertEqual(([("unreplayable", gone)], gone, True),
+                         ([(e["kind"], e["commit"]) for e in first["events"]], decode(first["cursor"])["commit"], first["more"]))
+        second = self.poll(first["cursor"])   # the cursor has no board to read, and the poll still moves on
+        self.assertEqual([("unreplayable", back), ("fields", moved)], [(e["kind"], e["commit"]) for e in second["events"]])
+        self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
+
+    def test_a_cursor_on_a_commit_without_the_board_folder_moves_on(self):
+        self.build()
+        self.no_board_then_back("board")
+
+    def test_a_cursor_on_a_commit_without_tasks_json_moves_on(self):
+        self.build()
+        self.no_board_then_back("board/tasks.json")
+
+
 class ProbeGit(Probe, GitBoard):
     pass
 
 
 class ProbeApi(Probe, GitBoard):
     WRITE = "api"
+
+
+class ApiCost(GitBoard):
+    """The API transport reads a catch-up's compare range once, not once per poll, and each replayed commit once."""
+    WRITE = "api"
+
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+        real = self.fake_gh
+        p = mock.patch.object(kt, "gh", lambda *a, body=None: (self.calls.append(a[0]), real(*a, body=body))[1])
+        p.start(); self.addCleanup(p.stop)
+        p = mock.patch.object(kt, "_API_TREE_MEMO", {}); p.start(); self.addCleanup(p.stop)
+
+    def empty_commits(self, n):
+        """n commits that leave every file as it was, straight into the remote (one git process)."""
+        head, stream = self.head(), []
+        for i in range(n):
+            message = f"empty {i}".encode()
+            stream.append(b"commit refs/heads/main\ncommitter t <t@example.com> %d +0000\ndata %d\n%s\n"
+                          % (1700000000 + i, len(message), message))
+            if i == 0:
+                stream.append(b"from %s\n" % head.encode())
+        subprocess.run(["git", "-C", self.remote, "fast-import", "--quiet"], input=b"".join(stream), check=True, capture_output=True)
+
+    def compares(self):
+        return sum(1 for c in self.calls if "/compare/" in c)
+
+    def test_a_long_catch_up_reads_the_compare_range_once(self):
+        cursor = self.poll()["cursor"]
+        self.empty_commits(1000)
+        self.calls.clear()
+        with mock.patch.object(kt, "WATCH_HISTORY_SCAN", 50):   # 20 polls
+            polls = 0
+            while True:
+                result = self.poll(cursor); cursor = result["cursor"]; polls += 1
+                if not result["more"]:
+                    break
+        self.assertEqual((20, self.head()), (polls, decode(cursor)["commit"]))
+        self.assertLessEqual(self.compares(), 11, f"{self.compares()} compare calls for a 1000-commit catch-up")
+        self.empty_commits(5)   # a newer head: only its new commits are compared
+        self.calls.clear()
+        self.poll(cursor)
+        self.assertEqual(1, self.compares())
+
+    def test_a_replayed_commit_is_read_once(self):
+        cursor = self.poll()["cursor"]
+        sha = self.change(lambda d: self.alpha(d).update(title="Alpha read once " + os.urandom(4).hex()))
+        self.calls.clear()
+        self.assertEqual(["fields"], [e["kind"] for e in self.poll(cursor)["events"]])
+        self.assertEqual(1, sum(1 for c in self.calls if c.endswith("/git/commits/" + sha)))
 
 
 class HistoryFile(unittest.TestCase):

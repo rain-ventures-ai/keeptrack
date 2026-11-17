@@ -831,7 +831,8 @@ def watch_poll_history(kt, args):
     try:
         data = kt.load_board_at(prior["commit"])
         loaded = {prior["commit"]: data}
-    except kt.BoardDecodeError:   # the cursor sits on a corrupt commit already reported: resolve the project at head
+    except (kt.BoardDecodeError, kt.BoardMissingError):   # the cursor sits on a commit without a readable board,
+        # already reported: resolve the project at head
         data, loaded = kt.load_board_at(page["head"]), {}   # a corrupt head stops loudly
     project = kt.find_project(data, args.project)["id"]
     if project != prior["project"]:
@@ -866,11 +867,12 @@ def watch_poll_history(kt, args):
             except Refused as refusal:   # a bound refusal, never a transport failure: report it and move on
                 projected.clear()
                 problem = str(refusal).removeprefix("research: ")
-            except kt.BoardDecodeError:   # a corrupt past commit; a corrupt head still stops loudly
-                if at == page["head"]:
+            except (kt.BoardDecodeError, kt.BoardMissingError) as unreadable:   # a past commit without a readable
+                if at == page["head"]:   # board; at head it still stops loudly
                     raise
                 projected.clear()
-                problem = "a board file at this commit or its first parent is not valid JSON"
+                problem = ("a board file at this commit or its first parent is not valid JSON"
+                           if isinstance(unreadable, kt.BoardDecodeError) else "there is no board at this commit or its first parent")
         if problem:
             # One loud event instead of a watcher stuck on this commit forever; the consumer reconciles the board.
             found = [{"board": board, "kind": "unreplayable", "text": f"cannot replay commit {commit}: {problem}; "

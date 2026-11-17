@@ -117,7 +117,8 @@ that is not valid JSON, or a side branch longer than the 200-commit scan cap,
 gives one `unreplayable` event (`card: null`) naming the commit or merge, and the
 replay moves on: a loud gap, never a silent one. A corrupt board at head still
 stops loudly. One call can load up to the scan cap's worth of past boards (200);
-on the API transport each load costs about 5 requests.
+on the API transport each load costs about 5 requests, and commit facts are cached
+on disk so a catch-up reads its compare range once.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has

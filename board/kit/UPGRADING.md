@@ -48,7 +48,10 @@ own commits; there is no new event store. No new card field, no migration, no `m
   were not replayed, and the merge itself is still diffed.
 - A commit that cannot be projected (over the 256-card or 128 KiB bound, with no board folder, or with a board file that is not
   valid JSON) gives one `unreplayable` event for that commit (`card: null`) and the replay moves on; reconcile the board when you
-  see one. A corrupt board at head still stops loudly.
+  see one. A corrupt board at head still stops loudly. A cursor left on a commit without a readable board moves on.
+- API transport: commit facts (parents and board folder trees, which never change) are cached under the kit's cache folder
+  (`history/` next to the blob cache, one bounded file per branch and board path), so a catch-up reads its compare range once
+  and a newer head reads only its new commits. A rewritten branch drops the cache.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently
   re-baselined: start a fresh baseline and reconcile. A `--file` board has no history and is refused; hosted mode is unsupported.
   The API transport replays at most 5,000 commits behind; past that, use `BOARD_WRITE=git` or a fresh baseline.
