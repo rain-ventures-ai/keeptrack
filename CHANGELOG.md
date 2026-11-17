@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board only, no kit version and no schema bump: optional "Sign in with GitHub" (a GitHub App user token) beside the unchanged
+fine-grained token paste. New optional setting `settings.github_app_signin` `{client_id, exchange_url}`; older pages and the
+CLI ignore it, and a board without it behaves exactly as before. A small Cloudflare Worker (`signin-worker/`) does the code
+exchange. See `docs/help/github-signin.md`.
+
 Kit v129: two new `work-research-note` reasons. `needs_information` sends the card back to Backlog with `needs-human` and
 one question comment (the request has a blank such as TBD); `awaiting_approval` does the same without a comment (the request
 also asks for a change the research pilot never starts). Both settle like `request_rejected`. No schema change.

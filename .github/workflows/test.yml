@@ -18,6 +18,16 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
+  signin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Sign in with GitHub (Worker and page logic, Node built-ins only)
+        run: node --test signin-worker/worker.test.js tests/signin.test.js
+
   browser:
     runs-on: ubuntu-latest
     steps:
@@ -114,3 +124,6 @@ jobs:
       - name: Inbound strip for failed and waiting outside items (kit v112)
         working-directory: tests/browser
         run: node inbound-bar.test.js
+      - name: Sign in with GitHub (methods, state check, refresh, sign out; fake GitHub and Worker)
+        working-directory: tests/browser
+        run: node github-signin.test.js

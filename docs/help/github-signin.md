@@ -1,0 +1,52 @@
+# Sign in with GitHub
+
+The web board normally talks to GitHub with a fine-grained token that you paste into Settings. A board can also offer **Sign in with GitHub**. People then click a button, approve the app on github.com, and the page acts as them through a GitHub App. **Pasting a token still works and is never removed.** A board that does not turn sign-in on behaves exactly as before.
+
+Sign-in needs one small server step, because GitHub does not let a web page trade the sign-in code for a token (no CORS, and the trade needs the app's client secret). A tiny Cloudflare Worker, in [`signin-worker/`](../../signin-worker/), does only that trade.
+
+```
+board page  ->  github.com (approve)  ->  back to the board page with ?code=&state=
+board page  ->  Worker /exchange (code)  ->  github.com/login/oauth/access_token (with the client secret)
+board page  <-  access token + refresh token        board page  ->  api.github.com (as the signed-in person)
+```
+
+## What the owner does once
+
+1. **Client secret.** In GitHub: Settings, Developer settings, GitHub Apps, your app, then **Client secrets**, **Generate a new client secret**. Copy it once. It goes into the Worker (step 3) and nowhere else: not into the page, the repo, or a board.
+2. **Callback URL.** On the app's settings page add the board page address as a **Callback URL**, with no query: `https://rain-ventures-ai.github.io/keeptrack/board/` (use your own page address if you host the page yourself). Keep **Expire user authorization tokens** on (the default): the page renews the short-lived token by itself. Give the app the repository permissions the board needs (**Contents** and **Issues**, read and write) and install it on the board repos.
+3. **Deploy the Worker.** From `signin-worker/`, with the Wrangler tool you already use for Cloudflare:
+   - Edit `wrangler.toml`: `ALLOWED_ORIGINS` is the page's origin (comma-separated, exact match), `ALLOWED_REDIRECTS` is the callback URL from step 2 (comma-separated, exact match), `GITHUB_CLIENT_ID` is the app's Client ID (public).
+   - `wrangler secret put GITHUB_CLIENT_SECRET` and paste the secret.
+   - `wrangler deploy`. Note the address it prints, for example `https://keeptrack-signin.<your-subdomain>.workers.dev`.
+4. **Tell the page about the Worker.** In `board/index.html` add, above the first `<script>`, the meta described in the comment at the top of that file:
+   `<meta name="kb-github-app-signin" content='{"client_id":"<Client ID>","exchange_url":"https://keeptrack-signin.<your-subdomain>.workers.dev"}'>`
+   The page's security policy then allows the page to talk to that address and no other (list more addresses in `"origins"` if different boards use different Workers). The meta is not a script, so the policy's script hashes do not change. The hosted entry (`hosted.html`) never gets the meta and never signs in this way.
+
+That meta alone turns sign-in on for every board that opens on this page. A private board can only read its own settings once someone is signed in, so for private boards this page-level default is what makes the button appear.
+
+## Choosing per board
+
+A board can also name its own app and Worker in `board/tasks.json`, under `settings`:
+
+```json
+"github_app_signin": { "client_id": "Iv23li...", "exchange_url": "https://keeptrack-signin.example.workers.dev" }
+```
+
+- Absent: the board uses the page default if there is one, otherwise the token only.
+- Present and valid: Settings, Connection shows **How this browser signs in to GitHub** with two choices, **Sign in with GitHub** and **Use a fine-grained token**. The choice is remembered per board in this browser. A browser that already has a saved token starts on the token; a new one starts on sign-in.
+- Present but wrong (not an object, no `client_id`, an `exchange_url` that is not https, or one the page does not allow): it is ignored, a note says why in Settings, and the token path works as normal.
+- `exchange_url` is read only from board settings or the page default, never from the address bar. The page also refuses any address that is not in the page's own allow-list (step 4).
+
+## What people see
+
+- Settings, Connection shows which method is active. **Sign in with GitHub** sends you to github.com and back to the same board.
+- The page renews its short-lived GitHub token about five minutes before it expires, and once after a refusal. If renewal fails (for example the refresh token was revoked or expired) the sign-in is cleared and the board asks you to sign in again. A network blip does not sign anyone out.
+- **Sign out** removes the sign-in tokens from this browser. A pasted token is not touched. Forgetting a board also removes its sign-in.
+- Sign-in tokens are kept in this browser only (per board, in `localStorage`), are never included in a settings code or a board move, and the refresh token is sent only to the Worker.
+
+## Checks and limits
+
+- The Worker answers only the origins in `ALLOWED_ORIGINS`, only passes redirect addresses in `ALLOWED_REDIRECTS` to GitHub, takes small JSON bodies by POST only, never logs codes or tokens, and returns only the five token fields or a short fixed error code. Its tests run with `node --test signin-worker/worker.test.js`.
+- The page's checks (settings parsing, state check, address cleanup, which token is used, refresh timing) run with `node --test tests/signin.test.js`.
+- Not for demo boards or the hosted board.
+- GitHub App refresh tokens are single use. If two browser tabs renew at the same moment, the page uses a lock where the browser has one; otherwise one tab may need to sign in again.

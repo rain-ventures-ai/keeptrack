@@ -96,7 +96,98 @@ function similarMatches(d, title, client, project, skip, doneCol = 'done') {
   });
   return hits.sort((x, y) => y.score - x.score || (x.num || 0) - (y.num || 0));
 }
-if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText, similarScore, similarKind, similarScope, similarMatches };
+// ---- Sign in with GitHub (a GitHub App's user-to-server token), the pure parts ---------------------------------------------
+// Outside the browser closure so `node --test tests/signin.test.js` can load them. The closure below does the I/O.
+// The token paste stays: a board only offers sign-in when it (or this page) names a client_id and an exchange_url.
+const SIGNIN_REFRESH_MARGIN_MS = 5 * 60 * 1000, SIGNIN_PENDING_MS = 10 * 60 * 1000;
+const OAUTH_RETURN_PARAMS = ['code', 'state', 'error', 'error_description', 'error_uri'];
+const SIGNIN_ORIGIN_RE = /^https:\/\/[a-z0-9.-]+(?::[0-9]+)?$/i;
+const signinLocalHost = h => /^(localhost|127\.0\.0\.1|\[::1\])$/.test(h);
+// raw: settings.github_app_signin from a board (or the page default). allowed: the exchange origins this page's owner allows.
+// -> { config: {client_id, exchange_url} | null, note }. Absent -> no config and no note. Anything else wrong -> no config and a note.
+function parseSigninConfig(raw, allowed) {
+  if (raw === undefined) return { config: null, note: '' };
+  const bad = why => ({ config: null, note: 'github_app_signin in the board settings was ignored: ' + why + '. Sign-in with a token still works.' });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return bad('it must be an object with client_id and exchange_url');
+  const id = raw.client_id, ex = raw.exchange_url;
+  if (typeof id !== 'string' || !/^[A-Za-z0-9._-]{8,64}$/.test(id)) return bad('client_id is missing or not a GitHub App client id');
+  if (typeof ex !== 'string') return bad('exchange_url is missing');
+  let u; try { u = new URL(ex); } catch { return bad('exchange_url is not a web address'); }
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && signinLocalHost(u.hostname))) return bad('exchange_url must be https');
+  if (u.username || u.password || u.search || u.hash) return bad('exchange_url must have no login, query or fragment');
+  if (!Array.isArray(allowed) || !allowed.includes(u.origin)) return bad('this page does not allow ' + u.origin + ' for sign-in (see docs/help/github-signin.md)');
+  return { config: { client_id: id, exchange_url: u.origin + u.pathname.replace(/\/+$/, '') }, note: '' };
+}
+// The page-level default: <meta name="kb-github-app-signin" content='{"client_id":"…","exchange_url":"https://…","origins":["https://…"]}'>.
+// origins (plus the default's own origin) are the only places a board may point the exchange; index.html's policy lets the page talk to exactly those.
+function parsePageSignin(text) {
+  let o; try { o = text ? JSON.parse(text) : null; } catch { o = null; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return { origins: [], def: null };
+  const origins = new Set((Array.isArray(o.origins) ? o.origins : []).filter(x => typeof x === 'string' && SIGNIN_ORIGIN_RE.test(x)));
+  try { const u = new URL(o.exchange_url); if (SIGNIN_ORIGIN_RE.test(u.origin)) origins.add(u.origin); } catch { /* no default exchange */ }
+  const list = [...origins];
+  return { origins: list, def: o.client_id === undefined && o.exchange_url === undefined ? null : parseSigninConfig({ client_id: o.client_id, exchange_url: o.exchange_url }, list).config };
+}
+const signinHex = bytes => [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
+function newOAuthState(getRandomValues) { return signinHex(getRandomValues(new Uint8Array(32))); }
+function signinRedirectUri(href) { const u = new URL(href); return u.origin + u.pathname; }   // GitHub Apps want the callback without a query: the board's own query is kept in the pending record instead
+function authorizeUrl(config, redirectUri, state) {
+  return 'https://github.com/login/oauth/authorize?' + new URLSearchParams({ client_id: config.client_id, redirect_uri: redirectUri, state }).toString();
+}
+function stripOAuthParams(search) {
+  // the other parameters are kept exactly as written (the board keeps owner/name readable), so no URLSearchParams round trip
+  const name = p => { const n = p.split('=')[0].replace(/\+/g, ' '); try { return decodeURIComponent(n); } catch { return n; } };
+  const keep = String(search || '').replace(/^\?/, '').split('&').filter(p => p && !OAUTH_RETURN_PARAMS.includes(name(p)));
+  return keep.length ? '?' + keep.join('&') : '';
+}
+// What the page's address says about a sign-in in progress. pending: the record kept in sessionStorage when sign-in started
+// ({state, repo, search, t}). The state is compared exactly and first: only { kind: 'ok' } may reach the exchange.
+// -> { kind: 'none' } | { kind: 'error', message, search } | { kind: 'ok', code, repo, search }. search: what the address bar becomes.
+function checkOAuthReturn(search, pending, now) {
+  const q = new URLSearchParams(search);
+  if (!OAUTH_RETURN_PARAMS.some(k => q.has(k))) return { kind: 'none' };
+  const clean = stripOAuthParams(search), fail = message => ({ kind: 'error', message, search: clean });
+  const okPending = pending && typeof pending === 'object' && typeof pending.state === 'string' && /^[0-9a-f]{64}$/.test(pending.state) && typeof pending.t === 'number';
+  if (!okPending) return fail('Sign-in did not start from this page, so it was ignored. Start again from Settings.');
+  if (now - pending.t > SIGNIN_PENDING_MS || now < pending.t) return fail('The sign-in took too long. Start again from Settings.');
+  const got = q.get('state');
+  if (typeof got !== 'string' || got !== pending.state) return fail('The sign-in answer did not match the request, so it was ignored. Start again from Settings.');
+  if (q.has('error')) return fail(q.get('error') === 'access_denied' ? 'GitHub sign-in was cancelled.' : 'GitHub did not complete the sign-in.');
+  const code = q.get('code');
+  if (typeof code !== 'string' || !/^[\w-]{1,256}$/.test(code)) return fail('GitHub sent no sign-in code. Start again from Settings.');
+  const repo = typeof pending.repo === 'string' && /^[\w.-]+\/[\w.-]+$/.test(pending.repo) ? pending.repo : '';
+  const back = typeof pending.search === 'string' && (pending.search === '' || pending.search[0] === '?') ? stripOAuthParams(pending.search) : clean;
+  return { kind: 'ok', code, repo, search: back };
+}
+// Which sign-in method a board uses: only a board with sign-in configured can use 'app'; a saved choice wins, else a saved token keeps being used.
+function resolveAuthMethod({ configured, stored, hasPat }) {
+  if (!configured) return 'pat';
+  if (stored === 'app' || stored === 'pat') return stored;
+  return hasPat ? 'pat' : 'app';
+}
+// The bearer token for api.github.com. app: { token, exp, refresh, rexp } (times in ms; 0 = never expires) or null.
+function chooseToken({ method, pat, app, now }) {
+  if (method !== 'app') return { source: 'pat', token: pat || '' };
+  const live = app && app.token && (!app.exp || app.exp > now || (app.refresh && (!app.rexp || app.rexp > now)));
+  return { source: 'app', token: live ? app.token : '' };
+}
+// 'none': use the token as it is. 'refresh': ask the exchange for a new one first. 'signin': it cannot be renewed.
+function refreshDecision(app, now, margin = SIGNIN_REFRESH_MARGIN_MS) {
+  if (!app || !app.token) return 'signin';
+  if (!app.exp || app.exp - now > margin) return 'none';
+  if (app.refresh && (!app.rexp || app.rexp > now)) return 'refresh';
+  return app.exp > now ? 'none' : 'signin';
+}
+// The Worker's answer -> what is kept in this browser, or null when it holds no usable access token.
+function appRecordFromExchange(data, now) {
+  if (!data || typeof data !== 'object' || typeof data.access_token !== 'string' || !data.access_token) return null;
+  if (data.token_type !== undefined && String(data.token_type).toLowerCase() !== 'bearer') return null;
+  const secs = v => typeof v === 'number' && v > 0 && isFinite(v) ? v : 0;
+  return { token: data.access_token, exp: secs(data.expires_in) ? now + secs(data.expires_in) * 1000 : 0,
+    refresh: typeof data.refresh_token === 'string' ? data.refresh_token : '', rexp: secs(data.refresh_token_expires_in) ? now + secs(data.refresh_token_expires_in) * 1000 : 0 };
+}
+if (typeof module !== 'undefined' && module.exports) module.exports = { keyBetween, validRank, jsonText, similarScore, similarKind, similarScope, similarMatches,
+  parseSigninConfig, parsePageSignin, newOAuthState, signinRedirectUri, authorizeUrl, stripOAuthParams, checkOAuthReturn, resolveAuthMethod, chooseToken, refreshDecision, appRecordFromExchange };
 
 // A page and a board.js from different deploys (GitHub Pages and browsers cache index.html for ~10 minutes) never wire up:
 // refresh the cached page and reload once, and if the server still has the other version, say so. index.html has the same
@@ -149,9 +240,95 @@ if (typeof window !== 'undefined') (() => {
   const tabKey = k => !!TAB && (k === 'kb_repo' || BOARD_KEYS.includes(k.slice(3)));
   const rawRepo = () => { try { return localStorage.getItem('kb_repo') || ''; } catch { return ''; } };
   const tabShared = k => k === 'kb_repo' || rawRepo() === (TAB.get('kb_repo') || '');
+  // ---- Sign in with GitHub (optional per board; the pasted token below is untouched) --------------------------------------
+  // A board that names github_app_signin {client_id, exchange_url} in its settings (or a page that carries a default in
+  // <meta name="kb-github-app-signin">) can use a GitHub App user token instead of a pasted one. Which one a board uses is
+  // remembered per repo in this browser. Everything here is inert without that configuration: cfg().token is then exactly
+  // LS.get('kb_token'). exchange_url is never read from the page address; the page's own list of allowed origins
+  // (parsePageSignin) also bounds it, and index.html's Content-Security-Policy lets the page talk only to those.
+  const SIGNIN_ON = !SANDBOX;   // not in a demo or the hosted adapter
+  const PAGE_SIGNIN = (() => { const m = document.querySelector('meta[name="kb-github-app-signin"]'); return parsePageSignin(m ? m.getAttribute('content') : ''); })();
+  const lsRaw = k => { try { return localStorage.getItem(k); } catch { return null; } };
+  const lsPut = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage blocked: the sign-in just does not stick */ } };
+  const lsDrop = k => { try { localStorage.removeItem(k); } catch { /* nothing to remove */ } };
+  const SK = { method: r => 'kb_signin_method:' + r, app: r => 'kb_signin_app:' + r, cfg: r => 'kb_signin_cfg:' + r };   // per repo, in this origin's localStorage; never in kb_boards or a settings code
+  const APP_SEEN = new Set();   // app access tokens this tab has handed out, so a request holding an older one is given the current one
+  let signinNote = '';   // why the board's github_app_signin was ignored (shown in Settings)
+  function readApp(repo) {
+    const raw = lsRaw(SK.app(repo)); if (!raw) return null;
+    try { const o = JSON.parse(raw); if (!o || typeof o.token !== 'string' || !o.token) return null; APP_SEEN.add(o.token); return { token: o.token, exp: +o.exp || 0, refresh: typeof o.refresh === 'string' ? o.refresh : '', rexp: +o.rexp || 0 }; } catch { return null; }
+  }
+  const writeApp = (repo, rec) => { APP_SEEN.add(rec.token); lsPut(SK.app(repo), JSON.stringify(rec)); };
+  const dropApp = repo => lsDrop(SK.app(repo));
+  function signinConfig(repo) {   // the board's own (cached from its settings), else the page default; null when sign-in is not offered
+    if (!SIGNIN_ON || !repo) return null;
+    const cached = lsRaw(SK.cfg(repo));
+    if (cached) { let o; try { o = JSON.parse(cached); } catch { o = null; } const p = parseSigninConfig(o === null ? undefined : o, PAGE_SIGNIN.origins); if (p.config) return p.config; }
+    return PAGE_SIGNIN.def;
+  }
+  function authMethod(repo) {
+    if (!SIGNIN_ON || !repo || !(PAGE_SIGNIN.def || lsRaw(SK.cfg(repo)))) return 'pat';   // the common case costs one storage read
+    return resolveAuthMethod({ configured: !!signinConfig(repo), stored: lsRaw(SK.method(repo)), hasPat: !!LS.get('kb_token') });
+  }
+  function effectiveToken() {
+    const repo = LS.get('kb_repo', ''), method = authMethod(repo);
+    if (method !== 'app') return LS.get('kb_token');
+    return chooseToken({ method, pat: '', app: readApp(repo), now: Date.now() }).token;
+  }
+  // Called after every read of the board file: keep what its settings say about sign-in.
+  function noteSignin(raw) {
+    const repo = LS.get('kb_repo', ''); if (!SIGNIN_ON || !repo || !raw || typeof raw !== 'object') return;
+    const st = raw.settings && typeof raw.settings === 'object' ? raw.settings : {};
+    const p = parseSigninConfig(Object.hasOwn(st, 'github_app_signin') ? st.github_app_signin : undefined, PAGE_SIGNIN.origins);
+    if (p.config) lsPut(SK.cfg(repo), JSON.stringify(p.config)); else lsDrop(SK.cfg(repo));
+    const was = signinNote; signinNote = p.note; if (was !== p.note) try { renderSignin(); } catch { /* Settings not built yet */ }
+  }
+  function signinFailed(repo, why) {   // the sign-in cannot be renewed: forget it and say so
+    dropApp(repo); if (LS.get('kb_repo', '') !== repo) return;
+    lastSyncOk = false; setStatus('Not connected', 'err'); toast(why || 'Your GitHub sign-in ended. Sign in again in Settings.', true); try { renderSignin(); renderThis(); } catch { /* Settings not built yet */ }
+  }
+  let refreshing = null;
+  // One refresh at a time per tab (and per browser where Web Locks exist). staleToken: the access token that expired or was refused;
+  // when storage already holds a different one, another request or tab refreshed it and that one is used. true errors clear the
+  // sign-in; a network failure or a 5xx keeps it, so a blip does not sign anyone out. The refresh token goes only to exchange_url.
+  function refreshApp(staleToken) {
+    const repo = LS.get('kb_repo', '');
+    if (refreshing) return refreshing;
+    const run = async () => {
+      const rec = readApp(repo), conf = signinConfig(repo);
+      if (rec && staleToken && rec.token !== staleToken && refreshDecision(rec, Date.now()) !== 'signin') return rec;
+      if (!rec || !conf || refreshDecision(rec, Date.now()) === 'signin' || !rec.refresh) { signinFailed(repo); return null; }
+      let res, data = null;
+      try { res = await window.fetch(conf.exchange_url + '/refresh', { method: 'POST', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: ghSignal('POST'),
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: rec.refresh }) }); } catch { return null; }
+      try { data = await res.json(); } catch { /* no body */ }
+      const next = res.ok ? appRecordFromExchange(data, Date.now()) : null;
+      if (next) { writeApp(repo, next); return next; }
+      if (res.status >= 500) return null;
+      signinFailed(repo); return null;
+    };
+    refreshing = (async () => (navigator.locks ? navigator.locks.request('kb_signin_refresh:' + repo, run) : run()))().finally(() => { refreshing = null; });
+    return refreshing;
+  }
+  // Every request to the GitHub API that carries an app token goes through here: renew it a little before it expires, and once
+  // after a 401. Other requests (and every pasted-token request) pass straight through to the browser's fetch.
+  async function authFetch(input, init) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const m = SIGNIN_ON && init && init.headers && typeof init.headers === 'object' && !(init.headers instanceof Headers) ? /^Bearer (.+)$/.exec(init.headers.Authorization || '') : null;
+    if (!m || !APP_SEEN.has(m[1]) || !String(url).startsWith(cfg().api + '/')) return window.fetch(input, init);
+    const withToken = t => ({ ...init, headers: { ...init.headers, Authorization: 'Bearer ' + t } });
+    let tok = m[1]; const repo = LS.get('kb_repo', ''), cur = readApp(repo);
+    if (cur && cur.token !== tok) tok = cur.token;
+    if (cur && refreshDecision(cur, Date.now()) === 'refresh') { const next = await refreshApp(tok); if (next) tok = next.token; }
+    const res = await window.fetch(input, withToken(tok));
+    if (res.status !== 401) return res;
+    const again = await refreshApp(tok);
+    return again && again.token !== tok ? window.fetch(input, withToken(again.token)) : res;
+  }
+  const fetch = (input, init) => authFetch(input, init);   // this file's fetch: GitHub calls made with an app token are renewed; everything else is the browser's fetch
   const cfg = () => HOSTED ? { repo: hostedStorage ? 'hosted/' + hostedStorage.board : '', branch: '', path: 'tasks.json', token: '', api: '', me: hostedIdentity?.boards.find(b => b.id === hostedStorage?.board)?.handle || '' } : ({
     repo: LS.get('kb_repo', ''), branch: LS.get('kb_branch', 'master'), path: LS.get('kb_path', 'board/tasks.json'),
-    token: LS.get('kb_token'), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
+    token: effectiveToken(), me: LS.get('kb_me', ''), api: LS.get('kb_api', 'https://api.github.com') // api override is for local testing only
   });
   // ---- several boards: each repo keeps its own branch, path, token and Claude routine in kb_boards (this browser only) ----
   const BOARD_KEYS = ['branch', 'path', 'token', 'claude_url', 'claude_token', 'claude_steps', 'claude_ok', 'email_sync'], REPO_RE = /^[\w.-]+\/[\w.-]+$/;
@@ -166,9 +343,34 @@ if (typeof window !== 'undefined') (() => {
   function forgetBoard(repo) { const m = boardsMap(); delete m[repo]; LS.set('kb_boards', JSON.stringify(m));
     // another tab may have switched this browser to repo: its live keys (kb_repo, its token ...) go too, not only kb_boards
     if (rawRepo() === repo) try { ['kb_repo', ...BOARD_KEYS.map(k => 'kb_' + k)].forEach(k => localStorage.removeItem(k)); } catch {}
+    ['method', 'app', 'cfg'].forEach(k => lsDrop(SK[k](repo)));   // this board's sign-in (its tokens too)
     try { Object.keys(localStorage).filter(k => k.startsWith(`kb_widgets:${repo}:`) || k.startsWith(`kb_appearance:${repo}:`) || k.startsWith(`kb_weather_location:${repo}:`) || k.startsWith(`kb_rook_owner_action:${repo}|`)).forEach(k => localStorage.removeItem(k)); } catch {}
     const pre = [`kb_snap:${repo}:`, `kb_meta:${repo}:`, `kb_arch:${repo}:`, `kb_blob:${repo}:`, `kb_undo:${repo}:`]; idb.keys().then(ks => ks.forEach(k => { if (pre.some(p => String(k).startsWith(p))) idb.del(k); })).catch(() => {});
     try { Object.keys(localStorage).filter(k => (k.startsWith(`kb_context:${repo}:`) || k.startsWith(`kb_drafts:${repo}:`))).forEach(k => localStorage.removeItem(k)); } catch {} }   // also drop cached cards, local drafts, context and Undo
+  // Coming back from github.com/login/oauth/authorize: ?code=…&state=…. The state is checked first, against the one this tab kept in
+  // sessionStorage (single use). A missing or different state is dropped here and nothing is sent anywhere. The address is cleaned
+  // before anything else reads it, so the code never stays in the address bar or the history, and the board's own query comes back.
+  let signinReturned = Promise.resolve();   // the first load waits for this
+  if (SIGNIN_ON) (() => {
+    let pending = null; try { pending = JSON.parse(sessionStorage.getItem('kb_oauth') || 'null'); } catch { pending = null; }
+    const r = checkOAuthReturn(location.search, pending, Date.now());
+    if (r.kind === 'none') return;
+    try { sessionStorage.removeItem('kb_oauth'); } catch { /* blocked */ }
+    try { history.replaceState(null, '', location.pathname + r.search + location.hash); } catch { /* the address stays as it is */ }
+    if (r.kind === 'error') { setTimeout(() => toast(r.message, true)); return; }
+    signinReturned = Promise.resolve().then(() => finishSignin(r.code, r.repo || LS.get('kb_repo', '')));   // after the rest of this file has been evaluated
+  })();
+  async function finishSignin(code, repo) {   // the one place a code leaves the page, and only to the configured exchange_url
+    const conf = signinConfig(repo);
+    if (!conf) { setTimeout(() => toast('Sign-in is not set up for this board, so the code was dropped.', true)); return; }
+    let res, data = null;
+    try { res = await window.fetch(conf.exchange_url + '/exchange', { method: 'POST', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer', signal: ghSignal('POST'),
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, redirect_uri: signinRedirectUri(location.href) }) }); } catch { setTimeout(() => toast('Could not reach the sign-in service. Try again in a moment.', true)); return; }
+    try { data = await res.json(); } catch { /* no body */ }
+    const rec = res.ok ? appRecordFromExchange(data, Date.now()) : null;
+    if (!rec) { setTimeout(() => toast('GitHub sign-in did not complete' + (data && data.error === 'redirect_not_allowed' ? ': this page address is not allowed by the sign-in service' : '') + '. Try again.', true)); return; }
+    writeApp(repo, rec); lsPut(SK.method(repo), 'app'); LS.del('kb_ro:' + repo); setTimeout(() => toast('Signed in with GitHub.'));
+  }
   // The link picks the board: ?repo=owner/name&branch=main&path=tasks.json (never the token). A different repo switches to it.
   (() => { const q = new URLSearchParams(location.search), repo = q.get('repo'), over = {};
     ['branch', 'path'].forEach(k => { const v = q.get(k); if (v && /^[\w./-]+$/.test(v)) over[k] = v; });
@@ -244,7 +446,7 @@ if (typeof window !== 'undefined') (() => {
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
-    needKit = minKitOf(raw); if (ro === 'demo' || ro === 'public') return;
+    noteSignin(raw); needKit = minKitOf(raw); if (ro === 'demo' || ro === 'public') return;
     const want = needKit ? 'kit' : ro === 'kit' ? (LS.get(roKey()) ? 'token' : '') : ro; if (want !== ro) { ro = want; applyRo(); }
   }
   let newerSchema = 0;
@@ -6191,6 +6393,47 @@ if (typeof window !== 'undefined') (() => {
     const ok = await load();
     if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
   };
+  // Settings → Connection → "How this browser signs in": shown only when sign-in is set up for this board (or its settings could not be read).
+  const minutesLeft = rec => Math.max(0, Math.round((rec.exp - Date.now()) / 60000));
+  function renderSignin() {
+    const box = $('sSignin'); if (!box) return;   // an older index.html without the markup: nothing to show
+    const c = cfg(), conf = SIGNIN_ON && c.repo ? signinConfig(c.repo) : null, show = !!c.repo && SIGNIN_ON && (!!conf || !!signinNote);
+    box.hidden = !show; if ($('bThis')) $('bThis').classList.toggle('has-signin', show);
+    const patRow = $('sToken') && $('sToken').closest('.ui-props__row'); if (!show) { if (patRow) patRow.hidden = false; return; }
+    const note = $('sSigninNote'); note.hidden = !signinNote; note.textContent = signinNote;
+    $('sSigninChoice').hidden = !conf;
+    if (!conf) { if (patRow) patRow.hidden = false; return; }
+    const method = authMethod(c.repo), rec = readApp(c.repo), app = method === 'app';
+    $('sAuthApp').checked = app; $('sAuthPat').checked = !app;
+    if (patRow) patRow.hidden = app; if ($('sTokenReuse')) $('sTokenReuse').hidden = app; if ($('patLink')) $('patLink').closest('p').hidden = app;
+    const signedIn = app && !!c.token;
+    $('sSigninState').textContent = app ? (signedIn ? `Active: signed in with GitHub${rec && rec.exp ? ` (this sign-in renews itself; current one has ${minutesLeft(rec)} min left)` : ''}.` : 'Active: sign in with GitHub. You are not signed in yet.')
+      : `Active: fine-grained token${LS.get('kb_token') ? '' : ' (none saved yet)'}.`;
+    $('sSigninGo').hidden = !app || signedIn; $('sSigninOut').hidden = !signedIn;
+  }
+  function chooseAuthMethod(method) {
+    const repo = cfg().repo; if (!repo || !signinConfig(repo)) return;
+    if (authMethod(repo) === method) { renderSignin(); return; }
+    whenSaved(() => { lsPut(SK.method(repo), method); LS.del(roKey()); loadGen++; lastSyncOk = false; renderSignin(); fillConn(); renderThis(); load(); });
+  }
+  function startSignin() {
+    const repo = cfg().repo, conf = repo && signinConfig(repo); if (!conf) { toast('Sign-in is not set up for this board.', true); return; }
+    whenSaved(() => {
+      const state = newOAuthState(a => crypto.getRandomValues(a));
+      try { sessionStorage.setItem('kb_oauth', JSON.stringify({ state, repo, search: location.search, t: Date.now() })); } catch { toast('This browser blocks the storage sign-in needs. Use a token instead.', true); return; }
+      location.assign(authorizeUrl(conf, signinRedirectUri(location.href), state));
+    });
+  }
+  async function signOutApp() {   // the app tokens only: a pasted token is not touched
+    const repo = cfg().repo; if (boardWorking()) { setStatus('Waiting for the save to finish before signing out…'); await boardIdle(); }
+    dropApp(repo); loadGen++; LS.del(roKey()); snapClear(); fromSnap = false; fileDemo = false; archived = null; msIndex = msFor = null; msArch = msArchFor = null; resetArchUi(); widgets = []; widgetMeta = { key: '', etag: '', problem: '' };
+    state = DEFAULT(); sha = null; etag = null; lastSyncOk = false; autoChecked = ''; render(); setStatus('Signed out'); renderSignin(); renderThis(); toast('Signed out of GitHub in this browser.');
+  }
+  if ($('sSignin')) {
+    $('sAuthApp').onchange = () => { if ($('sAuthApp').checked) chooseAuthMethod('app'); };
+    $('sAuthPat').onchange = () => { if ($('sAuthPat').checked) chooseAuthMethod('pat'); };
+    $('sSigninGo').onclick = startSignin; $('sSigninOut').onclick = signOutApp;
+  }
   // The logo is the board switcher: a badge with the repo's initials (rain-ventures-ai/consulting → RVAC) in a colour of its own.
   const boardInitials = repo => String(repo || '').split('/').flatMap(p => p.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s_.-]+/)).filter(Boolean).map(w => w[0].toUpperCase()).join('').slice(0, 4) || '▦';
   const boardColour = repo => `hsl(${ui.hueFor(repo)} 58% 38%)`;
@@ -6224,6 +6467,7 @@ if (typeof window !== 'undefined') (() => {
     p.classList.toggle('is-setup', setup);
     if (setup && $('secBoards').nextElementSibling !== $('bThis')) p.insertBefore($('secBoards'), $('bThis'));   // setup: the "Add a board" steps come first
     if (!setup && $('secHealth').nextElementSibling !== $('secBoards')) $('secHealth').after($('secBoards'));
+    renderSignin();
   }
   function openAddWiz(step = 0) { Object.assign(AW, { step, tok: '', me: '', ok: false, repos: [], repo: '', branch: '', path: '', useMe: false, rows: [], found: null }); $('bAdd').hidden = true; $('bWiz').hidden = false; renderAddWiz(); }
   function renderBoards() {
@@ -10149,5 +10393,5 @@ if (typeof window !== 'undefined') (() => {
   }
 
   if (HOSTED) { startHosted(); return; }
-  (async () => { await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
+  (async () => { await signinReturned; await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
 })();

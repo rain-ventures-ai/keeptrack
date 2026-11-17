@@ -1,0 +1,18 @@
+# Keeptrack sign-in Worker. No secrets in this file.
+# The deployer adds their own account_id (or runs `wrangler login` first); it is left out on purpose.
+#   account_id = "<your Cloudflare account id>"
+name = "keeptrack-signin"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+# Public identifier of the GitHub App ("Client ID" on the app's settings page).
+GITHUB_CLIENT_ID = "Iv23liHHNoIZpe3JyJWH"
+# Comma-separated, exact match. The origin of the page that hosts the board (no path, no trailing slash).
+ALLOWED_ORIGINS = "https://rain-ventures-ai.github.io"
+# Comma-separated, exact match. The board page URL the app sends people back to (also a Callback URL in the app).
+ALLOWED_REDIRECTS = "https://rain-ventures-ai.github.io/keeptrack/board/"
+
+# The client secret is a Worker secret, never a var:
+#   wrangler secret put GITHUB_CLIENT_SECRET

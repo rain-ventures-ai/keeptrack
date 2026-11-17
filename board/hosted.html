@@ -254,6 +254,16 @@
           <div data-row="You" id="bThisMeRow"><span id="bThisMe"></span></div>
         </div>
       </div>
+      <div id="sSignin" role="group" aria-labelledby="sSigninLbl" hidden>
+        <p id="sSigninLbl" class="hint"><b>How this browser signs in to GitHub</b></p>
+        <div id="sSigninChoice">
+          <label class="schk"><input type="radio" name="keeptrack-auth-method" id="sAuthApp" value="app"> Sign in with GitHub</label>
+          <label class="schk"><input type="radio" name="keeptrack-auth-method" id="sAuthPat" value="pat"> Use a fine-grained token</label>
+          <p id="sSigninState" class="hint" role="status"></p>
+          <div class="sbtns"><button id="sSigninGo" type="button" class="small primary">Sign in with GitHub</button><button id="sSigninOut" type="button" class="small">Sign out</button></div>
+        </div>
+        <p id="sSigninNote" class="hint" role="status" hidden></p>
+      </div>
       <details class="sfold" id="bEditFold"><summary id="bEditBtn">Change connection</summary>
         <div id="bEdit">
           <p id="hostedDevLink" hidden><a href="?backend=hosted">Sign in to a local hosted board</a></p>
