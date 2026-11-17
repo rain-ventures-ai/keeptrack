@@ -472,7 +472,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 133  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 134  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1103,18 +1103,32 @@ def _blob_cache_file(sha):
     return os.path.join(CACHE_DIR, *REPO.split("/"), sha + ".json")
 
 
-def _api_blob(sha):
+_API_BLOB_MEMO = {}   # kit v134 history: blobs of past commits, kept in memory for this run only (bounded)
+_API_MEMO_CHARS = 32 * 1024 * 1024
+_HISTORY_HEAD = [None]   # kit v134: the branch head this run's history read; its blobs are current data, cached on disk
+
+
+def _api_blob(sha, persist=True):
+    """persist=False (kit v134 history): a blob read for a past commit is used but not written to the local cache, so
+    board data deleted since then is not copied to disk; it is kept in memory for the rest of this run."""
     cache = _blob_cache_file(sha)
     try:
         with open(cache, encoding="utf-8") as f:
             return f.read()
     except OSError:
         pass
+    if not persist and sha in _API_BLOB_MEMO:
+        return _API_BLOB_MEMO[sha]
     rc, out, err = gh(f"repos/{REPO}/git/blobs/{sha}")
     if rc:
         sys.exit(f"cannot read board blob {sha}: {err.strip() or out.strip()}")
     d = json.loads(out)
     text = base64.b64decode(d.get("content", "")).decode() if d.get("encoding") == "base64" else d.get("content", "")
+    if not persist:
+        if sum(map(len, _API_BLOB_MEMO.values())) + len(text) > _API_MEMO_CHARS:
+            _API_BLOB_MEMO.clear()   # bounded: past blobs are read again rather than held without limit
+        _API_BLOB_MEMO[sha] = text
+        return text
     try:
         os.makedirs(os.path.dirname(cache), exist_ok=True)
         ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
@@ -1196,14 +1210,20 @@ def _local_snapshot(include_archive=False):
     return files, None
 
 
-def _git_snapshot(include_archive=False):
-    _check_git_clone()
+def _git_fetch_head():
     rc, _, err = git("fetch", "-q", "origin", BRANCH)
     if rc:
         sys.exit(f"cannot fetch {REPO}@{BRANCH} with git: {err}")
     rc, head, err = git("rev-parse", "FETCH_HEAD")
     if rc:
         sys.exit(f"cannot resolve {REPO}@{BRANCH}: {err}")
+    return head
+
+
+def _git_snapshot(include_archive=False, ref=None):
+    """ref (kit v134): read the board at that commit instead of fetching the branch head. The caller has checked it."""
+    _check_git_clone()
+    head = _git_fetch_head() if ref is None else ref
     base = os.path.dirname(PATH).strip("/")
     rc, names, err = git("ls-tree", "-r", "--name-only", head, "--", PATH,
                          *[f"{base + '/' if base else ''}{x}" for x in ("cards", "people", "projects", "proposals", "archive")])
@@ -1240,6 +1260,8 @@ def _git_snapshot(include_archive=False):
         size = int(header[2]); raw = out[end + 1:end + 1 + size]; pos = end + 2 + size
         files[rel] = {"text": raw.decode("utf-8", errors="replace"), "sha": header[0], "size": size}
     if "tasks.json" not in files:
+        if ref is not None:
+            raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board at that commit")
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
     # kit v112: outside sources' items in inbound/, listed only (blob id and size; inbound reads one when it handles it)
     p = subprocess.run(["git", "-C", ROOT, "ls-tree", "-z", "-l", head, "--", f"{prefix}{INBOUND_DIR}/"], capture_output=True)
@@ -1252,12 +1274,31 @@ def _git_snapshot(include_archive=False):
     return files, head
 
 
-def _api_snapshot(include_archive=False):
+def _api_head():
     ref = urllib.parse.quote(BRANCH, safe="")
     rc, out, err = gh(f"repos/{REPO}/git/ref/heads/{ref}")
     if rc:
         sys.exit(f"cannot read {REPO}@{BRANCH}: {err.strip() or out.strip()}")
-    head = json.loads(out)["object"]["sha"]
+    return json.loads(out)["object"]["sha"]
+
+
+_API_TREE_MEMO = {}   # kit v134 history: commit sha -> (root tree, board folder tree); a commit never changes
+
+
+def _api_board_tree(head, missing_ok=False):
+    """(root tree, board folder tree) of one commit. missing_ok (kit v134 history): a commit without the board folder
+    gives "missing" instead of stopping, and the answer is remembered for this run (a commit sha never changes)."""
+    if missing_ok and (head, PATH) in _API_TREE_MEMO:
+        return _API_TREE_MEMO[(head, PATH)]
+    found = _api_board_tree_read(head, missing_ok)
+    if missing_ok:
+        if len(_API_TREE_MEMO) >= 10000:
+            _API_TREE_MEMO.clear()   # bounded per process
+        _API_TREE_MEMO[(head, PATH)] = found
+    return found
+
+
+def _api_board_tree_read(head, missing_ok):
     rc, out, err = gh(f"repos/{REPO}/git/commits/{head}")
     if rc:
         sys.exit(f"cannot read {REPO}@{BRANCH}: {err.strip() or out.strip()}")
@@ -1271,7 +1312,19 @@ def _api_snapshot(include_archive=False):
             sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
         sha = next((x["sha"] for x in json.loads(out).get("tree", []) if x.get("path") == part and x.get("type") == "tree"), None)
         if not sha:
+            if missing_ok:
+                return root_tree, "missing"
             sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
+    return root_tree, sha
+
+
+def _api_snapshot(include_archive=False, ref=None):
+    """ref (kit v134): read the board at that commit instead of the branch head. The caller has checked it. A past
+    commit never prunes the blob cache, which holds the head's blobs."""
+    head = _api_head() if ref is None else ref
+    root_tree, sha = _api_board_tree(head) if ref is None else _api_board_tree(head, missing_ok=True)
+    if sha == "missing":
+        raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board folder at that commit")
     rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}?recursive=1")
     if rc:
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
@@ -1290,33 +1343,56 @@ def _api_snapshot(include_archive=False):
             continue
         files[rel] = {"sha": item["sha"], "size": item.get("size", 0)}
         if not rel.startswith("archive/") or include_archive:
-            text = _api_blob(item["sha"])
+            text = _api_blob(item["sha"]) if ref is None else _api_blob(item["sha"], persist=ref == _HISTORY_HEAD[0])
             files[rel]["text"] = text
             files[rel]["size"] = item.get("size", len(text.encode()))
     if "tasks.json" not in files:
+        if ref is not None:
+            raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board at that commit")
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
-    _prune_blob_cache({x["sha"] for x in tree.get("tree", []) if x.get("type") == "blob" and x.get("sha")})
+    if ref is None:
+        _prune_blob_cache({x["sha"] for x in tree.get("tree", []) if x.get("type") == "blob" and x.get("sha")})
     return files, {"head": head, "base_tree": root_tree}
 
 
 _BOARD_STATES = {}
 
 
+class BoardDecodeError(SystemExit):
+    """A board file that is not valid JSON (kit v134: history replay tells it apart from a transport failure)."""
+
+
+class BoardMissingError(SystemExit):
+    """No board (no board folder or no tasks.json) at a past commit (kit v134 history; never raised for the head)."""
+
+
 def _decode_json(rel, entry):
     try:
         obj = json.loads(entry["text"])
     except (ValueError, UnicodeError) as e:
-        sys.exit(f"cannot read {rel}: invalid JSON ({e})")
+        raise BoardDecodeError(f"cannot read {rel}: invalid JSON ({e})")
     entry["obj"] = json.loads(json.dumps(obj))
     return obj
 
 
-def _github_load_board():
-    """Load either layout into the v3-shaped in-memory model used by commands."""
+def _github_load_board(ref=None):
+    """Load either layout into the v3-shaped in-memory model used by commands.
+
+    ref (kit v134, read-only): the board as it was at that commit, through the same decoding and layout code. Such a
+    board is never registered for a save, and the shared-folder flag of the live board is left as it was."""
     if not REPO and not FILE:
         sys.exit("cannot tell which board to use: run keeptrack.py from a clone of the board repo, run `keeptrack.py use owner/name` "
                  "in this project, or set BOARD_REPO=owner/name")
-    if FILE:
+    if ref is not None:
+        if FILE:
+            sys.exit("refused: a --file board has no commit history to read; use the git or API transport")
+        shared = _SHARED_FOLDER[0]
+        try:
+            files, head = _git_snapshot(ref=ref) if WRITE == "git" else _api_snapshot(ref=ref)
+        finally:
+            _SHARED_FOLDER[0] = shared
+        mode = "git" if WRITE == "git" else "api"
+    elif FILE:
         files, head = _local_snapshot()
         mode = "local"
     elif WRITE == "git":
@@ -1353,8 +1429,338 @@ def _github_load_board():
              "base_tree": head.get("base_tree") if isinstance(head, dict) else None,
              "files": files, "layout": layout, "shared_folder": _SHARED_FOLDER[0],
              "root": root, "data_id": id(data)}
+    if ref is not None:
+        return data
     _BOARD_STATES[id(data)] = state
     return data
+
+
+# ---- board history for `watch-poll --history` (kit v134) -------------------------------------------------------------
+# A read-only replay of the board branch's own commits; there is no second event store. Every commit after the cursor
+# (all of `since..head`, side branches included) is replayed in whole units along head's first-parent line, each unit
+# in topological order, each commit diffed against its own first parent, so every event is a real change on some
+# commit and none is skipped. The cursor only moves forward along that line. A merge commit is diffed against its first
+# parent too, so a side branch's change can be reported twice (at its commit and at the merge, with different ids):
+# at least once, never missed. The cursor commit must be an ancestor of the branch head. Any other
+# commit (the branch was force-pushed or rewritten, or the commit is unknown) is refused loudly, never silently
+# re-baselined: a watcher must never believe nothing happened when it cannot know.
+WATCH_HISTORY_PAGE = 20      # board commits replayed per call (whole units; the first unit is always taken)
+WATCH_HISTORY_SCAN = 200     # commits examined per call; a bigger side branch is reported as a gap
+WATCH_HISTORY_COMPARE = 50   # API transport: compare pages of 100 commits read per call at most
+
+
+def _history_transport():
+    if FILE:
+        sys.exit("refused: watch-poll --history replays board commits, and a --file board has no commit history; "
+                 "use the git or API transport, or watch-poll without --history")
+    if BACKEND == "hosted":
+        sys.exit("capability_unavailable: watch-poll --history needs a GitHub board; hosted mode is unsupported")
+
+
+def _history_refuse(since, why):
+    sys.exit(f"refused: the watch cursor's commit {since} {why}, so the changes after it cannot be replayed and nothing "
+             "was. Start a fresh baseline (poll with no cursor) and reconcile the board's current state.")
+
+
+def board_history_head():
+    """The board branch's head commit, read the way a board load reads it."""
+    _history_transport()
+    if WRITE == "git":
+        _check_git_clone()
+        _HISTORY_HEAD[0] = _git_fetch_head()
+    else:
+        _HISTORY_HEAD[0] = _api_head()
+    return _HISTORY_HEAD[0]
+
+
+def _git_history(since):
+    """(head, every commit of since..head oldest first in topological order, {commit: parents}, trees)."""
+    _check_git_clone()
+    head = _git_fetch_head()
+    rc, _, _ = git("cat-file", "-e", since + "^{commit}")
+    if rc:
+        _history_refuse(since, f"is not a commit this clone of {REPO} knows")
+    rc, _, err = git("merge-base", "--is-ancestor", since, head)
+    if rc == 1:
+        _history_refuse(since, f"is not an ancestor of {REPO}@{BRANCH} (the branch was force-pushed or rewritten)")
+    if rc:
+        sys.exit(f"cannot check the history of {REPO}@{BRANCH}: {err}")
+    rc, out, err = git("rev-list", "--topo-order", "--reverse", "--parents", f"{since}..{head}")
+    if rc:
+        sys.exit(f"cannot list the history of {REPO}@{BRANCH}: {err}")
+    order, parents = [], {}
+    for line in out.splitlines():
+        shas = line.split()
+        order.append(shas[0]); parents[shas[0]] = shas[1:]
+    base = os.path.dirname(PATH).strip("/")
+
+    def trees(commits):
+        p = subprocess.run(["git", "-C", ROOT, "cat-file", "--batch-check"], capture_output=True,
+                           input="".join(f"{c}:{base}\n" if base else f"{c}^{{tree}}\n" for c in commits).encode())
+        rows = p.stdout.decode(errors="replace").splitlines()
+        if p.returncode or len(rows) != len(commits):
+            sys.exit(f"cannot read the board folder's history in {REPO}@{BRANCH}")
+        return {c: "missing" if row.endswith(" missing") else row.split()[0] for c, row in zip(commits, rows)}
+    return head, order, parents, trees
+
+
+WATCH_HISTORY_CACHE_MAX = 20000   # API transport: commits kept in one history cache file at most
+WATCH_HISTORY_CACHE_FILES = 32    # history cache files kept per board repo at most
+WATCH_HISTORY_CACHE_DAYS = 14     # a history cache file unused this long is removed
+_SHA40 = re.compile(r"[0-9a-f]{40}")
+
+
+def _history_cache_file(project=""):
+    """One file per branch, board path and watched project, next to the blob cache: {v, base, head, parents, trees}.
+    Each watcher keeps its own backlog, so two watchers far apart never trim each other's. It holds only commit facts
+    that never change (a commit's parents, its board folder's tree), so it is valid for any later head that descends
+    from `head`."""
+    key = hashlib.sha256(f"{BRANCH}\0{PATH}\0{project}".encode()).hexdigest()[:16]
+    return os.path.join(CACHE_DIR, *REPO.split("/"), "history", key + ".json")
+
+
+def _history_cache_prune(keep):
+    """Remove history cache files unused for WATCH_HISTORY_CACHE_DAYS, then the oldest past WATCH_HISTORY_CACHE_FILES.
+    Only plain files named like a cache file; never a link or anything else."""
+    folder = os.path.dirname(keep)
+    try:
+        with os.scandir(folder) as entries:
+            files = [(e.stat(follow_symlinks=False).st_mtime, e.path) for e in entries
+                     if re.fullmatch(r"[0-9a-f]{16}\.json", e.name) and e.is_file(follow_symlinks=False) and e.path != keep]
+    except OSError:
+        return
+    files.sort(reverse=True)
+    cutoff = time.time() - WATCH_HISTORY_CACHE_DAYS * 86400
+    for n, (mtime, path) in enumerate(files):
+        if mtime < cutoff or n >= WATCH_HISTORY_CACHE_FILES - 1:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
+def _history_cache_read(project=""):
+    try:
+        with open(_history_cache_file(project), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    sha = lambda v: isinstance(v, str) and _SHA40.fullmatch(v) is not None
+    if not (isinstance(d, dict) and set(d) == {"v", "base", "head", "parents"} and d["v"] == 2 and sha(d["base"])
+            and sha(d["head"]) and isinstance(d["parents"], dict)):
+        return None
+    if not all(sha(k) and isinstance(v, list) and all(sha(p) for p in v) for k, v in d["parents"].items()):
+        return None
+    return d
+
+
+def _history_cache_text(d):
+    return json.dumps(d, separators=(",", ":"), sort_keys=True)
+
+
+def _history_cache_write(d, before=None, project=""):
+    """Save d, unless it is what the file already holds (`before`). Over the limit the file is removed, never left
+    stale: the next call compares from its own cursor."""
+    path = _history_cache_file(project)
+    if len(d["parents"]) > WATCH_HISTORY_CACHE_MAX:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        return
+    text = _history_cache_text(d)
+    if text == before:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
+        if not os.path.exists(ignore):
+            atomic_write(ignore, "# local board files for this project; never committed\n*\n")
+        atomic_write(path, text)
+    except OSError:
+        pass
+    _history_cache_prune(path)
+
+
+def _api_compare(base, head, refuse=True, count=False):
+    """{commit: parents} for base..head from the compare API. refuse: a base that is unknown or not an ancestor of
+    head stops loudly; otherwise (a cache's old head) None comes back instead. count: one small request that checks
+    the same and returns only how many commits base..head holds."""
+    parents, total = {}, 0
+    for page in range(1, WATCH_HISTORY_COMPARE + 1):
+        rc, out, err = gh(f"repos/{REPO}/compare/{base}...{head}?per_page={1 if count else 100}&page={page}")
+        if rc:
+            if re.search(r"\b(404|422)\b|Not Found|No commit found", err + out):
+                if not refuse:
+                    return None
+                _history_refuse(base, f"is not a commit GitHub knows in {REPO}")
+            sys.exit(f"cannot compare the history of {REPO}@{BRANCH}: {err.strip() or out.strip()}")
+        d = json.loads(out)
+        if d.get("status") not in ("ahead", "identical"):
+            if not refuse:
+                return None
+            _history_refuse(base, f"is not an ancestor of {REPO}@{BRANCH} (the branch was force-pushed or rewritten)")
+        total = int(d.get("total_commits") or 0)
+        if count:
+            return total
+        rows = d.get("commits") or []
+        for c in rows:
+            parents[c["sha"]] = [x.get("sha") for x in c.get("parents") or []]
+        if not rows or len(parents) >= total:
+            break
+    if len(parents) < total:
+        if not refuse:
+            return None
+        sys.exit(f"refused: the watch cursor's commit {base} is more than {100 * WATCH_HISTORY_COMPARE} commits behind "
+                 f"{REPO}@{BRANCH}, more than the API transport replays; nothing was replayed. Replay from a clone with "
+                 "BOARD_WRITE=git, or start a fresh baseline and reconcile the board's current state.")
+    return parents
+
+
+def _history_cache_range(cache, since):
+    """since..head from a cache holding base..head, or None when the cache cannot answer for `since`. It can when
+    `since` is the base or descends from it: then every commit of since..head is in the cache, and each ancestor of
+    `since` inside base..head is reached from `since` through the cache alone."""
+    known = cache["parents"]
+    if since != cache["base"]:
+        if since not in known:
+            return None
+        stack, seen, reached = [since], {since}, False
+        while stack and not reached:
+            for p in known[stack.pop()]:
+                if p == cache["base"]:
+                    reached = True
+                    break
+                if p in known and p not in seen:
+                    seen.add(p); stack.append(p)
+        if not reached:
+            return None
+    behind, stack = set(), [since] if since in known else []
+    while stack:   # since and its ancestors inside the cache: already replayed
+        c = stack.pop()
+        if c not in behind:
+            behind.add(c)
+            stack.extend(p for p in known[c] if p in known)
+    return {c: ps for c, ps in known.items() if c not in behind}
+
+
+def _history_cache_checked(parents, head, since):
+    """The cache is local data, so it only ever saves requests: its range must be exactly what GitHub says since..head
+    holds (one small compare, which also checks `since` is an ancestor of head and refuses loudly), and every commit
+    in it must be reached from head. Anything else falls back to a full compare."""
+    if _api_compare(since, head, count=True) != len(parents):
+        return None
+    reached, stack = set(), [head] if parents else []
+    while stack:
+        c = stack.pop()
+        if c in parents and c not in reached:
+            reached.add(c)
+            stack.extend(parents[c])
+    return parents if reached == set(parents) else None
+
+
+def _api_history(since, project=""):
+    """Like _git_history, from the GitHub API. Each watched project keeps its commit parents (which never change) on
+    disk, so a run of catch-up polls against one head reads the compare range once, a newer head reads only its new
+    commits, and two watchers never trim each other's backlog. Board folder trees are read once per run."""
+    head = _api_head()
+    cache, parents = _history_cache_read(project), None
+    before = _history_cache_text(cache) if cache else None
+    if cache and cache["head"] != head:
+        tail = _api_compare(cache["head"], head, refuse=False)   # only the commits the head gained
+        if tail is None or len(cache["parents"]) + len(tail) > WATCH_HISTORY_CACHE_MAX:
+            cache = None   # rewritten, too far or too big: rebuild from this cursor
+        else:
+            cache["parents"].update(tail); cache["head"] = head
+    if cache:
+        parents = _history_cache_range(cache, since)
+        if parents is not None:
+            parents = _history_cache_checked(parents, head, since)
+    if parents is None:   # the compare also checks `since` is an ancestor of head, and refuses loudly
+        parents = _api_compare(since, head)
+        cache = {"v": 2, "base": since, "head": head, "parents": dict(parents)}
+
+    def trees(commits):
+        return {c: _api_board_tree(c, missing_ok=True)[1] for c in commits}
+
+    def flush(cursor):   # keep only what is left after the new cursor; write once, and only when something changed
+        left = _history_cache_range(cache, cursor)
+        if left is not None:
+            cache["parents"], cache["base"] = left, cursor
+        _history_cache_write(cache, before, project)
+    trees.flush = flush
+    return head, list(parents), parents, trees
+
+
+def _history_units(head, parents):
+    """Split since..head into whole units along head's first-parent line, oldest first: [(Fi, commits of Fi^1..Fi in
+    topological order, Fi last)]. A plain commit is a unit of one; a merge brings its side branch with it."""
+    line, c = [], head
+    while c in parents:
+        line.append(c)
+        c = (parents[c] or [None])[0]
+    line.reverse()
+    units, done = [], set()
+    for tip in line:
+        unit, stack = [], [(tip, False)]
+        while stack:   # post-order over parents inside since..head: a commit's parents come before it
+            c, expanded = stack.pop()
+            if c in done:
+                continue
+            if expanded:
+                done.add(c); unit.append(c)
+                continue
+            stack.append((c, True))
+            stack.extend((p, False) for p in reversed(parents[c]) if p in parents and p not in done)
+        units.append((tip, unit))
+    return units
+
+
+def board_history(since, limit=None, project=""):
+    """Kit v134, read-only. Replays since..head in whole units along head's first-parent line: for each first-parent
+    commit Fi (oldest first), the commits of Fi^1..Fi in topological order (a merge with its side branch, or one plain
+    commit). {head, commits: [...], next, more}. Each item is {commit, parent, missing} for a commit whose board folder
+    differs from its own first parent's (`missing`: no board folder there, nothing to project), or {commit, gap} for a
+    merge whose side branch has more than WATCH_HISTORY_SCAN commits: those are not replayed one by one, and the gap is
+    reported, never silent; the merge itself is still diffed against its first parent.
+
+    `next` is the last Fi whose unit was replayed whole. Every commit replayed is then an ancestor of `next` (or `next`),
+    and every commit not yet replayed is in next..head, so the cursor only moves forward along head's first-parent line
+    and a page never ends inside a unit. A page takes whole units up to `limit` (WATCH_HISTORY_PAGE) replayed commits
+    and WATCH_HISTORY_SCAN examined ones; its first unit is always taken, so every call makes progress."""
+    _history_transport()
+    if not isinstance(since, str) or not re.fullmatch(r"[0-9a-f]{40}", since):
+        sys.exit("invalid watch cursor commit")
+    limit = WATCH_HISTORY_PAGE if limit is None else limit
+    head, _order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since, project)
+    _HISTORY_HEAD[0] = head
+    picked, last, examined, known = [], since, 0, {None: None}
+    for tip, unit in _history_units(head, parents):
+        if len(unit) > WATCH_HISTORY_SCAN:
+            if examined:
+                break   # an oversized unit starts its own call
+            todo = [tip]
+            items = [{"commit": tip, "gap": len(unit) - 1}]
+        else:
+            if examined + len(unit) > WATCH_HISTORY_SCAN:
+                break
+            todo, items = unit, []
+        want = [x for x in dict.fromkeys(todo + [(parents.get(c) or [None])[0] for c in todo]) if x is not None and x not in known]
+        if want:
+            known.update(trees(want))
+        for c in todo:
+            p = (parents.get(c) or [None])[0]
+            if known[c] != known[p]:
+                items.append({"commit": c, "parent": p, "missing": "missing" in (known[c], known[p])})
+        replayed = sum(1 for x in items if "gap" not in x)
+        if examined and len(picked) + replayed > limit:
+            break   # never split a unit; the next call starts with it
+        picked += items; examined += len(todo); last = tip
+    if hasattr(trees, "flush"):   # the API transport keeps the board trees it read for the next call
+        trees.flush(last)
+    return {"head": head, "commits": picked, "next": last, "more": last != head}
+
+
+def load_board_at(commit):
+    """Kit v134, read-only: the board as it was at one commit of its branch. Never registered for a save."""
+    _history_transport()
+    return _github_load_board(ref=commit)
 
 
 class HostedError(Exception):
