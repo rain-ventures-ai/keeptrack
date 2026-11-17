@@ -51,7 +51,8 @@ class PageSource(unittest.TestCase):
     def test_the_page_learns_the_username_and_keys_failures_by_board(self):
         page = read("board/board.js")
         self.assertIn("async function learnMe(token)", page)
-        self.assertIn("await learnMe(rec.token);", page)
+        self.assertIn("learnMe(rec.token);", page)
+        self.assertNotIn("await learnMe(", page)   # the first board load must never wait on GET /user
         self.assertIn("const failCounts = new Map()", page)
         self.assertNotRegex(page, r"\blet refreshFails\b")
 
