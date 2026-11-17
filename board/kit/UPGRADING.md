@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v130 (schema 4)
+
+`keeptrack.py settings-set` can set and clear `settings.github_app_signin`, the board's own Sign in with GitHub setting
+that the web page reads (`docs/help/github-signin.md`):
+
+- `settings-set --github-app-signin '{"client_id":"Iv23...","exchange_url":"https://keeptrack-signin.example.workers.dev"}'`
+- `settings-set --clear-github-app-signin`
+
+The CLI checks the same shape the page does (client_id 8 to 64 letters, digits, `.`, `_`, `-`; exchange_url https only, no
+login, query or fragment; the stored address is normalised to origin plus path with no trailing slash) and refuses anything
+else with one plain line. It cannot see the page's own allowed origins and client_id (the meta in `board/index.html`), so a
+value that passes here can still be ignored by a page that does not allow it; the page shows why in Settings. `settings`
+now prints the stored value. Hosted boards refuse both flags like every other legacy setting. No new card field, no
+migration, no `min_kit` change; an upgrade changes no card.
+
 ### v129 (schema 4)
 
 Two new host-only reasons for `work-research-note`, so a research request that cannot start tells the owner the right thing:

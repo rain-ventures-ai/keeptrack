@@ -252,18 +252,39 @@ test('callback: a page opened as .../board/index.html sends .../board/', () => {
   assert.equal(k.signinRedirectUri('http://127.0.0.1:5000/board/index.html'), 'http://127.0.0.1:5000/board/');
 });
 
-test('refresh failures: only GitHub\'s real refusals end the sign-in; 5xx, 429 and the Worker\'s own errors hold', () => {
-  for (const [status, data] of [[500, {}], [503, { error: 'bad_refresh_token' }], [502, { error: 'github_unreachable' }], [429, { error: 'rate_limited' }], [429, { error: 'bad_refresh_token' }],
-    [500, { error: 'not_configured' }], [400, { error: 'not_configured' }], [400, { error: 'redirect_not_allowed' }], [400, { error: 'bad_request' }], [400, { error: 'github_error' }],
-    [403, { error: 'origin_not_allowed' }], [415, { error: 'json_only' }], [400, null], [400, 'x'], [400, {}], [400, { error: 5 }]])
+test('refresh failures: only GitHub\'s real refusals end the sign-in; the Worker\'s configuration errors are their own kind; the rest hold', () => {
+  for (const [status, data] of [[500, {}], [503, { error: 'bad_refresh_token' }], [502, { error: 'github_unreachable' }], [429, { error: 'rate_limited' }], [429, { error: 'bad_refresh_token' }], [429, { error: 'not_configured' }],
+    [400, { error: 'github_error' }], [403, { error: 'origin_not_allowed' }], [415, { error: 'json_only' }], [400, null], [400, 'x'], [400, {}], [400, { error: 5 }]])
     assert.equal(k.refreshFailureKind(status, data), 'transient', status + ' ' + JSON.stringify(data));
+  for (const [status, data] of [[500, { error: 'not_configured' }], [400, { error: 'not_configured' }], [400, { error: 'redirect_not_allowed' }], [400, { error: 'bad_request' }]])
+    assert.equal(k.refreshFailureKind(status, data), 'config', status + ' ' + JSON.stringify(data));
   for (const error of ['bad_refresh_token', 'bad_verification_code', 'incorrect_client_credentials', 'redirect_uri_mismatch', 'unverified_user_email', 'access_denied', 'application_suspended'])
     assert.equal(k.refreshFailureKind(400, { error }), 'refused', error);
   // the page's list is a subset of the Worker's GitHub error list, so a Worker code can never be mistaken for a GitHub refusal
   const worker = fs.readFileSync(path.join(__dirname, '..', 'signin-worker', 'worker.js'), 'utf8');
   const listed = /new Set\(\[([^\]]*)\]\)/.exec(worker.slice(worker.indexOf('GITHUB_ERRORS')))[1].match(/'[a-z_]+'/g).map(x => x.slice(1, -1));
   for (const e of listed) assert.equal(k.refreshFailureKind(400, { error: e }), 'refused', 'Worker passes through ' + e);
-  assert.match(source, /refreshFailureKind\(res\.status, data\) === 'transient'/);
+  assert.match(source, /refreshFailureKind\(res\.status, data\)/);
+  assert.match(source, /if \(kind !== 'refused'\) return held\(kind\)/, 'only a refused kind reaches signinFailed (which drops the tokens)');
+});
+
+test('sign in again: a failing renewal is shown after a few Worker refusals in a row, or once the access token has expired', () => {
+  const due = o => k.signinPromptDue({ exp: NOW + 3_600_000, now: NOW, fails: 0, configFails: 0, ...o });
+  assert.equal(due({}), false, 'a healthy sign-in is never prompted');
+  assert.equal(due({ fails: 1, configFails: 1 }), false);
+  assert.equal(due({ fails: 2, configFails: 2 }), false, 'two refusals are not enough');
+  assert.equal(due({ fails: 3, configFails: 3 }), true, 'three Worker refusals in a row');
+  assert.equal(due({ fails: 50 }), false, 'network errors and 5xx alone never prompt while the token is valid');
+  assert.equal(due({ exp: NOW - 1, fails: 1 }), false, 'expired, but only one failure so far');
+  assert.equal(due({ exp: NOW - 1, fails: 2 }), true, 'expired and renewal keeps failing');
+  assert.equal(due({ exp: NOW, fails: 2 }), true, 'expiry is inclusive');
+  assert.equal(due({ exp: 0, fails: 9 }), false, 'a token that never expires is not "expired"');
+  assert.equal(k.SIGNIN_REFRESH_HOLD_MS, 60_000, 'transient failures keep retrying on the same hold');
+  // source: the prompt keeps every token (only signinFailed drops them), and a success clears it
+  const run = source.slice(source.indexOf('const held = kind'), source.indexOf('signinFailed(repo); return null;', source.indexOf('const held = kind')));
+  assert.ok(run.includes('signinPrompt(repo)') && !run.includes('dropApp') && !run.includes('signinFailed'), 'held failures prompt without dropping the sign-in');
+  assert.match(run, /signinAgain = ''; writeApp\(repo, next\)/);
+  assert.match(source, /again \? 'Sign in again'/);
 });
 
 test('origins: the default exchange origin comes first and the page and the policy cap at 8 the same way', () => {

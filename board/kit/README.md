@@ -103,6 +103,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // v43 optional "waiting_days": 7 = chase a wait with no nudge date this many days after it began (0 = off)
                                                  // v71 optional "inbox_lapse_days": 14 = a Review Inbox question unanswered this many days shows as lapsed (0 = never)
                                                  // v60 optional "backlog_research": { "enabled": true, "per_run": 2 } = the relay dispatcher researches bare Backlog cards (off unless enabled is true)
+                                                 // v130 optional "github_app_signin": { "client_id": "Iv23...", "exchange_url": "https://..." } = the web page offers Sign in with GitHub (set with settings-set --github-app-signin)
                                                  // v110 optional "card_contact_details": false = linking a person to a card copies only id, name and role, not email and phone (default true)
                                                  // v43 optional "min_kit": 43 = the oldest kit that understands every field on the cards (set by the first `wait`; only rises)
   "columns": [{ "id": "todo", "name": "To do" }, ...],
@@ -368,7 +369,7 @@ For bounded connector polling, kit v126 adds `watch-poll --project ID`: pass an 
 | Board members | `members`, `me`, `member-add USER [--name] [--email ..] [--timezone ..]`, `member-set USER [--name] [--email ..] [--remove-email ..] [--timezone ..]`, `member-rm USER [--unassign]` (never the upgrade owner or someone with an active claim) |
 | Agents | `agents`, `agent-add NAME`, `agent-rm NAME [--unassign]` (the names the web board uses in filters and assignment; never one with an active claim) |
 | Delete by mistake | `task-rm ID --yes` (a card made by mistake; a finished one should go done and archive), `person-rm REF --yes` (a CRM person added by mistake, not a Lost one). Both refuse without `--yes`; `task-rm` also refuses an active claim. `person-rm` clears the person as a task contact |
-| Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW]` |
+| Settings | `settings`, `settings-set [--title] [--stale-minutes N] [--stages "A,B"] [--rename-stage OLD=NEW] [--github-app-signin JSON \| --clear-github-app-signin]` (kit v130: the web board's Sign in with GitHub; see `docs/help/github-signin.md`) |
 
 Renames (`label-set --rename`, `client-rename`, `settings-set --rename-stage`) also rewrite matching items in `archive/<year>.json` in the same save, so `unarchive` never brings back an old name. Column names are renamed in place, so cards keep their column. The `board-admin` skill tells an agent when to ask first (renames, deletes, `--force`).
 

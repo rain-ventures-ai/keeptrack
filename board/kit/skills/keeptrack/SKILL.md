@@ -155,7 +155,7 @@ $B members | member-add USER --name ".." | member-rm USER [--unassign]
 $B me | member-set USER --email a@x --email b@y --remove-email old@x --timezone Europe/London   # identity
 $B agents | agent-add NAME | agent-rm NAME [--unassign]
 $B task-rm ID --yes | person-rm REF --yes      # delete a card or CRM person created by mistake (ask first)
-$B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW
+$B settings | settings-set --title ".." --stale-minutes N --rename-stage OLD=NEW | --github-app-signin JSON | --clear-github-app-signin
 ```
 
 Prioritise scoring is optional: `task-set '#12' --value 4 --effort M` (value 1–5;

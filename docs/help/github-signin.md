@@ -33,6 +33,15 @@ A board can also name its own app and Worker in `board/tasks.json`, under `setti
 "github_app_signin": { "client_id": "Iv23li...", "exchange_url": "https://keeptrack-signin.example.workers.dev" }
 ```
 
+Set or remove it from the command line (kit v130) instead of editing the file by hand:
+
+```
+python3 board/keeptrack.py settings-set --github-app-signin '{"client_id":"Iv23...","exchange_url":"https://keeptrack-signin.example.workers.dev"}'
+python3 board/keeptrack.py settings-set --clear-github-app-signin
+```
+
+The command checks the same shape as the page (a client id of 8 to 64 letters, digits, `.`, `_` or `-`; an `exchange_url` that is https with no login, query or fragment, saved without a trailing slash) and refuses anything else with a plain message. It cannot see the page's meta, so it does not check that the client id and origin are the ones the page allows; the page does that and says why in Settings if it ignores the value. `settings` shows what is stored. Hosted boards cannot use it.
+
 - Absent: the board offers sign-in as a choice if the page has the meta, otherwise the token only. Either way it starts on the token.
 - `client_id` must be the same app as the page's meta (a board cannot send people to some other GitHub App); `exchange_url` must be one of the page's listed origins. A board that names a different `client_id` is ignored with a note.
 - Present and valid: Settings, Connection shows **How this browser signs in to GitHub** with two choices, **Sign in with GitHub** and **Use a fine-grained token**. The choice is remembered per board in this browser. Which one a browser starts on: a choice saved for this board wins; otherwise a saved token keeps being used; otherwise the board starts on **Sign in with GitHub** only if its own settings contain a valid `github_app_signin`, and on the token in every other case (including a page meta with no board setting).

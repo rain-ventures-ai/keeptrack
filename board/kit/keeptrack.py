@@ -40,6 +40,7 @@ Board structure (labels, clients, members, settings) lives in tasks.json; change
   keeptrack.py agents | agent-add NAME | agent-rm NAME [--unassign]
   keeptrack.py task-rm ID --yes | person-rm REF --yes     # delete something created by mistake
   keeptrack.py settings | settings-set [--title ..] [--stale-minutes N] [--max-agent-claims N] [--stages "A,B,C" | --rename-stage OLD=NEW]
+                                       [--github-app-signin '{"client_id":"..","exchange_url":"https://.."}' | --clear-github-app-signin]
   keeptrack.py projects [--client ..] [--status active|done|paused] [-q ..] | project REF   # project REF: its goal, people, links, comments and OPEN tasks
   keeptrack.py project-comment REF "text" [--reply-to CID] | project-comments REF   # a project's comment stream (one-level replies)
   keeptrack.py project-add NAME --client .. [--north-star ..] | project-set REF [--name ..] [--client ..] [--north-star ..] [--status ..] | project-remove REF [--clear-project]
@@ -471,7 +472,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 129  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 130  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1639,6 +1640,7 @@ def hosted_dispatch(a):
     if a.cmd not in allowed:
         sys.exit(f"capability_unavailable: {a.cmd} is unavailable in hosted phase 0")
     if a.cmd == "settings-set" and (any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS)
+            or getattr(a, "clear_github_app_signin", False)
             or not (getattr(a, "docs_provider", None) is not None or getattr(a, "docs_root", None) is not None
                     or getattr(a, "clear_docs_home", False))):
         sys.exit("capability_unavailable: hosted settings-set is read-only; legacy settings flags are refused; use settings --json or web Settings → Board → Docs home")
@@ -9641,6 +9643,11 @@ def cmd_settings(a):
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
     print("card_contact_details: " + ("on (email and phone are copied into linked cards)" if card_contact_details(data)
                                        else "off (cards keep only the person id, name and role)"))
+    if "github_app_signin" in st:
+        try: g = parse_github_app_signin(json.dumps(st["github_app_signin"])); print(f"github_app_signin: client_id {g['client_id']}, exchange_url {g['exchange_url']}")
+        except ValueError as e: print(f"github_app_signin: INVALID stored setting ({e}); the web page ignores it")
+    else:
+        print("github_app_signin: not set")
     print(f"min_kit: {st.get('min_kit', '-')} (this keeptrack.py is kit v{KIT_VERSION})")
     print(f"upgrade owner: {st.get('kit_owner') or ((data.get('people') or [{}])[0].get('github', '-'))}")
     print("columns: " + ", ".join(f"{c.get('id')} ({c.get('name')})" for c in data.get("columns", [])))
@@ -9655,7 +9662,34 @@ DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home s
 
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
-                     "card_contact_details")
+                     "card_contact_details", "github_app_signin")
+
+SIGNIN_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,64}$")   # the same shape board.js parseSigninConfig accepts
+
+
+def parse_github_app_signin(text):
+    """--github-app-signin JSON -> {client_id, exchange_url} the way the web page's parseSigninConfig reads it (shape only:
+    the page's own allowed origins and client id are in board/index.html, which the CLI cannot see). ValueError: a plain refusal."""
+    try: raw = json.loads(text)
+    except (TypeError, ValueError): raise ValueError('--github-app-signin takes JSON like {"client_id":"...","exchange_url":"https://..."}')
+    if not isinstance(raw, dict) or set(raw) != {"client_id", "exchange_url"}:
+        raise ValueError("github_app_signin must be an object with exactly client_id and exchange_url")
+    cid, ex = raw["client_id"], raw["exchange_url"]
+    if not isinstance(cid, str) or not SIGNIN_CLIENT_ID_RE.match(cid):
+        raise ValueError("client_id is not a GitHub App client id (8 to 64 letters, digits, . _ -)")
+    if not isinstance(ex, str) or not ex or any(ord(c) <= 32 or ord(c) == 127 for c in ex):
+        raise ValueError("exchange_url must be a web address with no spaces")
+    try:
+        u = urllib.parse.urlsplit(ex); port = u.port
+    except ValueError:
+        raise ValueError("exchange_url is not a web address")
+    if u.scheme != "https" or not u.hostname:
+        raise ValueError("exchange_url must be https")
+    if u.username is not None or u.password is not None or "@" in u.netloc or u.query or u.fragment or "?" in ex or "#" in ex:
+        raise ValueError("exchange_url must have no login, query or fragment")
+    host = u.hostname.lower()
+    host = f"[{host}]" if ":" in host else host
+    return {"client_id": cid, "exchange_url": f"https://{host}{'' if port in (None, 443) else ':' + str(port)}{u.path.rstrip('/')}"}
 
 
 def docs_home_confirmation(data, home, clear):
@@ -9771,7 +9805,14 @@ def cmd_settings_set(a):
     if (provider is None) != (root is None) or (clear and provider is not None):
         sys.exit("use paired --docs-provider and --docs-root, or --clear-docs-home on its own")
     requested = provider is not None or root is not None or clear
-    if requested and any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS):
+    clear_signin = bool(getattr(a, "clear_github_app_signin", False))
+    signin = None
+    if getattr(a, "github_app_signin", None) is not None:
+        if clear_signin:
+            sys.exit("use --github-app-signin or --clear-github-app-signin, not both")
+        try: signin = parse_github_app_signin(a.github_app_signin)
+        except ValueError as e: sys.exit(str(e))
+    if requested and (clear_signin or any(getattr(a, key, None) is not None for key in DOCS_LEGACY_FLAGS)):
         sys.exit("docs-home-only: legacy settings flags require a separate command and are outside this destination read-back")
     if requested and BACKEND == "hosted" and not FILE:
         sys.exit(DOCS_HOSTED_READONLY)
@@ -9804,6 +9845,12 @@ def cmd_settings_set(a):
             if str(a.value).lower() == "false":
                 proposal_error("The Review Inbox is always on from kit v44; it cannot be turned off.")
             print("review_inbox.enabled: true (always on from kit v44; nothing to change)")
+        if signin is not None:
+            st["github_app_signin"] = dict(signin)
+            print(f"github_app_signin: client_id {signin['client_id']}, exchange_url {signin['exchange_url']}")
+            print("(the web page uses it only when its own meta names the same client_id and allows this origin; see docs/help/github-signin.md)")
+        elif clear_signin:
+            print("github_app_signin: " + ("cleared" if st.pop("github_app_signin", None) is not None else "was not set"))
         if a.title is not None:
             if not a.title.strip():
                 sys.exit("the title is empty")
@@ -9834,7 +9881,7 @@ def cmd_settings_set(a):
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root",
-                                                                  "card_contact_details")) or clear:
+                                                                  "card_contact_details", "github_app_signin")) or clear or clear_signin:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
@@ -14678,6 +14725,9 @@ def main():
     s.add_argument("setting", nargs="?"); s.add_argument("value", nargs="?")
     s.add_argument("--docs-provider", choices=DOCS_PROVIDERS); s.add_argument("--docs-root")
     s.add_argument("--clear-docs-home", action="store_true")
+    s.add_argument("--github-app-signin", dest="github_app_signin", metavar="JSON",
+                   help='offer Sign in with GitHub on the web board: \'{"client_id":"Iv23...","exchange_url":"https://...workers.dev"}\' (https only; the page must also allow it)')
+    s.add_argument("--clear-github-app-signin", dest="clear_github_app_signin", action="store_true", help="remove settings.github_app_signin")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
