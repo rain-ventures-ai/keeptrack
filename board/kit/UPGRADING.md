@@ -32,10 +32,17 @@ own commits; there is no new event store. No new card field, no migration, no `m
 
 - The cursor is one commit: base64url JSON `{"v":2,"board":...,"project":...,"commit":"<40-hex sha>"}`, no snapshot. No cursor
   gives a quiet baseline at the branch head (`baseline: true`).
-- With a cursor, each call replays at most 20 first-parent commits after it that changed the board folder, oldest first, and diffs
-  the same watch projection at each consecutive pair. A change made and undone between two polls gives both events. Each event
-  carries `commit` and a stable `id` (board, commit, card, kind, text), so a consumer can drop a repeat. Output is
-  `{events, cursor, baseline, more, semantics: "commit-replay"}`; `more: true` means poll again at once.
+- With a cursor, each call replays the commits after it (all of `cursor..head`, side branches included) in topological order,
+  oldest first, at most 20 that changed the board folder and at most 200 examined. Each commit is diffed against its own first
+  parent with the same watch projection, so every event is a real change on that commit, and a change made and undone between
+  two polls gives both events. Each event carries `commit` and a stable `id` (board, commit, card, kind, text, author and an
+  ordinal), so a consumer can drop a repeat. Output is `{events, cursor, baseline, more, semantics: "commit-replay"}`;
+  `more: true` means poll again at once.
+- Delivery is **at least once**: a merge commit is diffed against its first parent, so a side branch's change is reported at its
+  own commit and again at the merge (with a different `id`), and a page boundary inside a side branch can repeat a commit.
+  Nothing is skipped.
+- A commit that cannot be projected (over the 256-card or 128 KiB bound, or with no board folder) gives one `unreplayable` event
+  for that commit (`card: null`) and the replay moves on; reconcile the board when you see one.
 - A cursor commit that is not an ancestor of the branch head (a force-push or rewrite) or is unknown is refused, never silently
   re-baselined: start a fresh baseline and reconcile. A `--file` board has no history and is refused; hosted mode is unsupported.
   The API transport replays at most 5,000 commits behind; past that, use `BOARD_WRITE=git` or a fresh baseline.

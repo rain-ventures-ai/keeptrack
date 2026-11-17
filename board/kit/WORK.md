@@ -103,10 +103,15 @@ bounded request projection without activity/comment history.
 diffing two snapshots, so an intermediate change is never lost. Its cursor is one
 commit, `{"v":2,"board","project","commit"}` in base64url, with no snapshot; no
 cursor is a quiet baseline at the branch head. Each call verifies the commit is an
-ancestor of the head, then replays at most 20 later first-parent commits that
-changed the board folder, oldest first, with the same projection and bounds at
-each commit. Every event carries its `commit` and an `id` hashed from board,
-commit, card, kind and text, so a repeat can be dropped; a gap cannot happen.
+ancestor of the head, then replays every later commit (side branches included) in
+topological order, oldest first: at most 20 that changed the board folder and 200
+examined. Each is diffed against its own first parent with the same projection
+and bounds, so every event is a real change on that commit. Every event carries
+its `commit` and an `id` hashed from board, commit, card, kind, text, author and
+an ordinal. Delivery is at least once: a merge is diffed against its first parent,
+so a side branch's change comes again at the merge with another `id`; a gap cannot
+happen. A commit over the bounds or without the board folder gives one
+`unreplayable` event (`card: null`) and the replay moves on.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has

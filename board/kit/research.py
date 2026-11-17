@@ -801,8 +801,10 @@ def watch_poll_history(kt, args):
     """Kit v133 `watch-poll --history`: replay the board branch's commits instead of diffing two snapshots.
 
     The cursor is one commit, no snapshot. Each call replays at most kt.WATCH_HISTORY_PAGE commits that changed the
-    board folder, oldest first, and diffs the same projection at each consecutive pair, so a change made and undone
-    between polls gives both events. A cursor commit that is not an ancestor of the branch head is refused, never
+    board folder, oldest first in topological order, each diffed against its own first parent with the same
+    projection, so every event is a real change on its commit and a change made and undone between polls gives both
+    events. Delivery is at least once (a merge repeats its side branch's changes). A commit that cannot be projected
+    gives one `unreplayable` event instead of stalling the watcher. A cursor commit that is not an ancestor of the branch head is refused, never
     silently re-baselined. Read-only: neither a cursor nor an event grants anything.
     """
     cursor = _watch_cursor_input(kt)
@@ -832,18 +834,42 @@ def watch_poll_history(kt, args):
         fail("watch cursor belongs to another board, project or version")
     scope = {"v": 2, "board": board, "project": project}
     today = kt.board_today(data).isoformat()
-    previous = watch_project(kt, data, project, scope, today)
+    loaded, projected = {prior["commit"]: data}, {}
+
+    def project_at(commit):   # (projection, board) at one commit; a past commit is never registered for a save
+        if commit not in projected:
+            board_data = loaded.pop(commit, None) or kt.load_board_at(commit)
+            projected.clear()   # keep at most one: each commit is usually the next one's first parent
+            projected[commit] = (watch_project(kt, board_data, project, scope, today), board_data)
+        return projected[commit]
+
     events = []
-    for commit in page["commits"]:
-        data = kt.load_board_at(commit)
-        current = watch_project(kt, data, project, scope, today)
-        for event in kt.watch_events(previous, current, data, me=""):
+    for step in page["commits"]:
+        commit, parent = step["commit"], step["parent"]
+        found, problem = [], None
+        if step["missing"]:
+            problem = "the board folder is missing at this commit or its first parent"
+        else:
+            try:
+                previous = project_at(parent)[0] if parent else {"cards": {}, "proposals": {}}
+                current, now_data = project_at(commit)
+                found = kt.watch_events(previous, current, now_data, me="")
+            except Refused as refusal:   # a bound refusal, never a transport failure: report it and move on
+                projected.clear()
+                problem = str(refusal).removeprefix("research: ")
+        if problem:
+            # One loud event instead of a watcher stuck on this commit forever; the consumer reconciles the board.
+            found = [{"board": board, "kind": "unreplayable", "text": f"cannot replay commit {commit}: {problem}; "
+                      "reconcile the board", "by": "", "at": kt.now(), "card": None}]
+        seen = {}
+        for event in found:
             card = event.get("card") or {}
+            key = (card.get("id"), event.get("kind"))
+            seen[key] = seen.get(key, -1) + 1   # the ordinal in (commit, card, kind) breaks any remaining tie
             event["commit"] = commit
-            event["id"] = hashlib.sha256(json.dumps([board, commit, card.get("id"), event.get("kind"), event.get("text")],
-                                                    ensure_ascii=False).encode()).hexdigest()[:32]
+            event["id"] = hashlib.sha256(json.dumps([board, commit, card.get("id"), event.get("kind"), event.get("text"),
+                                                     event.get("by"), seen[key]], ensure_ascii=False).encode()).hexdigest()[:32]
             events.append(event)
-        previous = current
     token = {"v": 2, "board": board, "project": project, "commit": page["next"]}
     print(json.dumps({"events": events, "cursor": _history_token(token), "baseline": False, "more": page["more"],
                       "semantics": "commit-replay"}, ensure_ascii=False))

@@ -250,11 +250,63 @@ class HistoryGit(GitBoard):
         with self.assertRaisesRegex(SystemExit, "another board, project or version"):
             self.poll(cursor, history=False)
 
-    def test_bounds_hold_at_every_replayed_commit(self):
+    def test_a_commit_over_the_bounds_is_one_loud_event_and_the_replay_moves_on(self):
         cursor = self.poll()["cursor"]
-        self.change(lambda d: d["tasks"].extend(card(f"t_card{n:04d}", 10 + n, "Card") for n in range(257)))
-        with self.assertRaisesRegex(SystemExit, "bound"):
-            self.poll(cursor)
+        poison = self.change(lambda d: d["tasks"].extend(card(f"t_card{n:04d}", 10 + n, "Card") for n in range(257)), push=False)
+        fixed = self.change(lambda d: d.update(tasks=d["tasks"][:2]), push=False)
+        moved = self.change(lambda d: self.alpha(d).update(column="todo"))
+        result = self.poll(cursor)
+        self.assertEqual([("unreplayable", poison), ("unreplayable", fixed), ("column", moved)],
+                         [(e["kind"], e["commit"]) for e in result["events"]])
+        self.assertIn("bound", result["events"][0]["text"]); self.assertIsNone(result["events"][0]["card"])
+        self.assertEqual((moved, False), (decode(result["cursor"])["commit"], result["more"]))
+
+    def test_a_merge_never_invents_a_reverse_event(self):
+        base = self.head()
+        there = self.change(lambda d: self.alpha(d).update(column="todo"))   # H1: the card is in todo
+        cursor = self.poll()["cursor"]
+        self.run_git(self.writer, "checkout", "-q", "-b", "side", base)       # L: an older base, outside the board
+        (Path(self.writer) / "README.md").write_text("side\n")
+        self.run_git(self.writer, "commit", "-qam", "L")
+        self.run_git(self.writer, "merge", "-q", "--no-ff", "-m", "M", "main")  # M = merge(L, H1), H1 the second parent
+        merge = self.run_git(self.writer, "rev-parse", "HEAD")
+        self.run_git(self.writer, "push", "-q", "origin", "side:main")
+        events = self.poll(cursor)["events"]
+        # M differs from its first parent L (backlog there): one real change on M, never "todo -> backlog".
+        self.assertEqual([("backlog -> todo", merge)], [(e["text"], e["commit"]) for e in events])
+        self.assertNotEqual(there, merge)
+
+    def test_side_branch_changes_are_replayed_not_lost_in_a_merge(self):
+        cursor = self.poll()["cursor"]
+        self.run_git(self.writer, "checkout", "-q", "-b", "side")
+        there = self.change(lambda d: self.alpha(d).update(column="todo"), push=False)
+        back = self.change(lambda d: self.alpha(d).update(column="backlog"), push=False)
+        self.run_git(self.writer, "checkout", "-q", "main")
+        self.run_git(self.writer, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        self.push()
+        events = self.poll(cursor)["events"]
+        self.assertEqual([("backlog -> todo", there), ("todo -> backlog", back)], [(e["text"], e["commit"]) for e in events])
+
+    def test_two_comments_with_one_long_prefix_get_different_ids(self):
+        cursor = self.poll()["cursor"]
+        prefix = "x" * 130
+        self.change(lambda d: self.alpha(d)["comments"].extend([{"id": "c_one", "by": "owner", "text": prefix + " one"},
+                                                                {"id": "c_two", "by": "owner", "text": prefix + " two"}]))
+        events = self.poll(cursor)["events"]
+        self.assertEqual(["comment", "comment"], [e["kind"] for e in events])
+        self.assertEqual(events[0]["text"], events[1]["text"])   # the shown text is cut to 120 characters
+        self.assertNotEqual(events[0]["id"], events[1]["id"])
+
+    def test_the_scan_limit_pages_without_skipping(self):
+        cursor = self.poll()["cursor"]
+        for _ in range(kt.WATCH_HISTORY_SCAN + 1):
+            self.run_git(self.writer, "commit", "-q", "--allow-empty", "-m", "empty")
+        moved = self.change(lambda d: self.alpha(d).update(column="todo"))
+        first = self.poll(cursor)
+        self.assertEqual(([], True), (first["events"], first["more"]))
+        second = self.poll(first["cursor"])
+        self.assertEqual([("column", moved)], [(e["kind"], e["commit"]) for e in second["events"]])
+        self.assertFalse(second["more"])
 
     def test_a_past_commit_load_is_never_registered_for_a_save(self):
         before = dict(kt._BOARD_STATES)
@@ -303,6 +355,29 @@ class HistoryApi(GitBoard):
         token = {**decode(cursor), "commit": "2" * 40}
         with self.assertRaisesRegex(SystemExit, "not a commit.*fresh baseline"):
             self.poll(base64.urlsafe_b64encode(json.dumps(token).encode()).decode())
+
+    def test_side_branch_changes_are_replayed_in_topological_order(self):
+        cursor = self.poll()["cursor"]
+        self.run_git(self.writer, "checkout", "-q", "-b", "side")
+        there = self.change(lambda d: self.alpha(d).update(column="todo"), push=False)
+        back = self.change(lambda d: self.alpha(d).update(column="backlog"), push=False)
+        self.run_git(self.writer, "checkout", "-q", "main")
+        self.run_git(self.writer, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+        self.push()
+        events = self.poll(cursor)["events"]
+        self.assertEqual([("backlog -> todo", there), ("todo -> backlog", back)], [(e["text"], e["commit"]) for e in events])
+
+    def test_a_commit_without_the_board_folder_is_one_loud_event(self):
+        cursor = self.poll()["cursor"]
+        self.run_git(self.writer, "rm", "-q", "-r", "board")
+        self.run_git(self.writer, "commit", "-qm", "no board")
+        gone = self.run_git(self.writer, "rev-parse", "HEAD")
+        (Path(self.writer) / "board").mkdir()
+        restored = self.save(board(), "board back")
+        moved = self.change(lambda d: self.alpha(d).update(column="todo"))
+        events = self.poll(cursor)["events"]
+        self.assertEqual([("unreplayable", gone), ("unreplayable", restored), ("column", moved)],
+                         [(e["kind"], e["commit"]) for e in events])
 
     def test_a_past_commit_never_prunes_the_blob_cache(self):
         old = self.head()

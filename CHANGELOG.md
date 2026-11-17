@@ -13,8 +13,10 @@ exchange. See `docs/help/github-signin.md`.
 
 Kit v133: `watch-poll --project ID --history` replays the board branch's commits so a watcher never misses a change between
 polls; snapshot mode (no `--history`) is unchanged. The cursor is one commit (`{"v":2,"board","project","commit"}`, base64url).
-Each call replays at most 20 commits that changed the board folder, oldest first, diffing the same watch projection at each
-pair, so a change and its revert between polls give two events, each tagged with its `commit` and a stable `id`. Output adds
+Each call replays every commit after it (side branches included) in topological order, at most 20 that changed the board
+folder, each diffed against its own first parent with the same watch projection, so a change and its revert between polls
+give two events, each tagged with its `commit` and a stable `id`. Delivery is at least once (a merge repeats its side branch's
+changes); nothing is skipped. A commit over the bounds gives one `unreplayable` event and the replay moves on. Output adds
 `more` and `semantics: "commit-replay"`. A non-ancestor (force-pushed or rewritten) or unknown cursor commit is refused, never
 re-baselined; a `--file` board is refused. Clock-only states are not history events. `_git_snapshot`, `_api_snapshot` and
 `_github_load_board` take an optional `ref`; with none, behaviour is unchanged. No new event store, no schema change.

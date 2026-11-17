@@ -1266,8 +1266,9 @@ def _api_head():
     return json.loads(out)["object"]["sha"]
 
 
-def _api_board_tree(head):
-    """(root tree, board folder tree) of one commit."""
+def _api_board_tree(head, missing_ok=False):
+    """(root tree, board folder tree) of one commit. missing_ok (kit v133 history): a commit without the board folder
+    gives "missing" instead of stopping."""
     rc, out, err = gh(f"repos/{REPO}/git/commits/{head}")
     if rc:
         sys.exit(f"cannot read {REPO}@{BRANCH}: {err.strip() or out.strip()}")
@@ -1281,6 +1282,8 @@ def _api_board_tree(head):
             sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
         sha = next((x["sha"] for x in json.loads(out).get("tree", []) if x.get("path") == part and x.get("type") == "tree"), None)
         if not sha:
+            if missing_ok:
+                return root_tree, "missing"
             sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
     return root_tree, sha
 
@@ -1391,11 +1394,15 @@ def _github_load_board(ref=None):
 
 
 # ---- board history for `watch-poll --history` (kit v133) -------------------------------------------------------------
-# A read-only replay of the board branch's own commits; there is no second event store. The cursor commit must be an
-# ancestor of the branch head. Any other commit (the branch was force-pushed or rewritten, or the commit is unknown) is
-# refused loudly, never silently re-baselined: a watcher must never believe nothing happened when it cannot know.
+# A read-only replay of the board branch's own commits; there is no second event store. Every commit after the cursor
+# (all of `since..head`, side branches included) is replayed in topological order, oldest first, each diffed against
+# its own first parent, so every event is a real change on some commit and none is skipped. A merge commit is diffed
+# against its first parent too, so a side branch's change can be reported twice (at its commit and at the merge, with
+# different ids): at least once, never missed. The cursor commit must be an ancestor of the branch head. Any other
+# commit (the branch was force-pushed or rewritten, or the commit is unknown) is refused loudly, never silently
+# re-baselined: a watcher must never believe nothing happened when it cannot know.
 WATCH_HISTORY_PAGE = 20      # board commits replayed per call at most
-WATCH_HISTORY_SCAN = 200     # first-parent commits examined per call at most
+WATCH_HISTORY_SCAN = 200     # commits examined per call at most
 WATCH_HISTORY_COMPARE = 50   # API transport: compare pages of 100 commits read per call at most
 
 
@@ -1422,6 +1429,7 @@ def board_history_head():
 
 
 def _git_history(since):
+    """(head, every commit of since..head oldest first in topological order, {commit: parents}, trees)."""
     _check_git_clone()
     head = _git_fetch_head()
     rc, _, _ = git("cat-file", "-e", since + "^{commit}")
@@ -1432,9 +1440,13 @@ def _git_history(since):
         _history_refuse(since, f"is not an ancestor of {REPO}@{BRANCH} (the branch was force-pushed or rewritten)")
     if rc:
         sys.exit(f"cannot check the history of {REPO}@{BRANCH}: {err}")
-    rc, out, err = git("rev-list", "--first-parent", "--reverse", f"{since}..{head}")
+    rc, out, err = git("rev-list", "--topo-order", "--reverse", "--parents", f"{since}..{head}")
     if rc:
         sys.exit(f"cannot list the history of {REPO}@{BRANCH}: {err}")
+    order, parents = [], {}
+    for line in out.splitlines():
+        shas = line.split()
+        order.append(shas[0]); parents[shas[0]] = shas[1:]
     base = os.path.dirname(PATH).strip("/")
 
     def trees(commits):
@@ -1444,12 +1456,12 @@ def _git_history(since):
         if p.returncode or len(rows) != len(commits):
             sys.exit(f"cannot read the board folder's history in {REPO}@{BRANCH}")
         return {c: "missing" if row.endswith(" missing") else row.split()[0] for c, row in zip(commits, rows)}
-    return head, out.split(), trees
+    return head, order, parents, trees
 
 
 def _api_history(since):
     head = _api_head()
-    parents, total = {}, 0
+    parents, listed, total = {}, [], 0
     for page in range(1, WATCH_HISTORY_COMPARE + 1):
         rc, out, err = gh(f"repos/{REPO}/compare/{since}...{head}?per_page=100&page={page}")
         if rc:
@@ -1462,6 +1474,8 @@ def _api_history(since):
         total = int(d.get("total_commits") or 0)
         rows = d.get("commits") or []
         for c in rows:
+            if c["sha"] not in parents:
+                listed.append(c["sha"])
             parents[c["sha"]] = [x.get("sha") for x in c.get("parents") or []]
         if not rows or len(parents) >= total:
             break
@@ -1469,35 +1483,51 @@ def _api_history(since):
         sys.exit(f"refused: the watch cursor's commit {since} is more than {100 * WATCH_HISTORY_COMPARE} commits behind "
                  f"{REPO}@{BRANCH}, more than the API transport replays; nothing was replayed. Replay from a clone with "
                  "BOARD_WRITE=git, or start a fresh baseline and reconcile the board's current state.")
-    chain, c = [], head
-    while c in parents:   # the first-parent chain from head back to the cursor's history
-        chain.append(c)
-        c = (parents[c] or [None])[0]
-    chain.reverse()
+    # Topological order, oldest first: a commit's parents in the set always come before it; head comes last.
+    order, done = [], set()
+    for start in listed:
+        stack = [(start, False)]
+        while stack:
+            c, expanded = stack.pop()
+            if c in done:
+                continue
+            if expanded:
+                done.add(c); order.append(c)
+                continue
+            stack.append((c, True))
+            stack.extend((p, False) for p in reversed(parents[c]) if p in parents and p not in done)
 
     def trees(commits):
-        return {c: _api_board_tree(c)[1] for c in commits}
-    return head, chain, trees
+        return {c: _api_board_tree(c, missing_ok=True)[1] for c in commits}
+    return head, order, parents, trees
 
 
 def board_history(since, limit=WATCH_HISTORY_PAGE):
-    """Kit v133, read-only. The first-parent commits of the board branch after `since`, oldest first, whose board folder
-    differs from the commit before: {head, commits (at most `limit`), next, more}. `next` is the last commit examined
-    (head when nothing is left); a commit that leaves the board folder as it was is passed over, never replayed."""
+    """Kit v133, read-only. The commits of since..head, oldest first in topological order, whose board folder differs
+    from their own first parent's: {head, commits: [{commit, parent, missing}] (at most `limit`), next, more}.
+
+    `next` is the last commit examined (head when nothing is left). Every commit after it in the order is not one of its
+    ancestors, so `next..head` still holds every commit not yet examined: a page boundary never skips one (it can repeat
+    a side-branch commit examined before `next`). A commit that leaves the board folder as its first parent had it is
+    passed over. `missing`: the board folder is absent at the commit or its parent, so there is nothing to project."""
     _history_transport()
     if not isinstance(since, str) or not re.fullmatch(r"[0-9a-f]{40}", since):
         sys.exit("invalid watch cursor commit")
-    head, chain, trees = _git_history(since) if WRITE == "git" else _api_history(since)
-    scan = chain[:WATCH_HISTORY_SCAN]
-    prev, last, picked, known = trees([since])[since], since, [], {}
+    head, order, parents, trees = _git_history(since) if WRITE == "git" else _api_history(since)
+    scan = order[:WATCH_HISTORY_SCAN]
+    first = {c: (parents.get(c) or [None])[0] for c in scan}
+    last, picked, known = since, [], {None: None}
     for i, c in enumerate(scan):
-        if c not in known:   # in small batches: the API transport reads two objects per commit
-            known.update(trees(scan[i:i + limit + 5]))
-        if known[c] != prev:
+        if c not in known or first[c] not in known:   # in small batches: the API transport reads two objects per commit
+            batch = scan[i:i + limit + 5]
+            want = [x for x in dict.fromkeys(batch + [first[x] for x in batch]) if x is not None and x not in known]
+            known.update(trees(want))
+        tree, ptree = known[c], known[first[c]]
+        if tree != ptree:
             if len(picked) >= limit:
                 break
-            picked.append(c)
-        prev, last = known[c], c
+            picked.append({"commit": c, "parent": first[c], "missing": "missing" in (tree, ptree)})
+        last = c
     return {"head": head, "commits": picked, "next": last, "more": last != head}
 
 
