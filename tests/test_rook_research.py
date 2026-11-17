@@ -622,6 +622,8 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual((co["current"]["next_actor"], co["prelaunch_note"]), ("owner", {"reason": "needs_information", "label_added": True}))
         self.assertEqual(task["coordination"]["runs"], [])
         self.assertEqual([c["text"] for c in task["comments"]], [self.research.NEEDS_INFORMATION_QUESTION])
+        # The answer written next to the blank ("Dates: 3 to 10 June") does not read as research, so the question asks for a sentence.
+        self.assertIn("sentence about what to research", self.research.NEEDS_INFORMATION_QUESTION)
 
     def test_a_repeated_needs_information_note_adds_no_second_question_or_label(self):
         # The first note withdraws the grant, so a replay is refused by the same check as every other note.
@@ -630,6 +632,29 @@ class ResearchTests(unittest.TestCase):
             self.invoke("research-note", reason="needs_information")
         task = self.read()["tasks"][0]
         self.assertEqual(len(task["comments"]), 1); self.assertEqual(task["labels"].count("needs-human"), 1)
+
+    def test_handing_the_card_to_rook_again_records_the_label_removal_so_a_second_hold_is_a_new_occurrence(self):
+        # Invariant: every hold that needs the owner raises its own owner event. The relay's event id is built from the
+        # time of the last "labels:" history entry that added needs-human, so taking the label off must leave an entry.
+        self.ready(); self.admit(); self.invoke("research-note", reason="needs_information")
+        data = self.read()
+        task = data["tasks"][0]; task["column"] = "backlog"; task["claim"] = None
+        self.write(data)
+        before = [h["text"] for h in self.read()["tasks"][0]["history"]]
+        self.assertIn("labels: needs-human", before)
+        # The owner answers and approves again: a fresh approval, answer and host receipt.
+        data = self.read()
+        second = self.research.proposal_input(data, data["tasks"][0])
+        second.update(id="r_abcdef5678", status="answered", created=kt.now(), by="owner",
+                      decision={"action": "answer", "id": "a_0987654321", "by": "owner", "at": kt.now(), "answer": {"approved": True}})
+        data["proposals"].append(second); self.write(data)
+        self.prop_id, self.answer_id = "r_abcdef5678", "a_0987654321"
+        self.admission = str(Path(self.tmp.name) / "admission-2.json")
+        self.admit()
+        task = self.read()["tasks"][0]
+        self.assertNotIn("needs-human", task["labels"])
+        history = [h["text"] for h in task["history"]]
+        self.assertEqual([t for t in history if t.startswith("labels:")], ["labels: needs-human", "labels: none"])
 
     def test_awaiting_approval_holds_for_the_owner_without_a_comment(self):
         self.ready(); self.admit(); self.invoke("research-note", reason="awaiting_approval")

@@ -38,7 +38,8 @@ Two new host-only reasons for `work-research-note`, so a research request that c
 
 Both behave like `request_rejected`: the note cannot replace an active or unresolved attempt, and the prelaunch note is
 recorded as `{reason, label_added}`. No new card field, no migration; an upgrade changes no card. A host that does not send
-the new reasons behaves as before.
+the new reasons behaves as before. When the owner hands the card to Rook again, `work-research-admit` removes the
+`needs-human` label and writes the usual `labels: ...` history line, so a later hold is a new occurrence and reaches the owner.
 
 ### v128 (schema 4)
 

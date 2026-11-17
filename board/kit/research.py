@@ -28,7 +28,8 @@ NOTE_REASONS = ("source_unavailable", "source_rejected", "admission_expired", "h
                 "needs_information", "awaiting_approval")
 OWNER_NOTE_REASONS = frozenset({"source_rejected", "admission_expired", "request_rejected", "needs_information", "awaiting_approval"})
 NEEDS_INFORMATION_QUESTION = ("Rook needs one more detail before it can start: this request has a blank or an open question "
-                              "(for example TBD). Add it to the card, then hand it to Rook again.")
+                              "(for example TBD). Replace it with the detail, written into a sentence about what to research "
+                              "(for example \"Compare hotels for 3 to 10 June\"), then hand it to Rook again.")
 HASH = re.compile(r"sha256:[a-f0-9]{64}\Z")
 PUBLIC_POLICY_FIELDS = {"v", "enabled", "board", "owner", "projects", "profile", "policy_digest", "approval_ttl"}
 ACTION_BINDINGS = {"board", "owner", "project", "task_id", "approval_id", "answer_id", "content_hash", "policy_digest"}
@@ -526,6 +527,8 @@ def admit(kt, work, args):
         previous_note = (co.get("research") or {}).get("prelaunch_note") or {}
         if previous_note.get("label_added") and "needs-human" in card.get("labels", []):
             card["labels"].remove("needs-human")
+            # Same history line task-set writes: a later hold is then a new occurrence with its own owner event id.
+            kt.hist(card, "labels: " + (", ".join(card["labels"]) or "none"))
         co["executor"] = EXECUTOR
         co["research"] = {"v": 1, "admission": {"id": "ra_" + secrets.token_hex(12), "active": True,
             "approval_id": args.approval, "answer_id": args.answer, "content_hash": content_hash,
