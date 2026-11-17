@@ -511,7 +511,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 131;
+  const PAGE_KIT = 132;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -1685,7 +1685,7 @@ if (typeof window !== 'undefined') (() => {
     const P = byId(pre), who = cfg().me || 'someone';
     post.tasks.forEach(t => {
       const p = P.get(t.id), add = text => { t.history.push({ at: nowIso(), by: who, text }); if (t.history.length > 200) t.history.splice(0, t.history.length - 200); };
-      if (!p) { add('created'); return; }
+      if (!p) { add('created'); if ((t.labels || []).length) add('labels: ' + t.labels.join(', ')); return; }   // a card made with labels: same line as keeptrack.py hist_labels
       if (p.column !== t.column) add(`moved ${colName(p.column)} → ${colName(t.column)}`);
       if (p.value !== t.value) add('value: ' + (t.value ?? 'not scored'));
       if (p.effort !== t.effort) add('effort: ' + (t.effort || 'not estimated'));

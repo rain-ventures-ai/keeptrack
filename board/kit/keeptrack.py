@@ -472,7 +472,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 131  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 132  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2398,6 +2398,12 @@ def who_am_i(t=None):
     return f"{agent}@{user}" if agent and user else (agent or user or "cli")
 
 
+def hist_labels(t, who=None):
+    """Write the "labels:" history line carrying a card's full label list. Invariant: every change to a card's
+    label set leaves one of these, so a reader can prove who placed a label from history alone."""
+    hist(t, "labels: " + (", ".join(t.get("labels") or []) or "none"), who)
+
+
 def hist(t, text, who=None):
     h = t.setdefault("history", [])
     h.append({"at": now(), "by": who or who_am_i(t), "text": text})
@@ -2960,7 +2966,7 @@ def cmd_research_lock(a):
                      "assigned to someone else, claimed, waiting, or labelled " + ", ".join(RESEARCH_SKIP_LABELS) + ")")
         ensure_labels(data, ["researching"])
         t["labels"] = list(t.get("labels") or []) + ["researching"]
-        t["updated"] = now(); hist(t, "backlog research: locked (researching)")
+        t["updated"] = now(); hist(t, "backlog research: locked (researching)"); hist_labels(t)
         print(f"#{t.get('num')} locked for backlog research (label researching)")
     mutate(fn, f"Backlog research lock: {a.id}")
 
@@ -4388,6 +4394,8 @@ def cmd_todo_move(a):
             o["rank"] = append_rank(ranks)
         append_priority_rank(data, o)
         hist(o, f"created: split from {t['id']}, its to-do {n}")
+        if o["labels"]:
+            hist_labels(o)
         data["tasks"].append(o); assign_nums(data); new = o.get("num")
         link_follow_up(t, o)
         d["text"] = f"Moved to #{new} ({o['id']}): {text}"
@@ -5615,6 +5623,8 @@ def cmd_add(a):
             t["rank"] = append_rank(ranks)
         append_priority_rank(data, t)
         hist(t, "created")
+        if t["labels"]:
+            hist_labels(t)
         if asked:
             set_asked(data, t, asked[0], asked[1])
         add_links(t, links)
@@ -5898,9 +5908,12 @@ def cmd_merge_card(a):
             sys.exit(f"refused: #{s.get('num')} is waiting on {waiting_text(open_waiting(s))}; unwait it first")
         if relation(d, sid) and relation(d, sid).get("status") == "merged":
             return   # a retry after the merge saved: only the archive is left
+        before = list(d.get("labels") or [])
         merge_card_into(s, d)
         set_relation(s, d, "duplicate", "merged", into=d["id"])
         hist(d, f"merged in #{s.get('num')} ({s['id']})"); hist(s, f"merged into #{d.get('num')} ({d['id']})")
+        if list(d.get("labels") or []) != before:
+            hist_labels(d)
     mutate(fn, f"Merge card: {a.src} into {a.into}")
     cmd_archive(argparse.Namespace(ref=sid, done_days=None, lost_days=None, keep_history=None, dry_run=False))
     print(f"merged {sid} into {did}; {sid} is archived (keeptrack.py unarchive {sid} brings it back)")
@@ -6101,6 +6114,8 @@ def cmd_kit_check(a):
             if data.get("layout") == "split":
                 t["rank"] = append_rank(ranks)
             hist(t, "created by kit-check")
+            if t["labels"]:
+                hist_labels(t)
             data["tasks"].append(t); assign_nums(data); tid = t["id"]
             _MUT["after"].append(lambda d: print(f"added #{num_of(d, tid)} for @{owner or '?'}: {title}"))   # the saved #number
         mutate(fn, f"Add task: Upgrade board tools to kit v{want}")
@@ -9017,13 +9032,13 @@ def cmd_label_set(a):
             for t in data.get("tasks", []):
                 if old in t.get("labels", []):
                     t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
-                    hist(t, f"label {old} renamed to {new}"); t["updated"] = now(); n += 1
+                    hist_labels(t); hist(t, f"label {old} renamed to {new}"); t["updated"] = now(); n += 1
             def edit(cur):
                 k = 0
                 for t in cur.get("tasks", []):
                     if old in t.get("labels", []):
                         t["labels"] = list(dict.fromkeys(new if x == old else x for x in t["labels"]))
-                        hist(t, f"label {old} renamed to {new}"); k += 1
+                        hist_labels(t); hist(t, f"label {old} renamed to {new}"); k += 1
                 return k
             arch = rewrite_archives(data, edit)
             print(f"renamed label {old} -> {new} on {n} cards" + (f" and {arch} archived" if arch else ""))
@@ -9041,7 +9056,7 @@ def cmd_label_rm(a):
             sys.exit(f"{len(used)} card(s) carry '{name}' (" + ", ".join(f"#{t.get('num', t['id'])}" for t in used[:10])
                      + "); use --force to take it off them")
         for t in used:
-            t["labels"] = [x for x in t["labels"] if x != name]; hist(t, f"label {name} removed (label deleted)"); t["updated"] = now()
+            t["labels"] = [x for x in t["labels"] if x != name]; hist_labels(t); hist(t, f"label {name} removed (label deleted)"); t["updated"] = now()
         data["labels"] = [x for x in data["labels"] if x is not lab]
         print(f"removed label {name}" + (f" from {len(used)} cards" if used else ""))
     mutate(fn, f"Remove label: {a.name}")
@@ -10295,7 +10310,10 @@ def apply_staging(data, st, label):
             ranks = [y.get("rank") for y in tasks if y.get("column") == x["column"] and valid_rank(y.get("rank"))]
             x["rank"] = append_rank(ranks)
         append_priority_rank(data, x)
-        hist(x, f"imported ({_s(t.get('evidence')) or label})", by); tasks.append(x); add_client(client)
+        hist(x, f"imported ({_s(t.get('evidence')) or label})", by)
+        if x["labels"]:
+            hist_labels(x, by)
+        tasks.append(x); add_client(client)
         say(f"+ task     {clean(title, 120)}{' [' + clean(client, 80) + ']' if client else ''}"); out["added"] += 1
     return out
 
@@ -11368,6 +11386,8 @@ def inbound_card(data, item, plan):
     task["rank"] = append_rank(ranks)
     append_priority_rank(data, task)
     hist(task, mark)
+    if task["labels"]:
+        hist_labels(task)
     data.setdefault("tasks", []).append(task); assign_nums(data)
     marks = mark_similar(data, task)
     _MUT["after"].append(lambda d: print(f"  added #{num_of(d, tid)} ({tid})" + link_note(num_of(d, tid), tid)))
@@ -12039,6 +12059,8 @@ def _new_task(data, proposal, change):
     if "priority_rank" not in task:
         append_priority_rank(data, task)
     hist(task, f"created from proposal {proposal['id']}")
+    if task["labels"]:
+        hist_labels(task)
     data.setdefault("tasks", []).append(task); assign_nums(data)
     return task, False
 
@@ -12099,6 +12121,7 @@ def _apply_touch(person, proposal, change):
 
 def _apply_update(data, record, proposal, change):
     was_done = record.get("column") == "done"
+    labels_before = list(record.get("labels") or [])
     for key, value in change.items():
         if key in ("comments", "todos", "links") and isinstance(value, list):
             _append_unique(record, key, value)
@@ -12120,6 +12143,8 @@ def _apply_update(data, record, proposal, change):
     elif record.get("id", "").startswith("t_") and was_done and record.get("column") != "done":
         drop_leftover_wait(record, "reopening", data)
     record["updated"] = now(); record["updatedBy"] = who_am_i()
+    if list(record.get("labels") or []) != labels_before:
+        hist_labels(record)
     hist(record, f"accepted proposal {proposal['id']}")
 
 
@@ -12255,6 +12280,7 @@ def cmd_proposal_merge(a):
         record = _target_record(data, target); before = copy.deepcopy(record)
         selected = set(x.strip() for x in (a.fields or "").split(",") if x.strip())
         was_done = record.get("column") == "done"
+        labels_before = list(record.get("labels") or [])
         for key, value in proposal["change"].items():
             if key in ("comments", "todos", "links") and isinstance(value, list): _append_unique(record, key, value)
             elif key == "owner" and key in selected and record.get("id", "").startswith("t_"):
@@ -12271,7 +12297,10 @@ def cmd_proposal_merge(a):
             elif key in selected: record[key] = copy.deepcopy(value)
         if record.get("id", "").startswith("t_") and was_done != (record.get("column") == "done"):
             drop_leftover_wait(record, "reopening" if was_done else "proposal to done", data)   # as _apply_update
-        record["updated"] = now(); record["updatedBy"] = who_am_i(); hist(record, f"merged from proposal {proposal['id']}")
+        record["updated"] = now(); record["updatedBy"] = who_am_i()
+        if list(record.get("labels") or []) != labels_before:
+            hist_labels(record)
+        hist(record, f"merged from proposal {proposal['id']}")
         _decide(proposal, "merge", record, {k: proposal["change"][k] for k in selected if k in proposal["change"]},
                 {"before": before, "after": copy.deepcopy(record), "created": False})
         print(f"merged {proposal['id']} -> {record['id']}")

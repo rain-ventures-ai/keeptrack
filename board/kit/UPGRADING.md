@@ -25,6 +25,33 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v132 (schema 4)
+
+Every change to a card's label set now leaves a `labels:` history line carrying the full resulting list (`labels: a, b`, or
+`labels: none`). No new card field, no migration, no `min_kit` change; an upgrade changes no card.
+
+- New writers of the line: `research-lock` (adds `researching`), `label-set --rename` and `label-rm --force` (one line per
+  affected card, just before the existing "label X renamed to Y" / "label X removed" line), `merge-card` (only when the target card
+  gains labels) and `add --label` (a card created with labels). Review Inbox accept writes it for a new card with labels and for an
+  update that changes labels (not for one that leaves them as they were); `proposal-merge` writes it when `--fields` changed labels;
+  an inbound card created with labels, `todo-move` (the new card copies the parent's labels), `import` and the kit-upgrade card
+  write it too. The web page now writes it for any new card created with labels, in the same format (card split from a to-do,
+  board and relay cards, a card accepted from the Review Inbox). `task-set --label/--unlabel`, and the web page's edits and
+  board-wide rename/delete, already wrote it.
+- Each board-wide rename or delete now leaves two history lines per affected card (`labels: ...` and the existing "label X ..."
+  line), from the CLI and from the web page.
+- Relay note: relay's `_owner_reset` counts a `labels:` line written by the owner's own login (not `agent@login`) that has no
+  `needs-human` where the card's previous `labels:` line had it. So `label-set --rename` resets only when the renamed label is
+  `needs-human`, and `label-rm needs-human --force` only when the owner runs it; other renames and deletes reset nothing. Cards
+  created with `needs-human` now get a first `labels:` line, so a later owner `--unlabel needs-human` on such a card now counts as
+  a reset where it did not before (there was no earlier `labels:` line to compare with).
+- Rook research writes the full list when it adds `needs-human`, not the literal `labels: needs-human`; the two agree when
+  that is the card's only label.
+- Not covered: hosted boards, for every path (not only `add`). The server owns card history there:
+  `HostedStorageAdapter.model_changes` puts the server's old history back on every card it saves, and the web page's hosted save
+  skips the history field. This release makes no claim that a hosted label change leaves a `labels:` line; whether the server
+  writes one is not checked in this repo. Relay's `_owner_reset` on hosted boards depends on the server writing it.
+
 ### v131 (schema 4)
 
 Two small fixes, one in each tool. No new card field, no migration, no `min_kit` change; an upgrade changes no card.
