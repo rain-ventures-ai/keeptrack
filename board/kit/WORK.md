@@ -99,6 +99,37 @@ must reconcile the current task/run after a wake or restart. Hosted mode is
 unsupported. `work-research-snapshot` and `work-research-check` give the host a
 bounded request projection without activity/comment history.
 
+`watch-poll --project ID --history` (kit v134) replays board commits instead of
+diffing two snapshots, so an intermediate change is never lost. Its cursor is one
+commit, `{"v":2,"board","project","commit"}` in base64url, with no snapshot; no
+cursor is a quiet baseline at the branch head. Each call verifies the commit is an
+ancestor of the head, then replays every later commit (side branches included) in
+topological order, oldest first: at most 20 that changed the board folder and 200
+examined. Each is diffed against its own first parent with the same projection
+and bounds, so every event is a real change on that commit. Every event carries
+its `commit` and an `id` hashed from board, commit, card, kind, text, author and
+an ordinal. Delivery is at least once: a merge is diffed against its first parent,
+so a side branch's change comes again at the merge with another `id`. Pages are
+whole units along the head's first-parent line (a plain commit, or a merge with
+its side branch); the cursor only moves forward along that line, so no commit is
+skipped. A commit over the bounds, without the board folder, with board data of
+the wrong shape or with a board file
+that is not valid JSON, or a side branch longer than the 200-commit scan cap,
+gives one `unreplayable` event (`card: null`) naming the commit or merge, and the
+replay moves on: a loud gap, never a silent one. A call stops loudly only when it
+must read an unreadable board at head (head itself changed the board, or the
+cursor sits on an unreadable commit). One call can load up to the scan cap's
+worth of past boards (200); on the API transport each load costs about 5
+requests, and each watched project caches its commit parents on disk so a
+catch-up reads its compare range once (plus one small count check per poll).
+The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
+non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
+silently re-baselined; start a fresh baseline and reconcile. A `--file` board has
+no history and is refused. A replayed commit gives the same events and ids
+whenever it is replayed, so clock-only states (stale by age, chase, overdue) are
+not history events, and `at` (the poll's time) is not part of an `id`. Like the
+snapshot cursor, a history cursor or event is not authority and grants nothing.
+
 The separate browser capability and host signing key must remain inaccessible
 to workers and other repository agents. Settings → Rook owner approval stores
 the endpoint/capability only in this browser for the connected board, outside
