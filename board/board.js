@@ -2632,12 +2632,12 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
-  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowPage = 0, flowPageKey = '', flowBoardScope = '', flowBoardToken = '';
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowCardCache = new Map(), flowCardScope = '', flowCardAuth = '', flowPage = 0, flowPageKey = '', flowBoardScope = '', flowBoardToken = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
   const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta(clearBoard = false) {
     flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
-    if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); } }
+    if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; flowCardCache = new Map(); if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); } }
     if (view === 'flow') { $('board').querySelector('.flow-status')?.replaceWith(flowStatus({})); $('board').querySelector('.flow-feed')?.replaceWith(flowFeed({})); }
   }
   function syncFlowLive() {
@@ -2768,20 +2768,23 @@ if (typeof window !== 'undefined') (() => {
     return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 194 + 24 };
   }
   function flowCard(t, position) {
-    const status = claimState(t.claim), node = el('button', 'flow-card' + (status ? ' flow-' + status : ''));
-    node.type = 'button'; node.dataset.card = t.id; node.title = t.title;
-    if (position) { node.style.left = position.x + 'px'; node.style.top = position.y + 'px'; }
-    const col = state.columns.find(c => c.id === t.column);
-    node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
-    if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
-    else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
+    const status = claimState(t.claim), col = state.columns.find(c => c.id === t.column);
     const raw = Array.isArray(t.after) ? t.after : [], ids = [];
     for (let i = 0; i < Math.min(raw.length, 10000) && ids.length < 20; i++) if (typeof raw[i] === 'string' && raw[i] && !ids.includes(raw[i])) ids.push(raw[i]);
     const deps = afterLinks({ ...t, after: ids }, flowBoardGraph().byId);
-    if (deps.length) { const text = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (raw.length > deps.length ? ' · more (open card)' : ''); node.title = t.title + '\n' + text; node.append(el('span', 'flow-card-meta flow-deps', `After: ${text}`)); }
+    const depText = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (raw.length > deps.length ? ' · more (open card)' : '');
     const flags = [position?.cycle && 'Dependency cycle', waitingOf(t) && 'Waiting'].filter(Boolean);
+    const key = JSON.stringify([t.num, t.title, col?.name, t.column, !!(t.claim && status !== 'done'), t.last_run?.agent, t.last_run?.status, depText, flags, position?.x, position?.y]);
+    const cached = flowCardCache.get(t.id); if (cached?.key === key) return cached.node;
+    const node = el('button', 'flow-card' + (status ? ' flow-' + status : ''));
+    node.type = 'button'; node.dataset.card = t.id; node.title = t.title;
+    if (position) { node.style.left = position.x + 'px'; node.style.top = position.y + 'px'; }
+    node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
+    if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
+    else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
+    if (deps.length) { node.title = t.title + '\n' + depText; node.append(el('span', 'flow-card-meta flow-deps', `After: ${depText}`)); }
     if (flags.length) node.append(el('span', 'flow-cycle', flags.join(' · ')));
-    node.onclick = () => openCard(t.id); return node;
+    node.onclick = () => openCard(t.id); flowCardCache.set(t.id, { key, node }); return node;
   }
   function flowStatus(meta) {
     const strip = el('div', 'flow-status');
@@ -2813,6 +2816,10 @@ if (typeof window !== 'undefined') (() => {
     try { if (flowDone && status === '__open') $('fStatus').value = ''; matching = state.tasks.filter(t => filtered(t) && (flowDone || explicitDone || !isDoneTask(t))); } finally { $('fStatus').value = status; }
     flowPage = Math.min(flowPage, Math.max(0, Math.ceil(matching.length / 500) - 1));
     const all = matching.slice(flowPage * 500, (flowPage + 1) * 500);
+    if (flowCardScope !== flowKey(cfg()) || flowCardAuth !== cfg().token) { flowCardCache = new Map(); flowCardScope = flowKey(cfg()); flowCardAuth = cfg().token; }
+    const visibleIds = new Set(all.map(t => t.id));
+    flowCardCache.forEach((_, id) => { if (!visibleIds.has(id)) flowCardCache.delete(id); }); // Keep at most one page of nodes.
+
     if (matching.length > 500) {
       const limit = el('div', 'flow-limit', `Showing ${all.length} of ${matching.length} matching cards · page ${flowPage + 1}. Filter by project or label, or choose a page.`);
       const prev = ui.button({ label: 'Previous 500', size: 'sm', onClick: () => { flowPage--; render(); } }), next = ui.button({ label: 'Next 500', size: 'sm', onClick: () => { flowPage++; render(); } }); prev.disabled = flowPage === 0; next.disabled = (flowPage + 1) * 500 >= matching.length; limit.append(prev, next); main.append(limit);

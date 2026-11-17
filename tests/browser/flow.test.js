@@ -20,6 +20,7 @@ const tasks = [card(1, { title: 'Prepare a complete launch plan with a deliberat
 tasks.find(t => t.num === 3).after.push('t_1');
 tasks.find(t => t.num === 10).after = ['t_10'];
 tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
+tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
 let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
@@ -85,14 +86,18 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     runner = { status: 'paused', paused_by: 'owner', pause_reason: 'Maintenance', last_tick: now, engines_out: [{ engine: 'claude', until: 'tomorrow' }], sign_in: { claude: true, codex: false }, secret: 'DO NOT RENDER' };
     await page.clock.fastForward(31000);
     assert.equal(counts.runner, initial.runner, 'absent runner is not retried on each poll');
-    await page.evaluate(() => { window.unchangedGraph = document.querySelector('.flow-canvas'); });
+    await page.evaluate(() => { window.unchangedGraph = document.querySelector('.flow-canvas'); window.laneCard = document.querySelector('[data-card="t_11"]'); });
     await page.clock.fastForward(31 * 60000); // An unchanged board can cross the stale threshold.
     await page.waitForFunction(() => document.querySelector('.flow-status').textContent.includes('Maintenance'));
     assert.match(await page.locator('[data-card="t_1"]').innerText(), /STALE/);
     assert.ok(await page.evaluate(() => window.unchangedGraph === document.querySelector('.flow-canvas')), 'time-only refresh preserves graph');
     raw.tasks[0].claim.status = 'blocked'; revision++;
+    raw.tasks.find(t => t.num === 11).claim.agent = 'claude';
+    raw.tasks.find(t => t.num === 11).claim.heartbeat_at = await page.evaluate(() => new Date().toISOString());
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => document.querySelector('[data-card="t_1"]').textContent.includes('BLOCKED'));
+    assert.match(await page.locator('[data-card="t_11"] .flow-run').innerText(), /claude/);
+    assert.ok(await page.evaluate(() => window.laneCard === document.querySelector('[data-card="t_11"]')), 'unlinked claim updates reuse the card node');
     assert.match(await page.locator('[data-card="t_1"]').innerText(), /BLOCKED/);
     assert.match(await page.locator('.flow-status').innerText(), /codex sign-in: fails/);
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('DO NOT RENDER'));
