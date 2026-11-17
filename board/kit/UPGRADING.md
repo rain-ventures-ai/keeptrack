@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v135 (schema 4)
+
+`keeptrack.py reconcile --dry-run` prints one row per open card whose last update is more than a day old. It reads the
+board and one batched pull-request state (state and mergedAt only). It does not close a card, open an Inbox item, merge,
+deploy or write a rule. Without `--dry-run` it refuses. No new card field, no migration, no `min_kit` change.
+
+- Check: `kit-check` says v135. `reconcile --dry-run` on a `--file` board prints the rows and leaves the file unchanged.
+
 ### v134 (schema 4)
 
 `watch-poll --project ID --history`: a watcher that never misses a board change between polls. It replays the board branch's
