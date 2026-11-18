@@ -148,6 +148,7 @@ async function assertFits(page, where) {
       one.comments = [{ id: 'c_link', at: new Date().toISOString(), by: 'alex', text: `[#1](${base}/board/index.html?repo=acme/board&branch=main&path=board/tasks.json&card=t_two#1&comment=c_stable)` }];
       commentApi.files['cards/t_one.json'] = text(one);
       const linked = await fresh(commentApi); await linked.goto(base + '/board/index.html#1');
+      assert.equal(await linked.locator('#cmStream a.mref[href*="card=t_two"]').innerText(), '#2', 'intercepted numbered links display the resolved current card number');
       await linked.locator('#cmStream a.mref[href*="card=t_two"]').click();
       await linked.locator('#cmStream [data-cid="c_stable"].cmflash').waitFor();
       assert.equal(await linked.locator('#cTitle').inputValue(), 'Second', 'in-page Markdown/comment interception also follows the stable id');

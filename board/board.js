@@ -621,7 +621,7 @@ if (typeof window !== 'undefined') (() => {
       const md = j % 2 === 1 && /^\[([^\]\n]+)\]\((.+)\)$/.exec(chunk), href = md && safeUrl(md[2]);
       if (!href) { linkifyPlain(parent, chunk, leaf); return; }
       const n = /^#(\d{1,5})$/.exec(md[1].trim()), target = n && boardCardTarget(href), t = target?.card, mine = !!t;
-      const a = el('a', mine ? 'mref' : null, md[1]); a.href = href;
+      const a = el('a', mine ? 'mref' : null, mine ? '#' + t.num : md[1]); a.href = href;
       if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id, target.comment ? { comment: target.comment } : undefined); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
       parent.append(a);
     });
