@@ -546,6 +546,68 @@ def admit(kt, work, args):
     print(json.dumps(answer, ensure_ascii=False))
 
 
+def boxed_request(work, spec, answer):
+    """The runner's entire request is derived from the exact signed research projection."""
+    task = spec["task"]
+    if any(todo.get("done") is not False for todo in task["todos"]):
+        fail("boxed research requires an entirely unfinished signed checklist")
+    details = task["details"]
+    links = [link["url"] for link in task["links"]]
+    if links:
+        details = (details + "\n\n" if details else "") + "Sources:\n" + "\n".join(links)
+    if len(details) > 2000:
+        fail("signed research text plus source links exceeds the runner details limit")
+    value = {"request_id": "button:" + answer, "title": task["title"], "project": task["project"],
+             "details": details, "todos": [todo["text"] for todo in task["todos"]]}
+    checked = work.payload(value)
+    if checked != value:
+        fail("signed research text requires normalisation; edit and approve it again")
+    return checked
+
+
+def box_handoff(kt, work, args):
+    """Signed owner-only creation and approval in one CAS; never reapprove an existing identity."""
+    def derive(current):
+        # work.request derives inside each fresh mutation snapshot, after stable-identity lookup.
+        source = kt.find(current, args.id)
+        prop, content_hash = approved(kt, current, source, args.approval, args.answer, args.policy_digest)
+        p = policy(current, args.policy_digest)
+        expected = {"board": p["board"], "owner": p["owner"], "project": source["project"], "task_id": source["id"],
+                    "approval_id": args.approval, "answer_id": args.answer, "content_hash": content_hash,
+                    "policy_digest": args.policy_digest}
+        verify_owner_action(args.owner_action_receipt, args.owner_action_key, expected, kt.now(), p["approval_ttl"])
+        co = source.get("coordination") or {}
+        selected = (co.get("research") or {}).get("request")
+        if not isinstance(selected, dict) or any(selected.get(key) != value for key, value in {
+                "approval_id": args.approval, "answer_id": args.answer, "content_hash": content_hash}.items()):
+            fail("a different or withdrawn button action is current")
+        if source.get("column") != "backlog" or source.get("claim") or kt.open_waiting(source) or \
+                any(work.unresolved(run) for run in co.get("runs", [])):
+            fail("only an unclaimed, unblocked Backlog research request may be handed off")
+        return boxed_request(work, scope(current, source), args.answer)
+    def prepare(current, runner):
+        source = kt.find(current, args.id)
+        spec = scope(current, source)
+        after = spec["task"]["after"]
+        if len(after) != len(set(after)) or runner["id"] in after:
+            fail("unsupported research dependencies")
+        runner["after"] = copy.deepcopy(after)
+        runner["assignees"] = [spec["owner"]]
+        work.coordinate(runner)["boxed_approval"] = {"source": source["id"], "approval_id": args.approval, "answer_id": args.answer,
+            "content_hash": digest(spec), "after": copy.deepcopy(after)}
+        kt.move_task_to_column(current, runner, "todo")
+        kt.hist(runner, "Owner-signed research snapshot handed to the no-network box")
+        prop = kt.find_proposal(current, args.approval)
+        prop["decision"]["done"] = {"at": kt.now(), "by": kt.who_am_i(), "acted": True, "boxed_handoff": runner["id"]}
+    def existing(runner):
+        binding = (runner.get("coordination") or {}).get("boxed_approval") or {}
+        if any(binding.get(key) != value for key, value in {"source": args.id, "approval_id": args.approval,
+                "answer_id": args.answer}.items()):
+            fail("existing runner identity belongs to another signed handoff")
+    return work.request(kt, request_key="button:" + args.answer, derive=derive, prepare_new=prepare,
+                        validate_existing=existing)
+
+
 def verify(kt, data, task, private, expected_policy):
     record = ((task.get("coordination") or {}).get("research") or {}).get("admission") or {}
     _time(private.get("admitted_at"))
@@ -697,6 +759,11 @@ def sealed_handover(task, run, proof):
 
 
 def parser(sub, callback):
+    p = sub.add_parser("work-research-box-handoff", help="atomically create and approve only an exact signed owner research request")
+    p.add_argument("id")
+    for field in ("approval", "answer", "policy-digest", "owner-action-receipt", "owner-action-key"):
+        p.add_argument("--" + field, required=True)
+    p.set_defaults(f=callback, work_action="research-box-handoff")
     for operation in ("snapshot", "apply"):
         p = sub.add_parser("work-research-policy-" + operation, help="signed owner research policy control")
         if operation == "apply":
@@ -976,6 +1043,8 @@ def watch_poll(kt, args):
 
 def command(kt, work, args):
     action = args.work_action.removeprefix("research-")
+    if action == "box-handoff":
+        return box_handoff(kt, work, args)
     if action == "policy-snapshot":
         data, _ = kt.load(); print(json.dumps(policy_snapshot(kt, data))); return
     if action == "policy-apply":

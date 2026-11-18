@@ -63,6 +63,127 @@ class ResearchTests(unittest.TestCase):
         self.research.issue_owner_action(action, key, expected, kt.now(), 300)
         self.invoke("research-admit", owner_action_receipt=str(action), owner_action_key=str(key))
 
+    def signed_box(self, after=None, todos=None, details=None):
+        self.ready()
+        data = self.read(); source = data["tasks"][0]
+        source["after"] = after or []
+        if todos is not None:
+            source["todos"] = todos
+        if details is not None:
+            source["details"] = details
+        # Refresh the exact proposal after adding the signed dependencies.
+        proposal = self.research.proposal_input(data, source)
+        proposal.update(id=self.prop_id, status="answered", decision={"action": "answer", "id": self.answer_id,
+            "by": "owner", "at": kt.now(), "answer": {"approved": True}})
+        data["proposals"] = [proposal]
+        content_hash = self.research.digest(self.research.scope(data, source))
+        source["coordination"] = {"v": 1, "executor": "relay-research", "runs": [], "research": {
+            "request": {"approval_id": self.prop_id, "answer_id": self.answer_id, "content_hash": content_hash}}}
+        self.write(data)
+        key = Path(self.tmp.name) / "owner-key.json"; action = Path(self.tmp.name) / "owner-action.json"
+        self.research._private_receipt(key, {"schema": self.research.SCHEMA, "kind": "owner-action-key", "proof": "d" * 64})
+        expected = {"board": "owner/board", "owner": "owner", "project": "pr_one", "task_id": self.tid,
+            "approval_id": self.prop_id, "answer_id": self.answer_id, "policy_digest": self.policy_hash, "content_hash": content_hash}
+        self.research.issue_owner_action(action, key, expected, kt.now(), 300)
+        return {"owner_action_receipt": str(action), "owner_action_key": str(key)}
+
+    def test_box_handoff_creates_exact_signed_request_and_dependencies_in_one_write(self):
+        kwargs = self.signed_box(["t_prior1"])
+        with mock.patch.object(kt, "mutate", wraps=kt.mutate) as mutate:
+            result = self.invoke("research-box-handoff", **kwargs)
+        self.assertTrue(result["created"]); self.assertEqual(result["column"], "todo")
+        self.assertEqual(mutate.call_count, 1)
+        data = self.read(); runner = next(t for t in data["tasks"] if t["id"] == result["id"])
+        self.assertEqual(runner["after"], ["t_prior1"])
+        self.assertEqual(runner["coordination"]["executor"], "relay-local")
+        self.assertIn("https://example.org/guide", runner["details"])
+        self.assertEqual(data["proposals"][0]["decision"]["done"]["boxed_handoff"], runner["id"])
+
+    def test_box_handoff_cas_cancellation_or_signed_content_change_never_creates_runner(self):
+        for change in (lambda t: t.update(column="done"), lambda t: t.update(details="Changed scope"),
+                       lambda t: t.update(after=["t_other1"])):
+            with self.subTest(change=change):
+                kwargs = self.signed_box()
+                def race(canonical, wanted):
+                    change(canonical["data"]["tasks"][0])
+                with self.api_cas(race) as cas, mock.patch.object(kt, "REPO", "owner/board"):
+                    with self.assertRaises(SystemExit):
+                        self.invoke("research-box-handoff", **kwargs)
+                self.assertEqual(len(cas["data"]["tasks"]), 1)
+                self.assertNotIn("done", cas["data"]["proposals"][0]["decision"])
+
+    def test_box_handoff_lost_cas_rechecks_and_saves_one_runner(self):
+        kwargs = self.signed_box()
+        with self.api_cas() as cas, mock.patch.object(kt, "REPO", "owner/board"):
+            result = self.invoke("research-box-handoff", **kwargs)
+        self.assertTrue(result["created"])
+        self.assertEqual(cas["calls"], 2)
+        self.assertEqual(cas["rechecks"], [True, True])
+        self.assertEqual(len(cas["data"]["tasks"]), 2)
+
+    def test_box_handoff_existing_cancelled_identity_is_not_reapproved(self):
+        kwargs = self.signed_box()
+        result = self.invoke("research-box-handoff", **kwargs)
+        data = self.read(); runner = next(t for t in data["tasks"] if t["id"] == result["id"])
+        runner.update(column="done", outcome="cancelled"); self.write(data)
+        before = self.read()
+        replay = self.invoke("research-box-handoff", **kwargs)
+        self.assertFalse(replay["created"]); self.assertEqual(replay["column"], "done")
+        self.assertEqual(self.read(), before)
+
+    def test_box_handoff_requires_private_signature_even_in_offline_fixture(self):
+        kwargs = self.signed_box()
+        path = Path(kwargs["owner_action_receipt"])
+        action = json.loads(path.read_text()); action["task_id"] = "t_other1"; path.write_text(json.dumps(action)); path.chmod(0o600)
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "signature"):
+            self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual(self.read(), before)
+
+    def test_box_handoff_cas_preserves_concurrent_cancelled_runner(self):
+        import copy
+        kwargs = self.signed_box()
+        def cancel(canonical, wanted):
+            canonical["data"] = copy.deepcopy(wanted)
+            runner = canonical["data"]["tasks"][-1]
+            runner.update(column="done", outcome="cancelled")
+        with self.api_cas(cancel) as cas, mock.patch.object(kt, "REPO", "owner/board"):
+            result = self.invoke("research-box-handoff", **kwargs)
+        self.assertFalse(result["created"])
+        self.assertEqual(result["column"], "done")
+        self.assertEqual(cas["data"]["tasks"][-1]["outcome"], "cancelled")
+        self.assertEqual(cas["calls"], 1)
+
+    def test_box_handoff_replay_after_source_edit_returns_bound_cancelled_runner(self):
+        kwargs = self.signed_box()
+        result = self.invoke("research-box-handoff", **kwargs)
+        data = self.read()
+        source = next(t for t in data["tasks"] if t["id"] == self.tid)
+        source.update(title="A different title", details="Changed source", after=["t_other1"])
+        runner = next(t for t in data["tasks"] if t["id"] == result["id"])
+        runner.update(column="done", outcome="cancelled")
+        self.write(data); before = self.read()
+        replay = self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual((replay["id"], replay["column"], replay["created"]), (runner["id"], "done", False))
+        self.assertEqual(self.read(), before)
+        self.tid = "t_other1"
+        with self.assertRaisesRegex(SystemExit, "another signed handoff"):
+            self.invoke("research-box-handoff", **kwargs)
+
+    def test_box_handoff_refuses_precompleted_signed_todos(self):
+        kwargs = self.signed_box(todos=[{"text": "Already complete", "done": True}])
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "unfinished signed checklist"):
+            self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual(self.read(), before)
+
+    def test_box_handoff_explains_combined_details_and_source_link_limit(self):
+        kwargs = self.signed_box(details="x" * 1990)
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "text plus source links exceeds"):
+            self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual(self.read(), before)
+
     def test_atomic_start_rechecks_a_lost_github_cas_without_an_orphan_claim(self):
         self.signed_admit()
         with self.api_cas() as cas, mock.patch.object(kt, "REPO", "owner/board"):

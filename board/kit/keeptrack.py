@@ -32,6 +32,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py task-set ID --after '#62' [--after ..] | --not-after '#62' | --no-after   # runs after those cards: a hint and a gate, never a trigger
   keeptrack.py wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]   # park a card: not claimable until unwait
   keeptrack.py unwait ID --note "why"   # end the wait (agents: only a wait they set in this session that names nobody else)
+  keeptrack.py unwait ID --note "why" --owner-said "<owner's words, time>"   # agents: another agent's wait, card assigned to the owner
 
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
@@ -473,7 +474,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 136  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 138  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4508,6 +4509,8 @@ def cmd_wait(a):
         _MUT["rerun"] = True   # the claim rules read this card's claim: a lost race re-runs on the newer board, never a merge
         w = {"on": on, "who": who, "since": (old or {}).get("since") or board_today(data).isoformat(), "nudge": nudge,
              "note": note, "by": who_am_i(None), "by_session": mine}
+        if agent_run():
+            w["by_agent"] = True   # kit v138: an agent set this wait, so `unwait --owner-said` may end it (never a person's)
         if until:
             w["until"] = until   # a checkable condition; not owner-authority and not an approval
         t["waiting"] = w
@@ -4533,14 +4536,61 @@ def cmd_wait(a):
     mutate(fn, f"Waiting: {a.id}")
 
 
+OWNER_SAID_MAX = 300   # kit v138: `unwait --owner-said` keeps at most this many characters of the owner's words
+
+
+def wait_set_by_agent(w):
+    """kit v138: an agent run set this wait. `by_agent` from v138; before that, a local agent's `by` is `agent@user`
+    (who_am_i with BOARD_AGENT), which a person's GitHub login can never be. Anything else counts as a person's."""
+    if w.get("by_agent") is True:
+        return True
+    by = str(w.get("by") or "")
+    agent, _, user = by.rpartition("@")
+    return "by_agent" not in w and bool(agent.strip()) and bool(user.strip())
+
+
+def owner_said_refusal(data, t, w, owner):
+    """Why `unwait --owner-said` may not end this wait, or '' when it may (kit v138). The owner's word ends only a wait
+    another agent set, on a card assigned to the owner, that waits on the owner, an agent or nobody."""
+    by = clean(w.get("by") or "?", 60)
+    if not owner:
+        return "--owner-said needs BOARD_USER: the owner whose words these are"
+    if not wait_set_by_agent(w):
+        return (f"this wait was set by a person ({by}); only a person ends it, and --owner-said does not change this. "
+                "Comment with @the assignee and stop")
+    _, at, user = str(w.get("by") or "").rpartition("@")
+    if at and user.strip().lower() != owner.lower():
+        return f"this wait was set by another member's agent ({by}); --owner-said speaks only for @{clean(owner, 60)}"
+    if owner.lower() not in [str(x).strip().lower() for x in t.get("assignees") or []]:
+        return (f"#{t.get('num', '?')} is not assigned to @{clean(owner, 60)}; --owner-said ends a wait only on a card "
+                "assigned to the owner. Comment with @the assignee and stop")
+    who = str(w.get("who") or "").strip().lower()
+    agents = {str(x).strip().lower() for x in data.get("agents") or [] if isinstance(x, str)}
+    if who and who != owner.lower() and (who not in agents or who.startswith("p_")):
+        return (f"#{t.get('num', '?')} waits on {clean(w.get('who'), 60)}, another party; the owner can't answer for them. "
+                "Comment with @the assignee and stop")
+    return ""
+
+
 def cmd_unwait(a):
     """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
-    person's to clear. A claim `wait` blocked runs again (a young one); an expired claim requeues only with retained
-    unattended admission. Clearing a wait never creates approval."""
+    person's to clear. Kit v138: with --owner-said (the owner's own words and when), an agent also ends a wait another
+    agent set, on a card assigned to the owner (owner_said_refusal); a person's wait stays locked. A claim `wait`
+    blocked runs again (a young one); an expired claim requeues only with retained unattended admission. Clearing a
+    wait never creates approval."""
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
         sys.exit("unwait needs --note with why the wait is over")
+    said = getattr(a, "owner_said", None)
+    if said is not None:
+        said = clean(" ".join(str(said).split())).strip()
+        if not said:
+            sys.exit("refused: --owner-said is empty; quote the owner's own words and when they said them")
+        if len(said) > OWNER_SAID_MAX:
+            sys.exit(f"refused: --owner-said is at most {OWNER_SAID_MAX} characters; quote the owner's words, not a summary")
+        if not agent_run():
+            sys.exit("refused: --owner-said is for agent runs; a person ends a wait with --note alone")
 
     def fn(data):
         t = find(data, a.id); w = waiting_of(t)
@@ -4548,10 +4598,16 @@ def cmd_unwait(a):
             sys.exit(f"{t['id']} is not waiting")
         sid = session_for(a); mine = session_hash(sid)
         agent = agent_run()   # kit v77: a hosted agent identity too, not only BOARD_AGENT
+        owner_word = False
         if agent and w.get("by_session") != mine:
-            sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
-                     "Comment with @the assignee and stop (--force does not change this)")
-        if agent and other_party(w, claim_agent(t), data):
+            if not said:
+                sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
+                         "Comment with @the assignee and stop (--force does not change this)")
+            why = owner_said_refusal(data, t, w, _acting_user())
+            if why:
+                sys.exit("refused: " + why)
+            owner_word = True
+        if agent and not owner_word and other_party(w, claim_agent(t), data):
             sys.exit(f"refused: {t['id']} waits on {clean(w.get('who'), 60)}, another party; only a person ends that wait (the web "
                      "page, or a shell without BOARD_AGENT). Comment with @the assignee and stop")
         _MUT["rerun"] = True   # reads this card's claim
@@ -4560,9 +4616,22 @@ def cmd_unwait(a):
         if not agent and other and holds_claim(t, a):
             note_agent_cleared(t, "unwait", sid)   # (a): the session holding the claim cleared a wait on someone else
         t["waiting"] = None
-        hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
-                f"session {redact_session(sid)})")
-        t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
+        if owner_word:
+            owner, me, ts = _acting_user(), who_am_i(t), now()
+            note_agent_cleared(t, "unwait on the owner's word", sid)   # evidence that outlives the history trim
+            hist(t, f"unwait on the owner's word: {note}; @{clean(owner, 60)} said: \"{said}\" (was waiting on {waiting_text(w)}, "
+                    f"set by {clean(w.get('by') or '?', 60)}, since {clean(w.get('since') or '?', 20)}; ended by {me} at {ts}; "
+                    f"session {redact_session(sid)})")
+            t["history"][-1]["owner_said"] = {"owner": owner, "quote": said, "agent": me, "at": ts}
+            t["history"][-1]["unwait"] = {"session": mine, "other": False, "owner_said": True}   # the owner chose: not flagged at the next claim
+            t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": ts, "by": me, "text":
+                f"**Wait ended on the owner's word.** @{owner} said: \"{said}\"\n\n{me} ended it at {ts}: {note}\n\n"
+                f"It was waiting on {waiting_text(w)}, set by {clean(w.get('by') or '?', 60)} since {clean(w.get('since') or '?', 20)}. "
+                "Ending a wait is not an approval."})
+        else:
+            hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
+                    f"session {redact_session(sid)})")
+            t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
         msg = f"#{t.get('num', '?')} no longer waiting"
         if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
@@ -7837,7 +7906,7 @@ HELP_TOPICS = {
 if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
     HELP_TOPICS["durable-work"] = ["request-work", "work-status", "work-start", "work-event", "work-finish", "work-release-owned", "work-resolve"]
     HELP_TOPICS["public-research"] = ["work-research-policy-snapshot", "work-research-policy-apply", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
-        "work-research-admit", "work-research-check", "work-research-handover", "work-research-reconcile", "work-research-retire", "work-research-note", "work-research-read-failed"]
+        "work-research-admit", "work-research-check", "work-research-handover", "work-research-box-handoff", "work-research-reconcile", "work-research-retire", "work-research-note", "work-research-read-failed"]
 
 
 def cmd_help(a):
@@ -14231,10 +14300,12 @@ def cmd_checkpoint(a):
 
 def cmd_routine(a):
     """Repo-owned routine inventory and bounded run reports; scheduler credentials stay outside git."""
-    if not ROOT:
-        sys.exit("routine commands need a board repo clone")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,95}", a.id):
         sys.exit("routine id must use lowercase letters, digits, hyphens or underscores")
+    if a.action == "usage" and getattr(a, "push", False):
+        return _routine_usage_push(a)
+    if not ROOT:
+        sys.exit("routine commands need a board repo clone")
     path = _automation_path("automation/routines/" + a.id + ".json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".lock", "a+b") as lock:
@@ -14262,6 +14333,11 @@ def _routine_report(a, path):
         sys.exit("routine register needs a valid GitHub owner before reporting runs")
     if owner.lower() != default_user().strip().lower():
         sys.exit("routine reports can only be updated by the registered owner; set BOARD_USER to your verified GitHub login")
+    if a.action == "usage":
+        _routine_usage_apply(data, a)
+        atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        print(f"{a.id}: usage; commit {os.path.relpath(path, ROOT)} to publish the report")
+        return
     run_id = a.run_id
     if not run_id:
         sys.exit("--run-id is required for start and finish")
@@ -14289,13 +14365,109 @@ def _routine_report(a, path):
                 if install["digest"] != current.get("digest") or install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
                     sys.exit("pack digest changed since reservation")
             current = {k: v for k, v in current.items() if k != "batch"}
-        report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
+        # kit v137: every finished report says what the run used, or plainly that nobody measured it (known: false).
+        usage = _routine_usage(getattr(a, "usage", None) or [], numbers=os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1")
+        report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts, usage=usage)
         data["last_run"] = report
         data["runs"] = (data.get("runs", []) + [report])[-30:]
         data["current_run"] = None
         if a.status == "success": data["last_successful_run_at"] = report["finished_at"]
     atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     print(f"{a.id}: {a.action}; commit {os.path.relpath(path, ROOT)} to publish the report")
+
+
+# Kit v137 (card #259): run usage in a routine's last_run. Tokens only: a cost is money, and money stays off the board.
+ROUTINE_USAGE_NUMBERS = ("in", "out", "cache_read", "cache_write", "turns")
+
+
+def _routine_usage(values, numbers=True):
+    """--usage KEY=VALUE pairs as a last_run usage record: {"engine", "known", <token counts>}. No counts: known is
+    false, which says plainly that the run's usage was not measured (a cloud harness that reports none). numbers=False
+    (an automation worker under KEEPTRACK_PROPOSALS_ONLY) takes the engine only: the runner that started the worker
+    measures the numbers and adds them with `routine <id> usage`, so a worker cannot write its own."""
+    usage, engine = {}, "unknown"
+    for value in values:
+        key, sep, val = str(value).partition("=")
+        if not sep:
+            sys.exit("--usage takes KEY=VALUE, for example engine=claude or in=1200")
+        if key == "engine":
+            if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", val):
+                sys.exit("--usage engine= takes a short lower-case name such as claude, codex or claude-cloud")
+            engine = val
+        elif key in ("cost_usd", "cost"):
+            sys.exit("--usage records tokens only: a cost is money, and money stays off the board")
+        elif key in ROUTINE_USAGE_NUMBERS:
+            if not numbers:
+                sys.exit("KEEPTRACK_PROPOSALS_ONLY: --usage takes engine= only here; the runner records the numbers")
+            if not re.fullmatch(r"[0-9]{1,12}", val):
+                sys.exit(f"--usage {key}= takes a whole number")
+            if key in usage:
+                sys.exit(f"--usage {key}= given twice")
+            usage[key] = int(val)
+        else:
+            sys.exit(f"--usage: unknown key {key!r}; keys: engine, " + ", ".join(ROUTINE_USAGE_NUMBERS))
+    return {"engine": engine, "known": bool(usage), **{k: usage[k] for k in ROUTINE_USAGE_NUMBERS if k in usage}}
+
+
+def _routine_usage_apply(data, a):
+    """`routine <id> usage`: add measured usage to the register's last_run (that run only; `runs` keeps the report as
+    finish wrote it, so the history only ever grows at its end). The run is the one --run-id names, or the first run
+    started at or after --since (the runner's own start time). Usage already known is never replaced."""
+    usage = _routine_usage(getattr(a, "usage", None) or [])
+    if not usage["known"]:
+        sys.exit("usage needs at least one token count, for example --usage in=1200 --usage out=300")
+    run_id, since = getattr(a, "run_id", None), getattr(a, "since", None)
+    if bool(run_id) == bool(since):
+        sys.exit("usage needs exactly one of --run-id or --since")
+    last = data.get("last_run")
+    if not isinstance(last, dict) or not last.get("finished_at"):
+        sys.exit("no finished run to add usage to")
+    if run_id and last.get("id") != run_id:
+        sys.exit("the last finished run is not " + str(run_id) + ": usage not recorded")
+    if since:
+        at, start = _checkpoint_time(since), last.get("started_at")
+        if not isinstance(start, str) or _checkpoint_time(start) < at:
+            sys.exit("no run finished that started at or after " + since + ": usage not recorded")
+    old = last.get("usage")
+    if isinstance(old, dict) and old.get("known") is True:
+        sys.exit("the last run already has its usage: not replaced")
+    if isinstance(old, dict) and old.get("engine") not in (None, "unknown", usage["engine"]) and usage["engine"] == "unknown":
+        usage["engine"] = old["engine"]
+    last["usage"] = usage
+
+
+def _routine_usage_push(a):
+    """`routine <id> usage --push`: the same change, read from and saved to the board branch through the GitHub API,
+    for a runner whose board checkout is the owner's (it never commits there). A changed file is read again."""
+    rel = "automation/routines/" + a.id + ".json"
+    if FILE:
+        sys.exit("usage --push saves to GitHub; with --file use usage without --push")
+    for _ in range(4):
+        rc, out, err = gh(f"repos/{REPO}/contents/{rel}?ref={urllib.parse.quote(BRANCH, safe='')}")
+        if rc:
+            sys.exit(("routine register is missing; register this routine before reporting runs"
+                      if "404" in err or "Not Found" in out else f"cannot read {rel}: {err.strip() or out.strip()}"))
+        d = json.loads(out)
+        data = json.loads(content_text(rel, d))
+        if not isinstance(data, dict) or data.get("version") != 1 or data.get("id") != a.id:
+            sys.exit("routine register version/id mismatch")
+        if data.get("board_repo") != REPO or data.get("branch") != BRANCH or data.get("board_path") != PATH:
+            sys.exit("routine register does not match the resolved board/branch/path")
+        owner = data.get("owner")
+        if not isinstance(owner, str) or owner.lower() != default_user().strip().lower():
+            sys.exit("routine reports can only be updated by the registered owner; set BOARD_USER to your verified GitHub login")
+        _routine_usage_apply(data, a)
+        text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        body = {"message": f"routine {a.id}: run usage", "branch": BRANCH, "sha": d["sha"],
+                "content": base64.b64encode(text.encode()).decode()}
+        path = "/".join(urllib.parse.quote(x, safe="") for x in rel.split("/"))
+        rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{path}", "--input", "-", body=body)
+        if rc == 0:
+            print(f"{a.id}: usage saved to {REPO}@{BRANCH}")
+            return
+        if not _sha_mismatch(out, err):
+            _api_error(rc, out, err)
+    sys.exit("write failed: the register kept changing; run the command again")
 
 
 # Automations keep checks cheap and reserve agent work in the routine register.
@@ -15257,11 +15429,15 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
         work_module().parser(sub, cmd_work)
-    s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report")
-    s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish"])
+    s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report, or add its run usage")
+    s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish", "usage"])
     s.add_argument("--run-id"); s.add_argument("--status", choices=["success", "partial", "failed", "blocked"])
     s.add_argument("--summary", help="brief outcome; no secrets or email text")
     s.add_argument("--count", action="append", default=[], help="structured count such as touches_logged=3")
+    s.add_argument("--usage", action="append", default=[], help="run usage: engine=claude, in=N, out=N, cache_read=N, "
+                   "cache_write=N or turns=N (tokens only, never a cost); finish without it records usage as not known")
+    s.add_argument("--since", help="usage: the first run started at or after this UTC time (YYYY-MM-DDTHH:MM:SSZ)")
+    s.add_argument("--push", action="store_true", help="usage: save to the board branch through the GitHub API, not the clone")
     s.set_defaults(f=cmd_routine)
     s = sub.add_parser("checkpoint", help="read/save a registered routine's owner-bound durable checkpoint (local clone; commit separately)")
     s.add_argument("id"); s.add_argument("action", choices=["show", "save"])
@@ -15378,8 +15554,12 @@ def main():
     s.add_argument("--nudge", help="the day to chase: YYYY-MM-DD, today or +N (default: settings.waiting_days after today)")
     s.add_argument("--until", help="a checkable condition, not an approval: pr:<owner>/<repo>#<n>:merged, date:<YYYY-MM-DD> or release:<owner>/<repo>@<tag>")
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
-    s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
-    s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
+    s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session, "
+                                      "or another agent's wait on an owner-assigned card with --owner-said")
+    s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session")
+    s.add_argument("--owner-said", dest="owner_said", help="agents (kit v138): the owner's own words and when, quoted; ends a "
+                   "wait another agent set on a card assigned to the owner (BOARD_USER). A person's wait stays locked")
+    s.set_defaults(f=cmd_unwait)
     s = sub.add_parser("cleared-ack", help="a person marks a card's agent-cleared flags checked, so doctor and list --attention stop showing them")
     s.add_argument("id"); s.add_argument("--note", help="what you checked"); s.set_defaults(f=cmd_cleared_ack)
     s = sub.add_parser("todo-add", help="add a checklist item; - reads one per line from stdin, all in one save")

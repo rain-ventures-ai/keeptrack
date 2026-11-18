@@ -25,6 +25,35 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v138 (schema 4)
+
+`unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent run end a wait that another agent set,
+on the owner's word. It is allowed only when the card is assigned to the owner (`BOARD_USER`), the wait was set by an
+agent (`waiting.by_agent`, new in v138, or an older `agent@user` `by` whose user is the owner), and the wait is on the
+owner, an agent or nobody. `--owner-said` must not be empty and keeps at most 300 characters. The history line carries
+`owner_said` (`owner`, `quote`, `agent`, `at`), the card gets a comment with the quote, and `agent_cleared` records
+`unwait on the owner's word`. A wait a person set stays locked for agents, exactly as before, and without `--owner-said`
+the refusal is unchanged. Ending a wait is not an approval. A routine run has no owner talking to it and never uses
+`--owner-said`. Older readers ignore `by_agent` and `owner_said`; no new required field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v138. As an agent, `wait` a test card assigned to you from one session, then from another
+  session `unwait` it with `--owner-said "test, <time>"`: the card shows the quote in history and comments. The same
+  command on a wait a person set is refused.
+
+### v137 (schema 4)
+
+A routine register's finished report gains `usage`: `{"engine", "known", "in", "out", "cache_read", "cache_write",
+"turns"}`. `routine <id> finish --usage KEY=VALUE` records it. Without `--usage`, finish writes
+`{"engine": "unknown", "known": false}`, which says plainly that nobody measured the run (a cloud harness reports none).
+`routine <id> usage --since <UTC time> --usage ...` (or `--run-id`) adds measured token counts to `last_run` only;
+`runs` keeps the report as finish wrote it. Known usage is never replaced. `--push` saves through the GitHub API, for a
+runner whose board checkout is the owner's. Tokens only: a cost is money and is refused. Under
+`KEEPTRACK_PROPOSALS_ONLY=1`, finish takes `--usage engine=` only and `usage` is refused, so a worker cannot write its
+own numbers. Older readers ignore the new key. No new required field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v137. `routine <id> finish` on a test register writes `usage.known: false`; `routine <id> usage
+  --run-id <id> --usage engine=claude --usage in=1 --usage out=1` then sets `known: true` on `last_run` only.
+
 ### v136 (schema 4)
 
 `wait --until` stores one checkable condition on the wait: `pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or

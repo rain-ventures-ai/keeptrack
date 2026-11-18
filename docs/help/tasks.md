@@ -73,7 +73,8 @@ agent's `claim` is refused. Agents that need a decision mark the card waiting, c
 assign it to you and stop. An agent never clears a wait it did not set, or one on someone else; you do.
 
 Agents and scripts use `wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]` and
-`unwait ID --note "why"`. `today` lists waits due for a chase under **CHASE NOW**, `list --waiting` (or
+`unwait ID --note "why"`. An agent may end another agent's wait on a card assigned to the owner only with the owner's
+own words: `unwait ID --note "why" --owner-said "<words, time>"` (kit v138); a wait a person set stays locked. `today` lists waits due for a chase under **CHASE NOW**, `list --waiting` (or
 `--waiting-on me`) lists waiting tasks, and `people` shows how many tasks wait on each person.
 
 ## Runs after another task
