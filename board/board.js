@@ -484,11 +484,20 @@ if (typeof window !== 'undefined') (() => {
     // activateBoard does, or the next stashBoard() would overwrite that entry with the empty top-level values
     const mine = boardsMap()[LS.get('kb_repo')] || {}; BOARD_KEYS.forEach(k => { if (!(k in o) && mine[k]) LS.set('kb_' + k, mine[k]); });
     return o; }
+  function settingsImportDescription(o) {
+    const entries = [o];
+    if (o.boards) { try { entries.push(...Object.values(JSON.parse(o.boards))); } catch {} }
+    const types = [['token', 'GitHub tokens'], ['claude_token', 'Claude routine tokens'], ['cron_key', 'cron-job.org keys']]
+      .filter(([key]) => entries.some(entry => entry && typeof entry === 'object' && Object.hasOwn(entry, key) && entry[key]))
+      .map(([, label]) => label);
+    return [`Import board settings${o.repo ? ' for ' + o.repo : ''}${types.length ? ', including ' + types.join(', ') : ' (no tokens or keys are included; add yours again afterwards)'}?`,
+      'This replaces the settings stored in this browser.'];
+  }
   // setup link: the code rides in the #fragment, which browsers never send to any server; it is stripped straight away
   (() => { const m = /[#&]kbcfg=([^&]+)/.exec(location.hash); if (!m) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
     let o; try { o = parseCode('kbcfg1.' + m[1]); } catch (e) { setTimeout(() => toast('Could not import the settings link: ' + e.message, true)); return; }
-    setTimeout(() => ask('Import settings?', [`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?`, 'This replaces the settings stored in this browser.'], 'Import')
+    setTimeout(() => ask('Import settings?', settingsImportDescription(o), 'Import')
       .then(yes => { if (!yes) return; applyImportedSettings('kbcfg1.' + m[1]).catch(e => toast('Could not import the settings link: ' + e.message, true)); })); })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
@@ -5590,7 +5599,7 @@ if (typeof window !== 'undefined') (() => {
   $('xLink').onclick = async () => { if (await askExport('setup link')) copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode(xSecrets()).slice(7)}`, copiedMsg('Setup link')); };
   $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
-      if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ' (it holds no tokens: add yours again afterwards)'}? This replaces this browser's settings.`, 'Import'))) return;
+      if (!(await ask('Import settings?', settingsImportDescription(o), 'Import'))) return;
       await applyImportedSettings(m ? 'kbcfg1.' + m[1] : v);   // queued saves finish inside, before the settings change
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------

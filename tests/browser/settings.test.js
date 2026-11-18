@@ -93,6 +93,34 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Pasted codes and setup links describe every included credential type, without displaying its value.
+    {
+      const kinds = { token: 'GitHub tokens', claude_token: 'Claude routine tokens', cron_key: 'cron-job.org keys' };
+      const variants = [{ extra: { boards: JSON.stringify({ 'acme/board': { branch: 'main' } }) }, expected: [] },
+        { extra: { token: '', claude_token: '', cron_key: '', boards: JSON.stringify({ 'acme/board': { token: '' } }) }, expected: [] }];
+      for (const key of Object.keys(kinds)) {
+        variants.push({ extra: { [key]: 'synthetic-private-' + key }, expected: [kinds[key]] });
+        variants.push({ extra: { boards: JSON.stringify({ 'acme/board': { [key]: 'synthetic-nested-' + key } }) }, expected: [kinds[key]] });
+      }
+      variants.push({ extra: { token: 'synthetic-github', boards: JSON.stringify({ 'acme/board': { claude_token: 'synthetic-routine', cron_key: 'synthetic-cron' } }) }, expected: Object.values(kinds) });
+      for (const variant of variants) for (const mode of ['paste', 'setup']) {
+        const payload = { repo: 'acme/board', branch: 'main', path: 'board/tasks.json', ...variant.extra };
+        const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url'), code = 'kbcfg1.' + encoded;
+        const page = await open(browser, { query: mode === 'setup' ? '#kbcfg=' + encoded : '' });
+        if (mode === 'paste') { await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xPaste').fill(code); await page.locator('#xImport').click(); }
+        const confirmation = page.getByRole('alertdialog'); await confirmation.waitFor();
+        const description = await confirmation.textContent();
+        if (!variant.expected.length) assert.match(description, /no tokens or keys are included/, mode);
+        else {
+          assert.ok(!description.includes('no tokens or keys'), 'credential-bearing inputs never claim to be credential-free');
+          for (const label of Object.values(kinds)) assert.equal(description.includes(label), variant.expected.includes(label), mode + ': ' + label);
+        }
+        assert.ok(!description.includes('synthetic-'), 'the confirmation never displays credential values');
+        await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(page.api.writes, 0, 'checking/cancelling an import does not write to the board');
+        assert.deepEqual(page.errors, []); await page.close();
+      }
+    }
     // Unrelated Settings saves finish with docs controls enabled and preserve the user's dirty draft.
     for (const fail of [false, true]) {
       const page = await open(browser);
