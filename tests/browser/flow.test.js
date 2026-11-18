@@ -23,7 +23,8 @@ tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycl
 tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
 let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, boardGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false, runnerNetwork = false, commitsNetwork = false;
-const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
+const otherBoardSubject = 'PRIVATE fixture: another board client changed confidential strategy <script>unsafe</script>';
+const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : otherBoardSubject, author: { date: now } } }));
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
   const browser = await chromium.launch({ headless: true });
@@ -41,7 +42,17 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (req.method() === 'PUT' && ['/contents/board/tasks.json', '/contents/tasks.json'].includes(p)) { raw = JSON.parse(Buffer.from(req.postDataJSON().content, 'base64').toString()); revision++; return json({ content: { sha: 'board' + revision } }); }
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardGate) { const gate = boardGate; boardGate = null; gate.arrived(); await gate.wait; } if (boardNetwork) return route.abort('failed'); if (boardLost) return json({}, 401); if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') {
+        counts.board++;
+        const responseRevision = revision, responseBody = JSON.stringify(raw), held = boardGate;
+        if (held) { boardGate = null; held.arrived(); await held.wait; }
+        if (boardNetwork) return route.abort('failed');
+        if (boardLost) return json({}, 401);
+        if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' });
+        if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; }
+        if (!held && req.headers()['if-none-match'] === 'board' + responseRevision) return route.fulfill({ status: 304 });
+        return json({ sha: 'board' + responseRevision, encoding: 'base64', content: Buffer.from(responseBody).toString('base64') }, 200, { ETag: 'board' + responseRevision });
+      }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerNetwork) return route.abort('failed');
@@ -72,7 +83,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     const box = n => page.locator(`[data-card="t_${n}"]`).boundingBox();
     assert.ok((await box(1)).x < (await box(2)).x && (await box(2)).x < (await box(3)).x);
     assert.equal(await page.locator('.flow-event').count(), 20);
-    assert.match(await page.locator('.flow-feed').innerText(), /<script>unsafe<\/script>/);
+    const feedDom = await page.locator('.flow-feed').evaluate(node => node.outerHTML);
+    assert.ok(!feedDom.includes(otherBoardSubject) && !feedDom.includes('confidential strategy') && !feedDom.includes('unsafe'), 'matching commits never expose another board subject in text or attributes');
+    assert.equal(await page.locator('.flow-event a').first().textContent(), 'Board update');
+    assert.match(await page.locator('.flow-event a').first().getAttribute('href'), /\/commit\/0000000000000000000000000000000000000001$/);
+    assert.ok(await page.locator('.flow-event .hint').first().textContent(), 'generic activity retains its timestamp');
     // Showing Done and changing filters perform no metadata fetches or writes.
     const initial = { ...counts };
     await page.getByRole('button', { name: 'Show Done', exact: true }).click();
@@ -121,9 +136,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     const arrived = new Promise(resolve => { runnerArrived = resolve; });
     const heldUpdate = runnerGate = { arrived: runnerArrived, wait: new Promise(resolve => { releaseRunner = resolve; }) };
     commits[0].commit.message = 'Activity arrives independently';
+    commits[0].sha = 'f'.repeat(40);
     runnerVersion++; runner.pause_reason = 'Updated while hidden';
     await page.clock.fastForward(61000); await arrived;
-    await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Activity arrives independently'), null, { timeout: 1000 });
+    await page.waitForFunction(() => document.querySelector('.flow-event a')?.href.endsWith('f'.repeat(40)), null, { timeout: 1000 });
+    assert.ok(!(await page.locator('.flow-feed').evaluate(node => node.outerHTML)).includes('Activity arrives independently'), 'later commit subjects are also omitted');
     assert.equal(heldUpdate.request.failure(), null, 'successful activity is visible while runner status is still pending');
     await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
     const completed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 200);
@@ -295,7 +312,13 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.locator('#cTitle').fill('Saved while the older board poll is pending'); await page.locator('#cTitle').blur(); await written;
     await page.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Saved'));
     const oldPoll = page.waitForResponse(r => r.request().method() === 'GET' && r.url().includes('/contents/tasks.json'));
-    releasePoll(); await oldPoll;
+    releasePoll(); const staleResponse = await oldPoll; await staleResponse.finished();
+    const staleBoard = JSON.parse(Buffer.from((await staleResponse.json()).content, 'base64').toString());
+    assert.equal(staleBoard.tasks.find(t => t.id === 't_2').title, 'Task 2', 'the delayed response really contains the pre-save board');
+    await page.clock.runFor(100); // Let fetch/JSON continuations and rendering process the stale response.
+    assert.equal(await page.locator('#cTitle').inputValue(), 'Saved while the older board poll is pending');
+    assert.match(await page.locator('[data-card="t_2"]').innerText(), /Saved while the older board poll is pending/);
+    assert.match(await page.locator('#status').innerText(), /Saved/);
     assert.match(await page.locator('.flow-status').innerText(), /Keep this last runner copy/);
     assert.equal(await page.locator('.flow-event').count(), 20, 'a superseded board poll preserves the activity feed');
     await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });

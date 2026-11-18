@@ -28,6 +28,8 @@ Web board refinements: settings transfer preserves the selected Flow view, and c
 id from the underlying view URL so a reload stays on the board. Failed activity refreshes now clearly label the retained
 last copy. New regressions prove the existing same-connection retention after superseded board polls and transient
 metadata failures. Existing board, access and credential clearing checks remain; the retention logic itself is unchanged.
+Same-board settings imports preserve active filter routes. Flow activity uses generic update labels with commit links
+and timestamps: a path-matching commit may also touch another board, so its repository-wide subject is not displayed.
 
 Kit v136: `wait --until` stores a checkable condition (`pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
 `release:<owner>/<repo>@<tag>`). A condition is not an owner-authority wait. `reconcile --dry-run` adds an audit line

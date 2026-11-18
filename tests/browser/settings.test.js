@@ -498,6 +498,20 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       assert.equal(await other.locator('.flow-card').count(), 0, 'importing Board into an already-Flow tab changes the visible view');
       assert.equal(await other.evaluate(() => sessionStorage.getItem('kb_view')), 'board');
       assert.equal(new URL(other.url()).searchParams.get('board_view'), 'board');
+      // Same-board settings change the view without discarding the recipient's active filter snapshot.
+      await other.goto(base + '/board/index.html?filters=1&status=todo&label=pale&priority=medium&who=alex&board_view=flow#view=flow');
+      await other.locator('.flow-card').first().waitFor();
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(boardCode); await other.locator('#xImport').click();
+      const filteredImport = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await filteredImport;
+      await other.locator('.card').first().waitFor();
+      const filterQuery = new URL(other.url()).searchParams;
+      for (const [key, expected] of Object.entries({ filters: '1', status: 'todo', label: 'pale', priority: 'medium', who: 'alex', board_view: 'board' })) {
+        assert.equal(filterQuery.get(key), expected, `same-board import preserves filter ${key}`);
+      }
+      assert.equal(await other.locator('#fStatus').inputValue(), 'todo');
+      assert.equal(await other.locator('#fLabel').inputValue(), 'pale');
+      assert.equal(await other.locator('#fPrio').inputValue(), 'medium');
+      assert.equal(await other.locator('#fWho').inputValue(), 'alex');
       assert.deepEqual(other.errors, []); await other.close();
     }
     // Unsupported CRM views must not export a stale transferable task-view preference.

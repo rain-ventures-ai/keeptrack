@@ -1855,8 +1855,14 @@ if (typeof window !== 'undefined') (() => {
     s.el.addEventListener('cancel', e => e.preventDefault());
     s.open();
     await new Promise(res => whenSaved(res));
-    const imported = applyCode(raw);
-    if (XFER.pick.view.includes(imported.view)) { const chosen = imported.view; SS.set('kb_view', chosen); saveBoardContext({ view: chosen, card: '' }); const url = new URL(boardUrl(), location.href); url.searchParams.set('board_view', chosen); url.hash = 'view=' + chosen; history.replaceState({ kbView: chosen }, '', url); }
+    const previous = { ...cfg() }, previousUrl = new URL(location.href), imported = applyCode(raw);
+    if (XFER.pick.view.includes(imported.view)) {
+      const chosen = imported.view, current = cfg(), sameBoard = ['api', 'repo', 'branch', 'path'].every(k => previous[k] === current[k]);
+      SS.set('kb_view', chosen); saveBoardContext({ view: chosen, card: '' });
+      const url = sameBoard ? previousUrl : new URL(boardUrl(), location.href);
+      url.searchParams.delete('card'); url.searchParams.set('board_view', chosen); url.hash = 'view=' + chosen;
+      history.replaceState({ kbView: chosen }, '', url);
+    }
     await new Promise(r => setTimeout(r, 50));   // let the sheet paint before the reload blanks the page
     location.reload();
   }
@@ -2895,7 +2901,8 @@ if (typeof window !== 'undefined') (() => {
     if (meta.commitsPending) feed.append(el('p', 'hint', 'Refreshing activity…'));
     const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
     if (!commits.length && !meta.commitsError && !meta.commitsPending) feed.append(el('p', 'hint', Array.isArray(meta.commits) ? 'No board commits found.' : 'Waiting for activity…'));
-    commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
+    // A matching commit may also update another board: its repository-wide subject is not board-scoped text.
+    commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', 'Board update'); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
     return feed;
   }
 
