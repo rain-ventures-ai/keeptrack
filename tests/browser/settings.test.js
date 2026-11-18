@@ -29,10 +29,10 @@ const card = (id, num, title) => ({ id, num, title, column: 'todo', client: '', 
 // A small GitHub: contents API for reads and single-file writes, git data API for multi-file commits (as in task-drawer.test.js),
 // plus what Health reads: the branch, the kit version and the rate limit.
 class Github {
-  constructor() { this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First')) }; this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0; }
+  constructor(repo = 'acme/board') { this.repo = repo; this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First')) }; this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0; }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
   async route(route) {
-    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
+    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/' + this.repo, '');
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
     if (this.failWrite && method !== 'GET') return json({ message: 'Synthetic write failure' }, 500);
@@ -44,7 +44,7 @@ class Github {
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '/rate_limit') return json({ resources: { core: { remaining: 4900, limit: 5000 } } });
-    if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
+    if (p === '' && method === 'GET') return json({ full_name: this.repo, private: true, permissions: { push: true }, default_branch: 'main' });
     if (p === '/branches/main') return json({ name: 'main' });
     if (p.startsWith('/contents/board/KIT_VERSION')) return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/plain' }, body: '999' });
     if (p.startsWith('/contents/README.md')) return json({ message: 'Not Found' }, 404);
@@ -68,7 +68,7 @@ let base;
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
 const TABS = ['Prefs', 'Board', 'Conn', 'Agents'];
 async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '', settings = null } = {}) {
-  const api = new Github(), page = await browser.newPage({ viewport: { width, height } }), errors = [];
+  const api = new Github(repo || 'acme/board'), page = await browser.newPage({ viewport: { width, height } }), errors = [];
   if (settings) { const data = JSON.parse(api.files['tasks.json']); Object.assign(data.settings, settings); api.files['tasks.json'] = text(data); }
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
   await page.addInitScript(([token, repo]) => {
@@ -525,6 +525,32 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       const hasView = await page.evaluate(() => Object.hasOwn(JSON.parse(atob(window.__copied.slice(7).replace(/-/g, '+').replace(/_/g, '/'))), 'view'));
       assert.equal(hasView, false, 'a CRM export omits the unsupported view instead of leaking stale Flow');
       assert.deepEqual(page.errors, []); await page.close();
+    }
+    // A code without an optional view still replaces an old board URL with the imported connection.
+    {
+      const source = await open(browser, { repo: 'acme/source', settings: { modes: ['tasks', 'crm'] } });
+      await source.locator('#viewSw [data-view="people"]').click();
+      await source.evaluate(() => window.kbSettings.open('move')); await source.locator('#xSecrets').check();
+      await source.locator('#xCode').click();
+      await source.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await source.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const code = await source.evaluate(() => window.__copied);
+      const decoded = JSON.parse(Buffer.from(code.slice(7), 'base64url').toString());
+      assert.equal(Object.hasOwn(decoded, 'view'), false, 'the real People-view export has no task view');
+      assert.equal(decoded.repo, 'acme/source');
+      source.api.files['cards/t_one.json'] = text(card('t_one', 1, 'Imported source board card'));
+      const target = await open(browser, { query: '?repo=acme/board&branch=main&path=board/tasks.json&filters=1&status=todo&label=pale&priority=medium' });
+      await target.route('https://api.test/repos/acme/source/**', r => source.api.route(r));
+      await target.evaluate(() => window.kbSettings.open('move')); await target.locator('#xPaste').fill(code); await target.locator('#xImport').click();
+      const navigation = target.waitForNavigation(); await target.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await navigation;
+      await target.locator('.card', { hasText: 'Imported source board card' }).waitFor();
+      assert.equal(new URL(target.url()).searchParams.get('repo'), 'acme/source');
+      assert.equal(await target.evaluate(() => localStorage.getItem('kb_repo')), 'acme/source');
+      for (const [key, old] of Object.entries({ status: 'todo', label: 'pale', priority: 'medium' })) {
+        assert.notEqual(new URL(target.url()).searchParams.get(key), old, 'cross-board imports do not carry old ' + key);
+      }
+      assert.deepEqual(source.errors, []); assert.deepEqual(target.errors, []);
+      await source.close(); await target.close();
     }
     // 15. Backlog auto-research (kit v60): off by default; the switch and "Cards each run" save settings.backlog_research.
     {

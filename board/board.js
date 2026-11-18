@@ -1856,12 +1856,16 @@ if (typeof window !== 'undefined') (() => {
     s.open();
     await new Promise(res => whenSaved(res));
     const previous = { ...cfg() }, previousUrl = new URL(location.href), imported = applyCode(raw);
-    if (XFER.pick.view.includes(imported.view)) {
-      const chosen = imported.view, current = cfg(), sameBoard = ['api', 'repo', 'branch', 'path'].every(k => previous[k] === current[k]);
+    const current = cfg(), sameBoard = ['api', 'repo', 'branch', 'path'].every(k => previous[k] === current[k]);
+    const chosen = XFER.pick.view.includes(imported.view) ? imported.view : null;
+    if (chosen) {
       SS.set('kb_view', chosen); saveBoardContext({ view: chosen, card: '' });
+    }
+    if (!sameBoard || chosen) {
       const url = sameBoard ? previousUrl : new URL(boardUrl(), location.href);
-      url.searchParams.delete('card'); url.searchParams.set('board_view', chosen); url.hash = 'view=' + chosen;
-      history.replaceState({ kbView: chosen }, '', url);
+      url.searchParams.delete('card');
+      if (chosen) { url.searchParams.set('board_view', chosen); url.hash = 'view=' + chosen; }
+      history.replaceState(chosen ? { kbView: chosen } : {}, '', url);
     }
     await new Promise(r => setTimeout(r, 50));   // let the sheet paint before the reload blanks the page
     location.reload();
