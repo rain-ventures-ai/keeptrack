@@ -32,6 +32,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py task-set ID --after '#62' [--after ..] | --not-after '#62' | --no-after   # runs after those cards: a hint and a gate, never a trigger
   keeptrack.py wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]   # park a card: not claimable until unwait
   keeptrack.py unwait ID --note "why"   # end the wait (agents: only a wait they set in this session that names nobody else)
+  keeptrack.py unwait ID --note "why" --owner-said "<owner's words, time>"   # agents: another agent's wait, card assigned to the owner
 
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
@@ -473,7 +474,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 137  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 138  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -4508,6 +4509,8 @@ def cmd_wait(a):
         _MUT["rerun"] = True   # the claim rules read this card's claim: a lost race re-runs on the newer board, never a merge
         w = {"on": on, "who": who, "since": (old or {}).get("since") or board_today(data).isoformat(), "nudge": nudge,
              "note": note, "by": who_am_i(None), "by_session": mine}
+        if agent_run():
+            w["by_agent"] = True   # kit v138: an agent set this wait, so `unwait --owner-said` may end it (never a person's)
         if until:
             w["until"] = until   # a checkable condition; not owner-authority and not an approval
         t["waiting"] = w
@@ -4533,14 +4536,61 @@ def cmd_wait(a):
     mutate(fn, f"Waiting: {a.id}")
 
 
+OWNER_SAID_MAX = 300   # kit v138: `unwait --owner-said` keeps at most this many characters of the owner's words
+
+
+def wait_set_by_agent(w):
+    """kit v138: an agent run set this wait. `by_agent` from v138; before that, a local agent's `by` is `agent@user`
+    (who_am_i with BOARD_AGENT), which a person's GitHub login can never be. Anything else counts as a person's."""
+    if w.get("by_agent") is True:
+        return True
+    by = str(w.get("by") or "")
+    agent, _, user = by.rpartition("@")
+    return "by_agent" not in w and bool(agent.strip()) and bool(user.strip())
+
+
+def owner_said_refusal(data, t, w, owner):
+    """Why `unwait --owner-said` may not end this wait, or '' when it may (kit v138). The owner's word ends only a wait
+    another agent set, on a card assigned to the owner, that waits on the owner, an agent or nobody."""
+    by = clean(w.get("by") or "?", 60)
+    if not owner:
+        return "--owner-said needs BOARD_USER: the owner whose words these are"
+    if not wait_set_by_agent(w):
+        return (f"this wait was set by a person ({by}); only a person ends it, and --owner-said does not change this. "
+                "Comment with @the assignee and stop")
+    _, at, user = str(w.get("by") or "").rpartition("@")
+    if at and user.strip().lower() != owner.lower():
+        return f"this wait was set by another member's agent ({by}); --owner-said speaks only for @{clean(owner, 60)}"
+    if owner.lower() not in [str(x).strip().lower() for x in t.get("assignees") or []]:
+        return (f"#{t.get('num', '?')} is not assigned to @{clean(owner, 60)}; --owner-said ends a wait only on a card "
+                "assigned to the owner. Comment with @the assignee and stop")
+    who = str(w.get("who") or "").strip().lower()
+    agents = {str(x).strip().lower() for x in data.get("agents") or [] if isinstance(x, str)}
+    if who and who != owner.lower() and (who not in agents or who.startswith("p_")):
+        return (f"#{t.get('num', '?')} waits on {clean(w.get('who'), 60)}, another party; the owner can't answer for them. "
+                "Comment with @the assignee and stop")
+    return ""
+
+
 def cmd_unwait(a):
     """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
-    person's to clear. A claim `wait` blocked runs again (a young one); an expired claim requeues only with retained
-    unattended admission. Clearing a wait never creates approval."""
+    person's to clear. Kit v138: with --owner-said (the owner's own words and when), an agent also ends a wait another
+    agent set, on a card assigned to the owner (owner_said_refusal); a person's wait stays locked. A claim `wait`
+    blocked runs again (a young one); an expired claim requeues only with retained unattended admission. Clearing a
+    wait never creates approval."""
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
         sys.exit("unwait needs --note with why the wait is over")
+    said = getattr(a, "owner_said", None)
+    if said is not None:
+        said = clean(" ".join(str(said).split())).strip()
+        if not said:
+            sys.exit("refused: --owner-said is empty; quote the owner's own words and when they said them")
+        if len(said) > OWNER_SAID_MAX:
+            sys.exit(f"refused: --owner-said is at most {OWNER_SAID_MAX} characters; quote the owner's words, not a summary")
+        if not agent_run():
+            sys.exit("refused: --owner-said is for agent runs; a person ends a wait with --note alone")
 
     def fn(data):
         t = find(data, a.id); w = waiting_of(t)
@@ -4548,10 +4598,16 @@ def cmd_unwait(a):
             sys.exit(f"{t['id']} is not waiting")
         sid = session_for(a); mine = session_hash(sid)
         agent = agent_run()   # kit v77: a hosted agent identity too, not only BOARD_AGENT
+        owner_word = False
         if agent and w.get("by_session") != mine:
-            sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
-                     "Comment with @the assignee and stop (--force does not change this)")
-        if agent and other_party(w, claim_agent(t), data):
+            if not said:
+                sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
+                         "Comment with @the assignee and stop (--force does not change this)")
+            why = owner_said_refusal(data, t, w, _acting_user())
+            if why:
+                sys.exit("refused: " + why)
+            owner_word = True
+        if agent and not owner_word and other_party(w, claim_agent(t), data):
             sys.exit(f"refused: {t['id']} waits on {clean(w.get('who'), 60)}, another party; only a person ends that wait (the web "
                      "page, or a shell without BOARD_AGENT). Comment with @the assignee and stop")
         _MUT["rerun"] = True   # reads this card's claim
@@ -4560,9 +4616,22 @@ def cmd_unwait(a):
         if not agent and other and holds_claim(t, a):
             note_agent_cleared(t, "unwait", sid)   # (a): the session holding the claim cleared a wait on someone else
         t["waiting"] = None
-        hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
-                f"session {redact_session(sid)})")
-        t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
+        if owner_word:
+            owner, me, ts = _acting_user(), who_am_i(t), now()
+            note_agent_cleared(t, "unwait on the owner's word", sid)   # evidence that outlives the history trim
+            hist(t, f"unwait on the owner's word: {note}; @{clean(owner, 60)} said: \"{said}\" (was waiting on {waiting_text(w)}, "
+                    f"set by {clean(w.get('by') or '?', 60)}, since {clean(w.get('since') or '?', 20)}; ended by {me} at {ts}; "
+                    f"session {redact_session(sid)})")
+            t["history"][-1]["owner_said"] = {"owner": owner, "quote": said, "agent": me, "at": ts}
+            t["history"][-1]["unwait"] = {"session": mine, "other": False, "owner_said": True}   # the owner chose: not flagged at the next claim
+            t.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": ts, "by": me, "text":
+                f"**Wait ended on the owner's word.** @{owner} said: \"{said}\"\n\n{me} ended it at {ts}: {note}\n\n"
+                f"It was waiting on {waiting_text(w)}, set by {clean(w.get('by') or '?', 60)} since {clean(w.get('since') or '?', 20)}. "
+                "Ending a wait is not an approval."})
+        else:
+            hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
+                    f"session {redact_session(sid)})")
+            t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
         msg = f"#{t.get('num', '?')} no longer waiting"
         if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
             age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
@@ -15485,8 +15554,12 @@ def main():
     s.add_argument("--nudge", help="the day to chase: YYYY-MM-DD, today or +N (default: settings.waiting_days after today)")
     s.add_argument("--until", help="a checkable condition, not an approval: pr:<owner>/<repo>#<n>:merged, date:<YYYY-MM-DD> or release:<owner>/<repo>@<tag>")
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
-    s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session")
-    s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session"); s.set_defaults(f=cmd_unwait)
+    s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session, "
+                                      "or another agent's wait on an owner-assigned card with --owner-said")
+    s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session")
+    s.add_argument("--owner-said", dest="owner_said", help="agents (kit v138): the owner's own words and when, quoted; ends a "
+                   "wait another agent set on a card assigned to the owner (BOARD_USER). A person's wait stays locked")
+    s.set_defaults(f=cmd_unwait)
     s = sub.add_parser("cleared-ack", help="a person marks a card's agent-cleared flags checked, so doctor and list --attention stop showing them")
     s.add_argument("id"); s.add_argument("--note", help="what you checked"); s.set_defaults(f=cmd_cleared_ack)
     s = sub.add_parser("todo-add", help="add a checklist item; - reads one per line from stdin, all in one save")
