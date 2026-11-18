@@ -90,6 +90,12 @@ python3 board/keeptrack.py routine <id> finish --run-id <same-id> --status succe
 # Commit/push only this routine's register after pulling the latest remote changes.
 ```
 
+Run usage (kit v137): finish records `usage` in the report. Add `--usage engine=<harness>` and, when the harness
+reports them, `--usage in=N --usage out=N` (also `cache_read`, `cache_write`, `turns`). Without token counts the report
+says `"known": false`: never invent numbers. A runner that measured a run adds them afterwards with
+`routine <id> usage --since <its start time> --usage ... [--push]`, which changes `last_run` only and never replaces
+known usage. Tokens only: never a cost.
+
 Use partial, failed or blocked for incomplete runs; these do not advance the last-success timestamp. A crashed run
 keeps `current_run` visible. Inspect the scheduler before clearing a stale attempt. Once that worker is confirmed
 stopped, use `routine <id> finish --run-id <recorded-current-run-id> --status failed` with a recovery summary,

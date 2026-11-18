@@ -25,6 +25,20 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v137 (schema 4)
+
+A routine register's finished report gains `usage`: `{"engine", "known", "in", "out", "cache_read", "cache_write",
+"turns"}`. `routine <id> finish --usage KEY=VALUE` records it. Without `--usage`, finish writes
+`{"engine": "unknown", "known": false}`, which says plainly that nobody measured the run (a cloud harness reports none).
+`routine <id> usage --since <UTC time> --usage ...` (or `--run-id`) adds measured token counts to `last_run` only;
+`runs` keeps the report as finish wrote it. Known usage is never replaced. `--push` saves through the GitHub API, for a
+runner whose board checkout is the owner's. Tokens only: a cost is money and is refused. Under
+`KEEPTRACK_PROPOSALS_ONLY=1`, finish takes `--usage engine=` only and `usage` is refused, so a worker cannot write its
+own numbers. Older readers ignore the new key. No new required field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v137. `routine <id> finish` on a test register writes `usage.known: false`; `routine <id> usage
+  --run-id <id> --usage engine=claude --usage in=1 --usage out=1` then sets `known: true` on `last_run` only.
+
 ### v136 (schema 4)
 
 `wait --until` stores one checkable condition on the wait: `pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
