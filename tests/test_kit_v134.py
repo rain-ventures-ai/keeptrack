@@ -440,6 +440,27 @@ class Probe:
         line = self.run_git(self.remote, "rev-list", "--first-parent", "--reverse", f"{base}..main").split()
         return base, side1, side2, main, merges, line
 
+    def test_idle_cursor_cannot_self_attest_to_a_project(self):
+        prior = decode(self.poll()["cursor"])
+        forged = base64.urlsafe_b64encode(json.dumps({**prior, "project": "pr_absent"}).encode()).decode()
+        with self.assertRaisesRegex(SystemExit, "no project matches"):
+            self.poll(forged, project="pr_absent")
+        removed = self.change(lambda data: data["projects"].pop(0))
+        stale = base64.urlsafe_b64encode(json.dumps({**prior, "commit": removed}).encode()).decode()
+        with self.assertRaisesRegex(SystemExit, "no project matches"):
+            self.poll(stale)
+
+    def test_idle_after_an_unrelated_commit_uses_the_confirmed_project(self):
+        prior = self.poll()["cursor"]
+        (Path(self.writer) / "README.md").write_text("board data is unchanged\n")
+        self.run_git(self.writer, "commit", "-qam", "readme")
+        self.push()
+        advanced = self.poll(prior)
+        self.assertEqual(([], self.head()), (advanced["events"], decode(advanced["cursor"])["commit"]))
+        with mock.patch.object(kt, "load_board_at") as load:
+            self.assertEqual([], self.poll(advanced["cursor"])["events"])
+        load.assert_not_called()
+
     def test_every_page_and_scan_cap_ends_without_missing_a_commit(self):
         base, side1, side2, main, merges, line = self.build()
         side_of = {**{c: merges[0] for c in side1}, **{c: merges[1] for c in side2}}
@@ -610,14 +631,21 @@ class ProbeGit(Probe, GitBoard):
 class ProbeApi(Probe, GitBoard):
     WRITE = "api"
 
-    def test_an_idle_poll_with_a_project_id_only_reads_the_branch_head(self):
+    def test_an_idle_poll_with_a_verified_project_id_only_reads_the_branch_head(self):
         self.build()
         for n in range(20):   # a board of about 25 files
             self.split_card(f"t_more{n:02d}", 10 + n, f"More {n}")
         self.push()
         calls, real = [], self.fake_gh
         counted = lambda *a, body=None: (calls.append(a[0]), real(*a, body=body))[1]
-        cursor = self.poll()["cursor"]
+        prior = {"v": 2, "board": "acme/board", "project": "pr_one", "commit": self.head()}
+        cursor = base64.urlsafe_b64encode(json.dumps(prior, separators=(",", ":")).encode()).decode()
+        with mock.patch.object(kt, "gh", counted), mock.patch.object(kt, "_prune_blob_cache") as prune:
+            result = self.poll(cursor)
+        prune.assert_not_called()
+        self.assertEqual(([], cursor, False, False), (result["events"], result["cursor"], result["baseline"], result["more"]))
+        self.assertTrue(any(c.endswith("?recursive=1") for c in calls))
+        self.assertFalse(any("/compare/" in c for c in calls))
         for _ in range(2):   # each poll is a new process: no memory carried over
             calls.clear()
             with mock.patch.object(kt, "gh", counted), mock.patch.object(kt, "_API_BLOB_MEMO", {}), \
@@ -676,9 +704,11 @@ class ApiCost(GitBoard):
     def test_idle_name_and_prefix_selectors_still_validate_the_project(self):
         cursor = self.poll(project="One")["cursor"]
         for alias in ("One", "pr_o"):
-            with self.subTest(alias=alias), mock.patch.object(kt, "_API_TREE_MEMO", {}):
+            with self.subTest(alias=alias), mock.patch.object(kt, "_API_TREE_MEMO", {}), \
+                    mock.patch.object(kt, "_prune_blob_cache") as prune:
                 self.calls.clear()
                 result = self.poll(cursor, project=alias)
+                prune.assert_not_called()
                 self.assertEqual(([], cursor), (result["events"], result["cursor"]))
                 self.assertEqual(0, self.compares())
                 self.assertTrue(any(c.endswith("?recursive=1") for c in self.calls))

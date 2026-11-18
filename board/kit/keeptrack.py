@@ -1320,7 +1320,7 @@ def _api_board_tree_read(head, missing_ok):
     return root_tree, sha
 
 
-def _api_snapshot(include_archive=False, ref=None):
+def _api_snapshot(include_archive=False, ref=None, *, prune_cache=True):
     """ref (kit v134): read the board at that commit instead of the branch head. The caller has checked it. A past
     commit only updates the blob cache if its board tree is still current at the branch head."""
     head = _api_head() if ref is None else ref
@@ -1356,7 +1356,7 @@ def _api_snapshot(include_archive=False, ref=None):
         if ref is not None:
             raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board at that commit")
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
-    if current:
+    if current and prune_cache:
         _prune_blob_cache({x["sha"] for x in tree.get("tree", []) if x.get("type") == "blob" and x.get("sha")})
     return files, {"head": head, "base_tree": root_tree}
 
@@ -1381,7 +1381,7 @@ def _decode_json(rel, entry):
     return obj
 
 
-def _github_load_board(ref=None):
+def _github_load_board(ref=None, *, prune_cache=True):
     """Load either layout into the v3-shaped in-memory model used by commands.
 
     ref (kit v134, read-only): the board as it was at that commit, through the same decoding and layout code. Such a
@@ -1394,7 +1394,7 @@ def _github_load_board(ref=None):
             sys.exit("refused: a --file board has no commit history to read; use the git or API transport")
         shared = _SHARED_FOLDER[0]
         try:
-            files, head = _git_snapshot(ref=ref) if WRITE == "git" else _api_snapshot(ref=ref)
+            files, head = _git_snapshot(ref=ref) if WRITE == "git" else _api_snapshot(ref=ref, prune_cache=prune_cache)
         finally:
             _SHARED_FOLDER[0] = shared
         mode = "git" if WRITE == "git" else "api"
@@ -1764,13 +1764,66 @@ def board_history(since, limit=None, project=""):
         picked += items; examined += len(todo); last = tip
     if hasattr(trees, "flush"):   # the API transport keeps the board trees it read for the next call
         trees.flush(last)
-    return {"head": head, "commits": picked, "next": last, "more": last != head}
+    # An unrelated commit can advance the head without changing the board. A decoded snapshot of that same tree
+    # also confirms project membership at head, with no extra read of the board.
+    head_tree = known.get(head)
+    same_head_tree = {c for c, tree in known.items() if tree == head_tree} if head_tree not in (None, "missing") else set()
+    return {"head": head, "commits": picked, "next": last, "more": last != head, "same_head_tree": same_head_tree}
 
 
-def load_board_at(commit):
+WATCH_SCOPE_BYTES = 65536  # one bounded set of project IDs at the last seen head, per repository
+
+
+def _watch_scope_file():
+    return os.path.join(CACHE_DIR, *REPO.split("/"), "history-scope.json")
+
+
+def _watch_scope_bytes():
+    path = _watch_scope_file()
+    with contextlib.suppress(OSError):
+        if stat.S_ISREG(os.lstat(path).st_mode):
+            with open(path, "rb") as f:
+                return f.read(WATCH_SCOPE_BYTES + 1)
+    return b""
+
+
+def watch_project_at_head(commit, project):
+    """An idle exact-ID poll can use project membership from a previously decoded board at this head."""
+    try:
+        raw = _watch_scope_bytes()
+        if len(raw) <= WATCH_SCOPE_BYTES:
+            cached = json.loads(raw)
+            return (isinstance(cached, dict) and cached.get("scope") == [REPO, BRANCH, PATH, commit]
+                    and isinstance(cached.get("projects"), list) and project in cached["projects"])
+    except (OSError, ValueError, RecursionError):
+        pass
+    return False
+
+
+def _remember_watch_projects(commit, data):
+    projects = data.get("projects")
+    if not isinstance(projects, list) or not all(isinstance(p, dict) for p in projects):
+        return
+    ids = sorted({ident for p in projects if isinstance(ident := p.get("id"), str) and SAFE_ID.fullmatch(ident)})
+    snapshot = json.dumps({"scope": [REPO, BRANCH, PATH, commit], "projects": ids}, separators=(",", ":"))
+    if len(snapshot) > WATCH_SCOPE_BYTES or _watch_scope_bytes() == snapshot.encode():
+        return
+    path = _watch_scope_file()
+    with contextlib.suppress(OSError):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
+        if not os.path.exists(ignore):
+            atomic_write(ignore, "# local board files for this project; never committed\n*\n")
+        atomic_write(path, snapshot)
+
+
+def load_board_at(commit, *, prune_cache=True):
     """Kit v134, read-only: the board as it was at one commit of its branch. Never registered for a save."""
     _history_transport()
-    return _github_load_board(ref=commit)
+    data = _github_load_board(ref=commit, prune_cache=prune_cache)
+    if commit == _HISTORY_HEAD[0]:
+        _remember_watch_projects(commit, data)
+    return data
 
 
 class HostedError(Exception):

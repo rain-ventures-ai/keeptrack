@@ -125,9 +125,11 @@ cursor sits on an unreadable commit). One call can load up to the scan cap's
 worth of past boards (200); on the API transport each load costs about 5
 requests, and each watched project caches its commit parents on disk so a
 catch-up reads its compare range once (plus one small count check per poll).
-With an exact project ID, an idle poll only checks the branch head (one API
-request). A name or prefix still needs a board read to validate its scope.
-History snapshots of the current board tree prune obsolete cached blobs.
+An idle poll for an exact project ID checks only the branch head (one API
+request) when a local snapshot has already verified that project at that commit.
+A cold cache, name or prefix needs a board read to validate scope. Idle reads
+skip blob pruning. Baselines and replays of the current board tree prune
+obsolete cached blobs.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has
