@@ -9,10 +9,12 @@ Claude that helps them. It is the target of the "Copy new-board prompt for Claud
 - Never type, paste, read back or store a secret (GitHub token, routine token, cron-job.org key). At each secret step,
   tell the person where to click and what to paste, and wait until they say it is done.
 - Do not create anything outside the new repo. Ask before each step that cannot be undone.
+- Repository settings such as topics and the default branch are the repository owner's to change.
 
 ## 1. Agree the basics (ask the person)
 - The repo: owner and name, for example `osouthgate/private-tasks` or `rain-ventures-ai/ops-board`. A board for one
-  person usually goes in their own account; a team board goes in the organisation.
+  person usually goes in their own account, and a team board goes in the organisation. Include an owner step to set
+  the GitHub topic `keeptrack-board` so tools such as Relay can discover the board.
 - The people: GitHub username and display name for each one. The first person is the **upgrade owner**: their Claude
   does future board kit upgrades (change it later with `keeptrack.py kit-owner`).
 - The upgrade owner's work email address(es) (never a personal one: the board is a shared repo) and time zone. They go on the owner's
@@ -26,6 +28,10 @@ For an organisation, choose it as the owner. Claude often cannot create repos in
 does it and says when it is done.
 
 ## 3. Add the board kit (Claude, in a clone of the new repo)
+Check the agreed repo with `gh repo view <owner>/<name> --json visibility,repositoryTopics` or on GitHub before
+pushing any board files. Proceed only once the repo is confirmed private. If privacy cannot be confirmed, stop setup
+before pushing and tell the owner.
+
 ```bash
 git clone https://github.com/<owner>/<name> && cd <name>
 git checkout -b master            # the web board and keeptrack.py use the master branch by default
@@ -37,8 +43,14 @@ python3 board/keeptrack.py kit-check                      # says the kit is curr
 git add -A && git commit -m "Set up task board (board kit)" && git push -u origin master
 ```
 `init` first runs the kit update, which **overwrites** every kit file whose content differs from the published kit (`board/keeptrack.py`, `board/README.md`, `board/UPGRADING.md`, the routine files and `.claude/skills/board*`). It then writes the repo-owned starter files, root `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and `.claude/settings.json`, and an empty schema-v4 `board/tasks.json`, **only when they do not exist yet**; existing ones are kept. The root README explains that the repo uses Keeptrack and links directly to its web board. `AGENTS.md` is the safety and workflow contract for repo-local agents. Add the repo's own rules to it if the repo has other work.
-If the repo's default branch is `main`, either make `master` the default branch in GitHub (Settings → General) or set the
-branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
+If the repo's default branch is `main`, ask the owner to make `master` the default branch in GitHub (Settings → General),
+or use `main` in the web board and set `BOARD_BRANCH=main` for agents.
+
+After pushing the board files, if the private repo lacks the topic, ask the repository owner to add `keeptrack-board`
+under **About → Edit → Topics**. Give the owner `gh repo edit <owner>/<name> --add-topic keeptrack-board` as a command
+for them to run, with the agreed owner and repo name filled in. Only the repository owner makes the setting change.
+After they say it is set, verify it with the read-only `gh repo view <owner>/<name> --json visibility,repositoryTopics`.
+If the topic is already present, skip the topic step.
 
 ## 4. Connect the web board (the person)
 1. Claude gives the person this link after replacing `<OWNER>` and `<REPO>` with the new repo's URL-encoded owner and

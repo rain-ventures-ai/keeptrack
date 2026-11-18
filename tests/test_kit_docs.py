@@ -92,6 +92,37 @@ class GoodCards(unittest.TestCase):
             self.assertIn("CARDS.md", read(*path), "/".join(path))
 
 
+class BoardDiscovery(unittest.TestCase):
+    def test_onboarding_uses_local_setup_instructions_and_an_owner_topic_step(self):
+        skill = read("skills", "onboard-keeptrack", "SKILL.md")
+        self.assertIn("../../NEW-BOARD.md", skill)
+        self.assertNotIn("blob/main/board/kit/NEW-BOARD.md", skill)
+        self.assertIn("ask the repository owner to set the topic", skill)
+        self.assertIn("Only the repository owner makes the setting change", skill)
+
+    def test_new_board_checks_privacy_before_pushing_and_hands_topic_to_owner(self):
+        setup = read("NEW-BOARD.md").split("## 3.", 1)[1].split("## 4.", 1)[0]
+        self.assertRegex(setup, r"confirmed private.*stop setup before pushing.*git push")
+        topic = setup.split("After pushing the board files", 1)[1]
+        self.assertIn("ask the repository owner to add `keeptrack-board`", topic)
+        self.assertIn("Give the owner `gh repo edit <owner>/<name> --add-topic keeptrack-board` as a command for them to run", topic)
+        self.assertIn("Only the repository owner makes the setting change", topic)
+        self.assertIn("verify it with the read-only `gh repo view", topic)
+        self.assertIn("If the topic is already present, skip the topic step", topic)
+
+    def test_upgrade_topic_is_an_owner_action_and_stays_optional(self):
+        skill = read("repo-skills", "board-upgrade", "SKILL.md")
+        self.assertIn("check the optional [repository topic](#repository-topic)", skill)
+        topic = skill.split("## Repository topic", 1)[1]
+        self.assertIn("gh repo view <owner>/<repo> --json visibility,repositoryTopics", topic)
+        self.assertIn("ask the repository owner to add it", topic)
+        self.assertRegex(topic, r"Give the owner this command to run[^:]*: ```text gh repo edit <owner>/<repo> --add-topic keeptrack-board")
+        self.assertIn("Only the repository owner makes the setting change", topic)
+        self.assertIn("verify it with the same read-only `gh repo view` query", topic)
+        self.assertIn("Skip the topic step if it is already set, the repo is non-private, or its metadata is unavailable", topic)
+        self.assertIn("Proceed with an otherwise eligible upgrade while the topic step is pending or skipped", topic)
+
+
 if __name__ == "__main__":
     unittest.main()
 
