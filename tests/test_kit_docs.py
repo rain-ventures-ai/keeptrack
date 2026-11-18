@@ -92,6 +92,23 @@ class GoodCards(unittest.TestCase):
             self.assertIn("CARDS.md", read(*path), "/".join(path))
 
 
+class BoardDiscovery(unittest.TestCase):
+    def test_onboarding_follows_new_board_guide_to_add_topic(self):
+        skill = read("skills", "onboard-keeptrack", "SKILL.md")
+        self.assertIn("/board/kit/NEW-BOARD.md", skill)
+        setup = read("NEW-BOARD.md").split("## 3.", 1)[1].split("## 4.", 1)[0]
+        self.assertRegex(setup, r"confirmed private.*git push")
+        self.assertRegex(setup, r"topic is missing and the owner approved it .* `gh repo edit <owner>/<name> --add-topic keeptrack-board`")
+
+    def test_upgrade_offers_missing_topic_with_separate_owner_approval(self):
+        skill = read("repo-skills", "board-upgrade", "SKILL.md")
+        self.assertIn("offer the [repository topic](#repository-topic) if missing", skill)
+        topic = skill.split("## Repository topic", 1)[1]
+        self.assertIn("gh repo view <owner>/<repo> --json visibility,repositoryTopics", topic)
+        self.assertIn("gh repo edit <owner>/<repo> --add-topic keeptrack-board", topic)
+        self.assertIn("Run it only after the owner explicitly approves that repository setting change", topic)
+
+
 if __name__ == "__main__":
     unittest.main()
 

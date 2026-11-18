@@ -7,8 +7,9 @@ description: Upgrade this repo's board tools (the board kit from rain-ventures-a
 
 You act for the board's upgrade owner (`python3 board/keeptrack.py kit-owner`). If you act for someone else, comment on the card that the upgrade belongs to the owner, assign it to them, and stop.
 
-1. `python3 board/keeptrack.py kit-check`. If it says current, comment that on the card and finish the card with `done`.
-2. Claim the card.
+1. `python3 board/keeptrack.py kit-check`. If it says current, offer the [repository topic](#repository-topic) if
+   missing, comment that the kit is current and finish the card with `done`.
+2. Claim the card, then check the [repository topic](#repository-topic) before starting either upgrade path.
 
 ## Main path: `board/upgrade.py`
 Use this when `board/upgrade.py` exists (kit v67 and later). For the first upgrade to v67, run the kit's copy:
@@ -48,3 +49,17 @@ Use this when `board/upgrade.py` is missing or cannot run here.
 If the card is still open after the merge and the schema changed, run `python3 board/keeptrack.py migrate` from the default branch, then finish the card.
 
 Never push kit changes to the default branch yourself, and never edit `board/tasks.json` or any other board JSON file (`board/cards/`, `board/people/`, `board/projects/`, `board/proposals/`, `board/archive/`) by hand.
+
+## Repository topic
+
+During either upgrade path, identify the board's GitHub repo with `python3 board/keeptrack.py where` and check it
+with `gh repo view <owner>/<repo> --json visibility,repositoryTopics`. If the private repo lacks `keeptrack-board`,
+offer to add it so tools such as Relay can discover the board. Show the owner the command with the actual repo filled in:
+
+```text
+gh repo edit <owner>/<repo> --add-topic keeptrack-board
+```
+
+Run it only after the owner explicitly approves that repository setting change, then verify with `gh repo view`.
+If repository rules reserve settings changes for the owner, give them the command to run. The kit upgrade can proceed
+while the topic is pending. If the repo is public, stop and tell the owner.

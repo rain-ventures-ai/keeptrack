@@ -12,7 +12,8 @@ Claude that helps them. It is the target of the "Copy new-board prompt for Claud
 
 ## 1. Agree the basics (ask the person)
 - The repo: owner and name, for example `osouthgate/private-tasks` or `rain-ventures-ai/ops-board`. A board for one
-  person usually goes in their own account; a team board goes in the organisation.
+  person usually goes in their own account, and a team board goes in the organisation. Include adding the GitHub topic
+  `keeptrack-board` in the setup plan so tools such as Relay can discover the board.
 - The people: GitHub username and display name for each one. The first person is the **upgrade owner**: their Claude
   does future board kit upgrades (change it later with `keeptrack.py kit-owner`).
 - The upgrade owner's work email address(es) (never a personal one: the board is a shared repo) and time zone. They go on the owner's
@@ -26,6 +27,9 @@ For an organisation, choose it as the owner. Claude often cannot create repos in
 does it and says when it is done.
 
 ## 3. Add the board kit (Claude, in a clone of the new repo)
+Check the agreed repo with `gh repo view <owner>/<name> --json visibility,repositoryTopics` or on GitHub before
+pushing any board files. Proceed once the repo is confirmed private. If it is public, stop and tell the owner.
+
 ```bash
 git clone https://github.com/<owner>/<name> && cd <name>
 git checkout -b master            # the web board and keeptrack.py use the master branch by default
@@ -39,6 +43,11 @@ git add -A && git commit -m "Set up task board (board kit)" && git push -u origi
 `init` first runs the kit update, which **overwrites** every kit file whose content differs from the published kit (`board/keeptrack.py`, `board/README.md`, `board/UPGRADING.md`, the routine files and `.claude/skills/board*`). It then writes the repo-owned starter files, root `README.md`, `AGENTS.md`, `CLAUDE.md`, `.gitignore` and `.claude/settings.json`, and an empty schema-v4 `board/tasks.json`, **only when they do not exist yet**; existing ones are kept. The root README explains that the repo uses Keeptrack and links directly to its web board. `AGENTS.md` is the safety and workflow contract for repo-local agents. Add the repo's own rules to it if the repo has other work.
 If the repo's default branch is `main`, either make `master` the default branch in GitHub (Settings → General) or set the
 branch to `main` in the web board and `BOARD_BRANCH=main` for agents.
+
+After pushing the board files, if the topic is missing and the owner approved it in the setup plan, add it with
+`gh repo edit <owner>/<name> --add-topic keeptrack-board`. Substitute the agreed owner and repo name and check the
+topic again with `gh repo view`. If you cannot edit the setting, give the owner the command to run or direct them to
+**About → Edit → Topics** on that repo.
 
 ## 4. Connect the web board (the person)
 1. Claude gives the person this link after replacing `<OWNER>` and `<REPO>` with the new repo's URL-encoded owner and
