@@ -34,11 +34,16 @@ the referenced card is Done and completed. `claim` checks its target and `next` 
 Run `wait-check` from an existing board sweep to clear verified waits without claiming any card. A claim or next command
 that cannot proceed does not save its wait changes, so use `wait-check` when a dispatcher checks eligibility before claiming.
 The kit does not start a background poller. The history holds the formal condition, evidence and actor.
-Named parties, owner-authority and person-set waits use the existing rules. Free-text waits remain manual. A cleared wait
-carries no approval. The optional condition and history fields fit the existing schema. No migration is needed.
+Named parties, owner-authority and person-set waits use the existing rules for unlisted agents. Free-text waits remain manual.
+A person on a GitHub board can opt in with `settings-set --wait-enders rook,codex`. Listed agents can end any wait with
+`unwait ID --note "why"`. History records the delegation, actor and note. `settings-set --clear-wait-enders` revokes
+the list, and an agent cannot set or clear it through the CLI. GitHub runs use their declared `BOARD_AGENT`.
+A cleared wait carries no approval. The optional fields fit the existing schema. No migration is needed.
 
 - Check: `kit-check` says v139. On a test board, set `card:#42:done` from one agent session and run `wait-check` from
   another before and after completing the target. The wait ends only after completion, and its history records the evidence.
+  Set `--wait-enders rook` from a person session, then check that rook can clear a named wait with `--note` and that
+  the same agent cannot edit the list. Clear the test setting with `--clear-wait-enders` from a person session.
 
 ### v138 (schema 4)
 

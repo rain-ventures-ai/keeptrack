@@ -190,5 +190,142 @@ class VerifiedWaits(unittest.TestCase):
                 self.edit(lambda d: d["tasks"][0].pop("waiting"))
 
 
+class DelegatedWaits(unittest.TestCase):
+    ENV = tw.Waiting.ENV
+    setUp, tearDown, read, card, edit, out, agent, refusal, claim, wait, unwait, settings_set = (
+        tw.Waiting.setUp, tw.Waiting.tearDown, tw.Waiting.read, tw.Waiting.card, tw.Waiting.edit, tw.Waiting.out,
+        tw.Waiting.agent, tw.Waiting.refusal, tw.Waiting.claim, tw.Waiting.wait, tw.Waiting.unwait, tw.Waiting.settings_set)
+
+    def test_person_replaces_and_clears_wait_enders(self):
+        self.assertIn("wait_enders: none", self.out(kt.cmd_settings, tw.Args()))
+        self.settings_set(wait_enders="Rook, codex")
+        self.assertEqual(["Rook", "codex"], self.read()["settings"]["wait_enders"])
+        self.assertIn("wait_enders: Rook, codex", self.out(kt.cmd_settings, tw.Args()))
+        self.settings_set(clear_wait_enders=True)
+        self.assertEqual([], self.read()["settings"]["wait_enders"])
+
+    def test_agent_cannot_change_or_clear_the_list(self):
+        self.settings_set(wait_enders="rook")
+        before = self.read()
+        with self.agent("rook"):
+            self.assertIn("only a person", self.refusal(self.settings_set, wait_enders="codex", title="new"))
+            self.assertIn("only a person", self.refusal(self.settings_set, clear_wait_enders=True))
+        self.assertEqual(before, self.read())
+
+    def test_bad_names_do_not_change_the_setting(self):
+        self.settings_set(wait_enders="rook")
+        before = self.read()
+        for setting in ("", "codex, ", "rook,ROOK", "@rook", "rook@owner", "two agents"):
+            with self.subTest(setting=setting):
+                self.assertIn("distinct agent names", self.refusal(self.settings_set, wait_enders=setting))
+        self.assertEqual(before, self.read())
+
+    def test_listed_agent_clears_person_set_wait_on_owner_with_audit(self):
+        self.settings_set(wait_enders="Rook")
+        self.wait(1, on="owner review", who="osouthgate", session="person")
+        with self.agent("rook"):
+            self.assertIn("needs --note", self.refusal(self.unwait, 1, note=" ", session="second"))
+            self.assertIn("via wait_enders", self.unwait(1, note="review took place", session="second"))
+        card = self.card(1)
+        self.assertIsNone(card["waiting"])
+        self.assertEqual("todo", card["column"])
+        self.assertNotIn("claim", card)
+        self.assertNotIn("asked", card)
+        row = card["history"][-1]
+        self.assertEqual("rook@osouthgate", row["by"])
+        self.assertIn("wait_enders delegation: review took place", row["text"])
+        self.assertTrue(row["unwait"]["delegated"])
+        self.assertEqual("unwait via wait_enders", card["agent_cleared"][-1]["what"])
+
+    def test_listed_agent_clears_another_agent_session_without_a_heartbeat_or_approval(self):
+        self.settings_set(wait_enders="rook")
+        with self.agent("codex"):
+            self.claim(1, "first", agent="codex", attended=True)
+            self.wait(1, who="JezHub", session="first")
+        before = self.card(1)["claim"]
+        self.assertEqual("blocked", before["status"])
+        with self.agent("rook"):
+            self.unwait(1, session="second")
+        claim = self.card(1)["claim"]
+        self.assertEqual("running", claim["status"])
+        for field in ("session_id", "heartbeat_at", "unattended_approved", "attended"):
+            self.assertEqual(before.get(field), claim.get(field), field)
+
+    def test_unlisted_agent_cannot_use_card_claim_or_caller_arg_as_identity(self):
+        self.settings_set(wait_enders="rook")
+        with self.agent("rook"):
+            self.claim(1, "first", agent="rook", attended=True)
+            self.wait(1, who="osouthgate", session="first")
+        args = tw.Args(id="t_c1", note="lets start", session="second", agent="rook")
+        with self.agent("codex"):
+            self.assertIn("only a wait it set", self.refusal(kt.cmd_unwait, args))
+        self.assertIsNotNone(self.card(1)["waiting"])
+
+    def test_missing_or_malformed_setting_grants_no_delegation(self):
+        self.wait(1, who="osouthgate", session="person")
+        with self.agent("rook"):
+            self.assertIn("only a wait it set", self.refusal(self.unwait, 1, session="second"))
+            for value in ("rook", ["rook", 7], ["rook", "ROOK"], None):
+                with self.subTest(value=value):
+                    self.edit(lambda d: d["settings"].update(wait_enders=value))
+                    self.assertIn("only a wait it set", self.refusal(self.unwait, 1, session="second"))
+        self.assertIsNotNone(self.card(1)["waiting"])
+
+    def test_agent_identity_must_match_the_agent_name_format(self):
+        self.settings_set(wait_enders="rook")
+        self.wait(1, who="osouthgate", session="person")
+        for name in ("rook\n", "roo\N{KELVIN SIGN}"):
+            with self.subTest(name=name), self.agent(name):
+                self.assertIn("only a wait it set", self.refusal(self.unwait, 1, session="second"))
+        self.assertIsNotNone(self.card(1)["waiting"])
+
+    def test_hosted_phase_zero_keeps_wait_and_settings_writes_unavailable(self):
+        with patch.object(kt, "BACKEND", "hosted"), patch.object(kt, "FILE", None), patch.object(kt, "storage_adapter") as adapter:
+            self.assertIn("unavailable in hosted phase 0", self.refusal(kt.hosted_dispatch, tw.Args(cmd="unwait")))
+            for setting in ({"wait_enders": "rook"}, {"clear_wait_enders": True}):
+                self.assertIn("settings-set is read-only", self.refusal(kt.hosted_dispatch, tw.Args(cmd="settings-set", **setting)))
+            adapter.assert_not_called()
+
+    def test_explicit_owner_word_uses_its_own_audit_path(self):
+        self.settings_set(wait_enders="rook")
+        with self.agent("codex"):
+            self.wait(1, session="first")
+        with self.agent("rook"):
+            self.out(kt.cmd_unwait, tw.Args(id="t_c1", session="second", note="confirmed",
+                                          owner_said="The review is complete, 17 November"))
+        row = self.card(1)["history"][-1]
+        self.assertTrue(row["unwait"]["owner_said"])
+        self.assertNotIn("delegated", row["unwait"])
+
+    def test_save_conflict_rechecks_revoked_delegation(self):
+        self.settings_set(wait_enders="rook")
+        self.wait(1, who="osouthgate", session="person")
+
+        def revoke(data, sha, message):
+            self.assertTrue(kt._MUT["recheck"])
+            self.edit(lambda d: d["settings"].update(wait_enders=[]))
+            return False
+
+        before = self.card(1)
+        with self.agent("rook"), patch.object(kt, "save", side_effect=revoke) as save, patch.object(kt.time, "sleep"):
+            self.assertIn("only a wait it set", self.refusal(self.unwait, 1, session="second"))
+        self.assertEqual(1, save.call_count)
+        self.assertEqual(before, self.card(1))
+        self.assertEqual([], self.read()["settings"]["wait_enders"])
+
+    def test_save_conflict_never_clears_replacement_wait(self):
+        self.settings_set(wait_enders="rook")
+        self.wait(1, who="osouthgate", session="person")
+
+        def replace(data, sha, message):
+            self.edit(lambda d: d["tasks"][0]["waiting"].update(on="a different decision"))
+            return False
+
+        with self.agent("rook"), patch.object(kt, "save", side_effect=replace) as save, patch.object(kt.time, "sleep"):
+            self.assertIn("changed during delegation", self.refusal(self.unwait, 1, session="second"))
+        self.assertEqual(1, save.call_count)
+        self.assertEqual("a different decision", self.card(1)["waiting"]["on"])
+
+
 if __name__ == "__main__":
     unittest.main()

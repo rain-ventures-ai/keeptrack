@@ -76,7 +76,12 @@ Agents and scripts use `wait ID --on "Acme finance" [--who p_id|login] [--nudge 
 `unwait ID --note "why"`. On GitHub boards, use `--until 'pr:owner/repo#12:merged'` or `--until 'card:#42:done'` for
 an agent's event wait with no named party. Another agent can run `unwait` once the kit verifies completion. `claim`,
 `next` and `wait-check` also check for completion. For a wait on an owner-assigned card, the owner can also authorize
-`unwait ID --note "why" --owner-said "<words, time>"` under the existing rules. A wait a person set stays locked.
+`unwait ID --note "why" --owner-said "<words, time>"` under the existing rules. For unlisted agents, a wait a person
+set stays locked.
+
+On a GitHub board, a person can choose who can end any wait with `settings-set --wait-enders rook,codex` and remove
+that authority with `settings-set --clear-wait-enders`. A listed agent must still use `unwait ID --note "why"` and the
+board records the agent, note and use of delegation. Clearing a wait does not approve work.
 `today` lists waits due for a chase under **CHASE NOW**, `list --waiting` (or
 `--waiting-on me`) lists waiting tasks, and `people` shows how many tasks wait on each person.
 

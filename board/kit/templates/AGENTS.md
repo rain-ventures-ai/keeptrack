@@ -23,7 +23,9 @@ python3 board/keeptrack.py heartbeat <id> --note "<what you are doing now>"     
 python3 board/keeptrack.py heartbeat <id> --status blocked --note "<why>"          # if you need a human
 python3 board/keeptrack.py wait <id> --on "<who: what>" --who <user>               # parked on a person or event: then comment @user, assign, stop
 # An agent can `unwait` another agent's event wait once the kit verifies its PR merge or card completion (`wait --until`).
-# Omit `--who` for an event wait. A wait a person set stays locked.
+# Omit `--who` for an event wait. For unlisted agents, the same restriction applies. A wait a person set stays locked.
+# Only a person can set `settings-set --wait-enders rook` or clear it with `--clear-wait-enders`.
+# Listed agents can `unwait <id> --note "why"` on any wait. History records the delegation, agent and note.
 # For the owner's direct instruction, use `unwait <id> --note "why" --owner-said "<their words, time>"`
 #  to end an eligible agent wait on a card assigned to the owner.
 python3 board/keeptrack.py done <id> --note "<result, PR or file link>"            # finished

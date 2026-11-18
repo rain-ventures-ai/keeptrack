@@ -8,8 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Kit v139: a GitHub-board agent can end another agent's event wait when its structured PR condition verifies a merge or
 its card condition verifies a completed card. `claim`, `next` and `wait-check` clear eligible waits after checking the
-evidence. The card's history identifies the evidence and the actor. Named parties and owner-authority waits keep their
-existing rules.
+evidence. The card's history identifies the evidence and the actor. A person can configure `settings.wait_enders` to
+let listed agents end any wait with a note. History records delegated clears, and clearing a wait never approves work.
 
 Kit v138: `unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent end a wait another agent set,
 only on a card assigned to the owner (`BOARD_USER`) and only when the wait is on the owner, an agent or nobody. The quote

@@ -4594,8 +4594,8 @@ def verified_waits(data, candidates):
             yield task, {"condition": wait_condition_text(cond), "card_num": target.get("num")}
 
 
-def restore_wait_claim(data, t, verified=False):
-    """Resume or release the claim paused by wait, without creating new unattended approval."""
+def restore_wait_claim(data, t, external=False):
+    """Restore the claim paused by a wait without creating approval or renewing an external clear's heartbeat."""
     c = t.get("claim") or {}
     if c.get("status") != "blocked" or not c.get("blocked_by_wait"):
         return ""
@@ -4617,15 +4617,15 @@ def restore_wait_claim(data, t, verified=False):
     try:
         coordinated_renewal_gate(data, t, c)
     except SystemExit as error:
-        if not verified or not isinstance(error, work_module().Refused):
+        if not external or not isinstance(error, work_module().Refused):
             raise
         return "; its claim stays blocked by a coordinated hold"
     busy = [] if c.get("attended") else busy_over_limit(data, t)
     if busy:
         return f"; its claim stays blocked: {limit_message(data, busy)}"
     c.pop("blocked_by_wait", None); c["status"] = "running"
-    if not verified:
-        c["heartbeat_at"] = now()   # verified clearing is not a heartbeat from the other session
+    if not external:
+        c["heartbeat_at"] = now()   # an external clear is not a heartbeat from the other session
     hist(t, "claim running again")
     return "; its claim is running again"
 
@@ -4637,7 +4637,7 @@ def end_verified_wait(data, task, evidence, a, note=""):
     hist(task, f"unwait: verified {evidence['condition']} ({proof})" + (f"; {note}" if note else ""), who_am_i())
     task["history"][-1]["wait_evidence"] = dict(evidence, mode="manual" if note else "automatic")
     task["history"][-1]["unwait"] = {"session": session_hash(session_for(a)), "other": False}
-    suffix = restore_wait_claim(data, task, verified=True)
+    suffix = restore_wait_claim(data, task, external=True)
     task["updated"] = now()
     print(f"#{task.get('num', '?')} no longer waiting; verified {evidence['condition']}{suffix}")
 
@@ -4679,8 +4679,18 @@ def owner_said_refusal(data, t, w, owner):
     return ""
 
 
+def delegated_wait_end(data):
+    """GitHub board callers declare their runtime identity with BOARD_AGENT, as for other agent rules."""
+    if BACKEND == "hosted" and not FILE:   # hosted dispatch has no phase-0 wait or settings write
+        return False
+    settings = data.get("settings")
+    names = wait_ender_names(settings.get("wait_enders", [])) if isinstance(settings, dict) else None
+    agent = os.environ.get("BOARD_AGENT", "")
+    return bool(_AGENT_NAME.fullmatch(agent)) and any(name.casefold() == agent.casefold() for name in names or ())
+
+
 def cmd_unwait(a):
-    """End a wait within the existing session/owner rules, or on verified evidence for an agent-set event wait."""
+    """End a wait within the session, owner, verified event or board delegation rules."""
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
@@ -4695,19 +4705,25 @@ def cmd_unwait(a):
         if not agent_run():
             sys.exit("refused: --owner-said is for agent runs; a person ends a wait with --note alone")
 
-    verified_generation = None
+    verified_generation = delegated_generation = None
 
     def fn(data):
-        nonlocal verified_generation
+        nonlocal verified_generation, delegated_generation
         t = find(data, a.id); w = waiting_of(t)
         if verified_generation is not None and w != verified_generation:
             sys.exit("refused: the wait changed during verification; read the card and retry if it still applies")
+        if delegated_generation is not None and w != delegated_generation:
+            sys.exit("refused: the wait changed during delegation; read the card and retry if it still applies")
         if not w:
             sys.exit(f"{t['id']} is not waiting")
         sid = session_for(a); mine = session_hash(sid)
         agent = agent_run()   # kit v77: a hosted agent identity too, not only BOARD_AGENT
         owner_word = False
-        if agent and w.get("by_session") != mine:
+        delegated = agent and said is None and delegated_wait_end(data)
+        if delegated:
+            delegated_generation = copy.deepcopy(w)
+            _MUT["recheck"] = True   # a newer board may have revoked this agent's delegation
+        elif agent and w.get("by_session") != mine:
             if not said:
                 cond = verifiable_wait(t)
                 if cond:
@@ -4722,7 +4738,7 @@ def cmd_unwait(a):
             if why:
                 sys.exit("refused: " + why)
             owner_word = True
-        if agent and not owner_word and other_party(w, claim_agent(t), data):
+        if agent and not delegated and not owner_word and other_party(w, claim_agent(t), data):
             sys.exit(f"refused: {t['id']} waits on {clean(w.get('who'), 60)}, another party; only a person ends that wait (the web "
                      "page, or a shell without BOARD_AGENT). Comment with @the assignee and stop")
         _MUT["rerun"] = True   # reads this card's claim
@@ -4730,7 +4746,12 @@ def cmd_unwait(a):
         if not agent and other and holds_claim(t, a):
             note_agent_cleared(t, "unwait", sid)   # (a): the session holding the claim cleared a wait on someone else
         t["waiting"] = None
-        if owner_word:
+        if delegated:
+            note_agent_cleared(t, "unwait via wait_enders", sid)
+            hist(t, f"unwait using wait_enders delegation: {note} (was waiting on {waiting_text(w)}, "
+                    f"since {clean(w.get('since') or '?', 20)}; session {redact_session(sid)})", who_am_i())
+            t["history"][-1]["unwait"] = {"session": mine, "other": False, "delegated": True}
+        elif owner_word:
             owner, me, ts = _acting_user(), who_am_i(t), now()
             note_agent_cleared(t, "unwait on the owner's word", sid)   # evidence that outlives the history trim
             hist(t, f"unwait on the owner's word: {note}; @{clean(owner, 60)} said: \"{said}\" (was waiting on {waiting_text(w)}, "
@@ -4746,7 +4767,8 @@ def cmd_unwait(a):
             hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
                     f"session {redact_session(sid)})")
             t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
-        msg = f"#{t.get('num', '?')} no longer waiting" + restore_wait_claim(data, t)
+        msg = f"#{t.get('num', '?')} no longer waiting" + (" via wait_enders" if delegated else "")
+        msg += restore_wait_claim(data, t, external=delegated)
         t["updated"] = now()
         print(msg)
     mutate(fn, f"Unwait: {a.id}")
@@ -10168,9 +10190,12 @@ def cmd_member_rm(a):
     mutate(fn, f"Remove member: {a.user}")
 
 
+_AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+
+
 def check_agent_name(name):
     name = (name or "").strip().lstrip("@")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", name):
+    if not _AGENT_NAME.fullmatch(name):
         sys.exit(f"'{name}' is not an agent name: use 1-40 letters, digits, '.', '_' or '-' (for example claude)")
     return name
 
@@ -10254,6 +10279,15 @@ def validate_docs_home(value):
     return {"provider": provider, "root": root}
 
 
+def wait_ender_names(value):
+    """Accept a list of distinct agent names. An invalid list grants no authority."""
+    if not isinstance(value, list) or any(not isinstance(n, str) or not _AGENT_NAME.fullmatch(n) for n in value):
+        return None
+    if len({n.casefold() for n in value}) != len(value):
+        return None
+    return value
+
+
 def cmd_settings(a):
     data, _ = load()
     st = data.get("settings") or {}
@@ -10277,6 +10311,9 @@ def cmd_settings(a):
     # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
     print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    enders = wait_ender_names(st.get("wait_enders", []))
+    print("wait_enders: " + ((", ".join(enders) or "none") if enders is not None
+                             else "INVALID stored setting; no delegation active"))
     print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
@@ -10301,7 +10338,7 @@ DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home s
 
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
-                     "card_contact_details", "github_app_signin")
+                     "card_contact_details", "github_app_signin", "wait_enders", "clear_wait_enders")
 
 SIGNIN_CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{8,64}")   # used with fullmatch (a "$" would accept a trailing newline the page rejects); the same shape board.js parseSigninConfig accepts
 
@@ -10438,7 +10475,18 @@ def _inside_board_checkout(path):
 
 
 def cmd_settings_set(a):
-    """Change board settings: title, stale minutes, pipeline stages (with renames)."""
+    """Change board settings."""
+    requested_enders = getattr(a, "wait_enders", None)
+    clear_enders = bool(getattr(a, "clear_wait_enders", False))
+    enders = None
+    if requested_enders is not None or clear_enders:
+        if agent_run():
+            sys.exit("refused: only a person may change wait_enders")
+        if requested_enders is not None and clear_enders:
+            sys.exit("use --wait-enders or --clear-wait-enders, not both")
+        enders = [] if clear_enders else wait_ender_names([n.strip() for n in requested_enders.split(",")])
+        if enders is None:
+            sys.exit("--wait-enders needs comma-separated distinct agent names, for example rook,codex")
     provider, root = getattr(a, "docs_provider", None), getattr(a, "docs_root", None)
     clear = getattr(a, "clear_docs_home", False)
     if (provider is None) != (root is None) or (clear and provider is not None):
@@ -10475,6 +10523,9 @@ def cmd_settings_set(a):
         if consent and (str(kit_owner(data) or "").casefold() != consent[0].casefold()
                         or ("docs_home" in st, st.get("docs_home")) != consent[1]):
             sys.exit("docs_home_changed: owner or destination changed; read back and confirm again")
+        if enders is not None:
+            st["wait_enders"] = enders
+            print("wait_enders: " + (", ".join(enders) or "none"))
         if home is not None: st["docs_home"] = dict(home); print("docs_home set")
         elif clear: st.pop("docs_home", None); print("docs_home cleared")
         if getattr(a, "setting", None) is not None:
@@ -10520,7 +10571,7 @@ def cmd_settings_set(a):
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root",
-                                                                  "card_contact_details", "github_app_signin")) or clear or clear_signin:
+                                                                  "card_contact_details", "github_app_signin")) or clear or clear_signin or enders is not None:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
@@ -15657,7 +15708,7 @@ def main():
     s.add_argument("--until", help="a checkable condition, not an approval: pr:<owner>/<repo>#<n>:merged, card:#<n>:done, "
                    "date:<YYYY-MM-DD> or release:<owner>/<repo>@<tag>")
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
-    s = sub.add_parser("unwait", help="end a card's wait (--note why); an agent can end another agent's verified PR/card "
+    s = sub.add_parser("unwait", help="end a card's wait (--note why); an agent can use wait_enders delegation, end a verified PR/card "
                                       "wait or use --owner-said on an owner-assigned card")
     s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session")
     s.add_argument("--owner-said", dest="owner_said", help="agents (kit v138): the owner's own words and when, quoted; ends a "
@@ -15884,6 +15935,9 @@ def main():
     s.add_argument("--github-app-signin", dest="github_app_signin", metavar="JSON",
                    help='offer Sign in with GitHub on the web board: \'{"client_id":"Iv23...","exchange_url":"https://...workers.dev"}\' (https only; the page must also allow it)')
     s.add_argument("--clear-github-app-signin", dest="clear_github_app_signin", action="store_true", help="remove settings.github_app_signin")
+    ender_flags = s.add_mutually_exclusive_group()
+    ender_flags.add_argument("--wait-enders", metavar="NAMES", help="person only: comma-separated agents that may end any wait")
+    ender_flags.add_argument("--clear-wait-enders", action="store_true", default=None, help="person only: clear wait delegation")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")

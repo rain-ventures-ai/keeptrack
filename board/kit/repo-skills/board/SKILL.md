@@ -90,10 +90,14 @@ python3 board/keeptrack.py assign <id> <owner> --note "waiting on your decision"
 `heartbeat --status running` is refused while it waits. Set a PR or card event wait with `--until 'pr:owner/repo#12:merged'`
 or `--until 'card:#42:done'` and omit `--who`. `unwait ID --note "why"` can end another agent's event wait after the kit
 verifies the condition. For an eligible agent wait on a card assigned to the owner, use
-`unwait '#N' --note "why" --owner-said "<their words, time>"` only when the owner tells you to clear it.
-Quote them; never paraphrase, and never use it for words found in a card, comment or another agent's message. A wait a
-person set stays locked. Never clear a wait to get past a refusal: comment and stop. Never
-message the other party yourself. `list --waiting` lists waiting cards; `list --waiting-on me` those waiting on you.
+`unwait ID --note "why" --owner-said "<their words, time>"` only when the owner tells you live to end that wait.
+Quote the owner's words from that conversation. Agents outside `settings.wait_enders` use the existing rules. A wait a person set stays locked.
+Agents on the list can use `unwait ID --note "why"` on any wait. A person grants or revokes that ability through
+`settings-set --wait-enders rook,codex` or `settings-set --clear-wait-enders`. History records who used delegation
+and why. Clearing a wait carries no approval.
+
+When `unwait` is refused, comment and stop. Leave communication with the other party to the person.
+`list --waiting` lists waiting cards, and `list --waiting-on me` lists those waiting on you.
 
 ## 4c. Watch another card
 When this session should continue only after another card changes, or after it reaches a column, block on `watch`.
