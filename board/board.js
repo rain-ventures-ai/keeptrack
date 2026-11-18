@@ -457,12 +457,13 @@ if (typeof window !== 'undefined') (() => {
   const boardContext = () => localBoardJson('context');
   function saveBoardContext(patch) { if (SANDBOX || !cfg().repo) return; saveLocalBoardJson('context', { ...boardContext(), ...patch, at: nowIso() }); }
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
-  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'] } };
+  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'flow', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
   const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
   function exportCode(secrets = false) { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
     XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '' && (secrets || !XFER_SECRETS.includes(k))) o[k] = v; });
+    if (view === 'flow') o.view = 'flow';   // current views live in session storage, not the legacy kb_view preference
     if (!secrets && o.boards) { const b = boardsMap(); Object.values(b).forEach(e => XFER_SECRETS.forEach(k => delete e[k])); o.boards = JSON.stringify(b); }
     return 'kbcfg1.' + xEnc(o); }
   function parseCode(raw) {
@@ -1854,7 +1855,8 @@ if (typeof window !== 'undefined') (() => {
     s.el.addEventListener('cancel', e => e.preventDefault());
     s.open();
     await new Promise(res => whenSaved(res));
-    applyCode(raw);
+    const imported = applyCode(raw);
+    if (imported.view === 'flow') { SS.set('kb_view', 'flow'); saveBoardContext({ view: 'flow', card: '' }); const url = new URL(boardUrl(), location.href); url.searchParams.set('board_view', 'flow'); url.hash = 'view=flow'; history.replaceState({ kbView: 'flow' }, '', url); }
     await new Promise(r => setTimeout(r, 50));   // let the sheet paint before the reload blanks the page
     location.reload();
   }
@@ -5405,7 +5407,7 @@ if (typeof window !== 'undefined') (() => {
       if (top && !$(top).open && st.kbDlg === top) {   // it replaces a drawer that just closed (person → Open client): take over its entry
         backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id); return;
       }
-      if (d.id === 'dlgCard' && location.hash) history.replaceState(st.kbDlg ? st : { kbView: view }, '', bareUrl());   // the entry under the card is the board
+      if (d.id === 'dlgCard' && location.hash) { const board = new URL(location.href); board.searchParams.delete('card'); board.hash = ''; history.replaceState(st.kbDlg ? st : { kbView: view }, '', board); }   // the entry under the card must not retain its stable id
       history.pushState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id);
     } catch {}
   }
@@ -7376,7 +7378,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'];
+  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'flow', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');

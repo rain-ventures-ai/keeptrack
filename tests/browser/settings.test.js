@@ -74,7 +74,7 @@ async function open(browser, { width = 1280, height = 860, token = 'test', demo 
   await page.addInitScript(([token, repo]) => {
     if (repo) { localStorage.setItem('kb_repo', repo); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); }
     if (token) localStorage.setItem('kb_token', token);
-    localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board');
+    localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); if (!sessionStorage.getItem('kb_view')) sessionStorage.setItem('kb_view', 'board');
     window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } });
   }, [token, demo ? '' : repo]);
   await page.route('https://api.test/**', r => api.route(r));
@@ -466,6 +466,22 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       const got = await other.evaluate(() => ({ email: localStorage.getItem('kb_email_sync'), steps: localStorage.getItem('kb_claude_steps'), ok: localStorage.getItem('kb_claude_ok'), entry: JSON.parse(localStorage.getItem('kb_boards'))['acme/board'] }));
       assert.deepEqual([got.email, got.steps, got.ok], ['1', '3', '1'], 'imported per-board keys are live');
       assert.deepEqual([got.entry.email_sync, got.entry.claude_steps, got.entry.claude_ok], ['1', '3', '1'], 'and stay in kb_boards after the load-time stash');
+      assert.deepEqual(other.errors, []); await other.close();
+    }
+    // The selected Flow view survives settings transfer into a browser using another view.
+    {
+      const page = await open(browser);
+      await page.goto(base + '/board/index.html?board_view=flow#view=flow'); await page.locator('.flow-card').first().waitFor();
+      await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xCode').click();
+      await page.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await page.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const code = await page.evaluate(() => window.__copied); await page.close();
+      const other = await open(browser);
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(code); await other.locator('#xImport').click();
+      const nav = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await nav;
+      await other.locator('.flow-card').first().waitFor();
+      assert.equal(await other.locator('#dlgSettings').evaluate(d => d.open), false);
+      assert.equal(await other.evaluate(() => sessionStorage.getItem('kb_view')), 'flow');
       assert.deepEqual(other.errors, []); await other.close();
     }
     // 15. Backlog auto-research (kit v60): off by default; the switch and "Cards each run" save settings.backlog_research.

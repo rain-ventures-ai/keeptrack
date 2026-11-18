@@ -168,6 +168,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     }
     await page.locator('[data-card="t_2"]').focus(); await page.keyboard.press('Enter'); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(counts.writes, 0); assert.deepEqual(errors, []);
+    await page.locator('#cClose').click();
+    await page.waitForFunction(() => !document.querySelector('#dlgCard').open && !new URL(location.href).searchParams.has('card') && !/^#\d/.test(location.hash));
+    await page.reload(); await page.locator('.flow-card').first().waitFor();
+    assert.equal(await page.locator('#dlgCard').evaluate(d => d.open), false, 'a reload after closing does not reopen the card');
+    await page.locator('[data-card="t_2"]').click(); await page.locator('#dlgCard[open]').waitFor();
     boardLost = true;
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => !document.querySelector('#dlgCard').open);
