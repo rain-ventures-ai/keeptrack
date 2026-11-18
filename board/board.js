@@ -5210,43 +5210,31 @@ if (typeof window !== 'undefined') (() => {
     });
   }
 
-  const runUsagePattern = /^run usage(?: \([^()\r\n]{0,60}\))?: engine=(claude|codex)((?: [a-z_]+=\d{1,12}(?:\.\d{1,6})?){1,8})\s*$/;
   const compactTokens = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
-  function runUsageSummary(comments) {
-    if (!Array.isArray(comments) || !comments.length) return '';
-    // Relay records one run per usage comment. Only whole token counts belong in the drawer summary.
-    const fields = { in: 'fresh input', out: 'output', cache_read: 'cached input', cache_write: 'cache write' };
-    const totals = new Map(), engines = new Set(); let runs = 0;
-    for (const comment of comments) {
-      const message = comment?.text || comment?.body;
-      const match = typeof message === 'string' && runUsagePattern.exec(message);
-      if (!match) continue;
-      const [, engine, counts] = match;
-      const pairs = counts.trim().split(' ').map(pair => pair.split('=')), record = new Map(pairs);
-      const present = Object.keys(fields).filter(key => record.has(key));
-      if (!present.length || record.size !== pairs.length || present.some(key => record.get(key).includes('.'))) continue;
-      for (const key of present) {
-        let count = BigInt(record.get(key));
-        if (key === 'in' && engine === 'codex') {   // Codex includes cache reads in input. Claude reports them separately.
-          const cached = BigInt(record.get('cache_read') ?? '0');
-          count = count > cached ? count - cached : 0n;
-        }
-        totals.set(key, (totals.get(key) ?? 0n) + count);
-      }
-      engines.add(engine === 'codex' ? 'Codex' : 'Claude');
-      runs++;
+  const tokenCount = value => Number.isSafeInteger(value) && value >= 0 && value < 1e12;
+  function runUsageSummary(usage) {
+    if (usage?.known !== true || (usage.engine !== 'claude' && usage.engine !== 'codex')) return '';
+    const tokens = [];
+    const add = (value, label) => { if (tokenCount(value)) tokens.push(`${compactTokens.format(value)} ${label}`); };
+    if (tokenCount(usage.in)) {
+      // Codex includes cached reads in input. Claude reports those separately.
+      if (usage.engine === 'codex' && tokenCount(usage.cache_read)) add(Math.max(0, usage.in - usage.cache_read), 'fresh input');
+      else add(usage.in, usage.engine === 'claude' ? 'fresh input' : 'input');
     }
-    if (!runs) return '';
-    const preferred = ['in', 'out'].filter(key => totals.has(key));
-    const tokens = (preferred.length ? preferred : [...totals.keys()])
-      .map(key => `${compactTokens.format(totals.get(key))} ${fields[key]}`).join(' + ');
-    return `${plural(runs, 'run', 'runs')} · ${[...engines].sort().join(', ')} · ${tokens} tokens`;
+    add(usage.out, 'output');
+    if (!tokens.length) {
+      add(usage.cache_read, 'cached input');
+      add(usage.cache_write, 'cache write');
+    }
+    if (!tokens.length) return '';
+    const engine = usage.engine === 'codex' ? 'Codex' : 'Claude';
+    return `Last run usage: ${engine} · ${tokens.join(' + ')} tokens`;
   }
 
   function renderClaim(t) {
     // a finished run leaves no banner, just one "Last run" line with its link (older cards kept a claim with status done)
     const done = t.claim && t.claim.status === 'done', live = t.claim && !done ? t.claim : null, last = t.last_run || (done ? t.claim : null), lr = $('cLastRun');
-    const cx = cancelledRun(t), usage = runUsageSummary(t.comments);
+    const cx = cancelledRun(t), usage = runUsageSummary(t.last_run?.usage);
     lr.textContent = ''; lr.removeAttribute('title'); lr.hidden = !usage && ((!last && !cx) || !!live);
     if (cx && !live) lr.append(el('div', 'lroutcome', 'Outcome: cancelled' + (cx.note ? ' · ' + cx.note : '')));
     if (last && !live) {
