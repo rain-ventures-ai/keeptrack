@@ -29,6 +29,69 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
   const browser = await chromium.launch({ headless: true });
   try {
+    // A token is not proof that this repository is private. Reuse the repository metadata check.
+    {
+      const p = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), seen = { runner: 0, commits: 0, writes: 0 };
+      let visibility = false, visibilityStatus = 200, visibilityGate = null;
+      await p.clock.install();
+      await p.addInitScript(() => {
+        Object.entries({ kb_repo: 'acme/board', kb_branch: 'main', kb_path: 'board/tasks.json', kb_token: 'test', kb_me: 'alex', kb_api: 'https://api.test', kb_layout: 'classic', kb_tour_seen: '1' }).forEach(([k, v]) => localStorage.setItem(k, v));
+        sessionStorage.setItem('kb_view', 'flow');
+      });
+      await p.route('https://api.test/**', async route => {
+        const request = route.request(), path = new URL(request.url()).pathname.replace('/repos/acme/board', '');
+        const json = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+        if (request.method() !== 'GET') seen.writes++;
+        if (!path) {
+          const privateValue = request.headers().authorization === 'Bearer replacement' ? false : visibility, status = visibilityStatus, held = visibilityGate;
+          if (held) { visibilityGate = null; held.arrived(); await held.wait; }
+          return json({ private: privateValue, full_name: 'acme/board' }, status);
+        }
+        if (path === '/contents/board/tasks.json') return json({ sha: 'private-fixture', encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') });
+        if (path === '/contents/automation/local-runner.json') { seen.runner++; return json({ encoding: 'base64', content: Buffer.from(JSON.stringify({ status: 'paused', pause_reason: 'Verified private fixture' })).toString('base64') }); }
+        if (path === '/commits') { seen.commits++; return json(commits); }
+        return json({}, 404);
+      });
+      const metadataResponse = () => p.waitForResponse(r => new URL(r.url()).pathname === '/repos/acme/board');
+      await p.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`);
+      await p.locator('#dlgPublic[open]').waitFor(); await p.locator('.flow-card').first().waitFor();
+      assert.deepEqual(seen, { runner: 0, commits: 0, writes: 0 }, 'signed-in public boards make no optional metadata requests');
+      await p.evaluate(() => document.querySelector('#dlgPublic').close());
+      for (const [privateValue, status] of [[null, 200], [true, 503]]) {
+        visibility = privateValue; visibilityStatus = status;
+        const response = metadataResponse(); await p.clock.fastForward(61000); await (await response).finished(); await p.clock.runFor(100);
+        assert.deepEqual(seen, { runner: 0, commits: 0, writes: 0 }, 'unknown or failed visibility stays closed');
+        assert.equal(await p.locator('.flow-event').count(), 0);
+      }
+      visibility = true; visibilityStatus = 200;
+      let releasePrivate, privateArrived;
+      const privateStarted = new Promise(resolve => { privateArrived = resolve; });
+      visibilityGate = { arrived: privateArrived, wait: new Promise(resolve => { releasePrivate = resolve; }) };
+      await p.clock.fastForward(61000); await privateStarted;
+      assert.deepEqual(seen, { runner: 0, commits: 0, writes: 0 }, 'pending initial confirmation authorises no metadata');
+      releasePrivate(); await p.locator('.flow-event').first().waitFor();
+      await p.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Verified private fixture'));
+      assert.ok(seen.runner && seen.commits, 'confirmed private repositories retain both panels');
+      visibilityStatus = 503;
+      const failedVisibility = metadataResponse(); await p.clock.fastForward(61000); await (await failedVisibility).finished(); await p.clock.runFor(100);
+      assert.equal(await p.locator('.flow-event').count(), 0, 'lost confirmation clears activity');
+      assert.ok(!(await p.locator('.flow-status').innerText()).includes('Verified private fixture'), 'lost confirmation clears runner status');
+      const closed = { ...seen };
+      visibilityStatus = 200;
+      let releaseOld, oldArrived;
+      const oldStarted = new Promise(resolve => { oldArrived = resolve; });
+      visibilityGate = { arrived: oldArrived, wait: new Promise(resolve => { releaseOld = resolve; }) };
+      await p.clock.fastForward(61000); await oldStarted;
+      await p.locator('#btnSettings').click(); await p.locator('#tabConn').click();
+      await p.locator('#bEditFold > summary').click(); await p.locator('#sToken').fill('replacement');
+      const replacementVisibility = metadataResponse(); await p.locator('#sSave').click(); await (await replacementVisibility).finished();
+      await p.locator('#dlgPublic[open]').waitFor();
+      const oldReply = metadataResponse(); releaseOld(); await (await oldReply).finished(); await p.clock.runFor(100);
+      assert.deepEqual(seen, closed, 'a stale private response cannot authorise a new public connection');
+      assert.equal(await p.locator('.flow-event').count(), 0);
+      assert.ok(!(await p.locator('.flow-status').innerText()).includes('Verified private fixture'));
+      await p.close();
+    }
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.clock.install();
@@ -160,7 +223,10 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Network or parse error'));
     assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'transient network failures preserve the loaded graph');
-    boardNetwork = false; await page.clock.fastForward(31000);
+    boardNetwork = false;
+    const recoveredBoard = page.waitForResponse(r => r.url().includes('/contents/board/tasks.json') && [200, 304].includes(r.status()));
+    await page.clock.fastForward(31000); await (await recoveredBoard).finished(); await page.clock.runFor(100);
+    await page.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Synced'));
     commitsLimited = true;
     const limitedResponse = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 429);
     await page.clock.fastForward(61000);

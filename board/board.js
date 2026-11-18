@@ -1191,7 +1191,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const at = { ...cfg() }, ok = await loadBoard(quiet, first); if (ok && flowKey(at) === flowKey(cfg()) && at.token === cfg().token) { const changed = flowBoardScope !== flowKey(at) || flowBoardToken !== at.token; flowBoardScope = flowKey(at); flowBoardToken = at.token; if (changed && view === 'flow') render(); } if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
+  async function load(quiet, first) { const at = { ...cfg() }, ok = await loadBoard(quiet, first); if (ok && flowKey(at) === flowKey(cfg()) && at.token === cfg().token) { const changed = flowBoardScope !== flowKey(at) || flowBoardToken !== at.token; flowBoardScope = flowKey(at); flowBoardToken = at.token; if (changed && view === 'flow') render(); checkPublic(); } if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -1242,15 +1242,25 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
-  let publicChecked = '';
+  let repoVisibility = { key: '', token: '', checked: 0, private: false };
+  const privateFlowAccess = c => !!c.token && repoVisibility.key === flowKey(c) && repoVisibility.token === c.token && repoVisibility.private === true;
   async function checkPublic() {
-    if (HOSTED) return;
-    const c = cfg(); if (publicChecked === c.repo) return; publicChecked = c.repo;
+    if (HOSTED || DEMO || SETUP) return;
+    const c = { ...cfg() }; if (!c.token || !c.repo) return;
+    const key = flowKey(c), same = repoVisibility.key === key && repoVisibility.token === c.token;
+    if (same && Date.now() - repoVisibility.checked < 60000) return;
+    const ticket = repoVisibility = { key, token: c.token, checked: Date.now(), private: false };
+    const current = () => repoVisibility === ticket && flowKey(cfg()) === key && cfg().token === c.token;
+    if (!same) resetFlowMeta(); else syncFlowLive(true); // Pending visibility must not display metadata from an unverified connection.
     try { const r = await fetch(`${c.api}/repos/${c.repo}`, { cache: 'no-store', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json' } });
-      if (!r.ok) return; const repo = await r.json(); if (repo.private !== false) return;
-      $('pubRepo').textContent = repo.full_name; $('pubLink').href = `https://github.com/${repo.full_name}/settings`;
-      if (!$('dlgPublic').open) $('dlgPublic').showModal();
-    } catch { /* offline: the next page load checks again */ }
+      if (!r.ok) return; const repo = await r.json(); if (!current()) return;
+      ticket.private = repo.private === true;
+      if (repo.private === false) {
+        $('pubRepo').textContent = repo.full_name; $('pubLink').href = `https://github.com/${repo.full_name}/settings`;
+        if (!$('dlgPublic').open) $('dlgPublic').showModal();
+      }
+    } catch { /* Unknown visibility stays closed; a later board poll checks again. */ }
+    finally { if (current()) { if (!ticket.private) resetFlowMeta(); syncFlowLive(true); if (ticket.private) refreshFlow(); } }
   }
 
   // ---- board kit: is this repo's copy of the shared tools older than the kit published with this page? ----
@@ -2659,7 +2669,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
   let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowCardCache = new Map(), flowCardScope = '', flowCardAuth = '', flowPage = 0, flowPageKey = '', flowBoardScope = '', flowBoardToken = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
-  const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
+  const flowCurrentMeta = () => { const c = cfg(); return privateFlowAccess(c) && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta(clearBoard = false) {
     flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
     if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; flowCardCache = new Map(); if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); discardFlowCard(); } }
@@ -2691,7 +2701,7 @@ if (typeof window !== 'undefined') (() => {
   }
   async function refreshFlow() {
     syncFlowLive(); // Reconcile hidden-tab responses before applying the network throttle.
-    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public' || flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token) return;
+    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !privateFlowAccess(cfg()) || ro === 'public' || flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token) return;
     const c = { ...cfg() }, key = flowKey(c);
     if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
     if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
@@ -2761,8 +2771,8 @@ if (typeof window !== 'undefined') (() => {
       finally { if (current()) publish({ commitsPending: Math.max(0, (flowMeta.commitsPending || 0) - 1) }); }
     });
     await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
-    if (current()) {
-      for (const name of ticket.attempted) if (!ticket.failed.has(name)) flowMeta = { ...flowMeta, [name + 'Failures']: 0, [name + 'CooldownUntil']: 0 };
+    if (flowRequest === ticket) {
+      if (current()) for (const name of ticket.attempted) if (!ticket.failed.has(name)) flowMeta = { ...flowMeta, [name + 'Failures']: 0, [name + 'CooldownUntil']: 0 };
       flowRequest = null;
     }
   }
