@@ -5210,16 +5210,51 @@ if (typeof window !== 'undefined') (() => {
     });
   }
 
+  const runUsagePattern = /^run usage(?: \([^()\r\n]{0,60}\))?: engine=(claude|codex)((?: [a-z_]+=\d{1,12}(?:\.\d{1,6})?){1,8})\s*$/;
+  const compactTokens = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+  function runUsageSummary(comments) {
+    if (!Array.isArray(comments) || !comments.length) return '';
+    // Relay records one run per usage comment. Only whole token counts belong in the drawer summary.
+    const fields = { in: 'fresh input', out: 'output', cache_read: 'cached input', cache_write: 'cache write' };
+    const totals = new Map(), engines = new Set(); let runs = 0;
+    for (const comment of comments) {
+      const message = comment?.text || comment?.body;
+      const match = typeof message === 'string' && runUsagePattern.exec(message);
+      if (!match) continue;
+      const [, engine, counts] = match;
+      const pairs = counts.trim().split(' ').map(pair => pair.split('=')), record = new Map(pairs);
+      const present = Object.keys(fields).filter(key => record.has(key));
+      if (!present.length || record.size !== pairs.length || present.some(key => record.get(key).includes('.'))) continue;
+      for (const key of present) {
+        let count = BigInt(record.get(key));
+        if (key === 'in' && engine === 'codex') {   // Codex includes cache reads in input. Claude reports them separately.
+          const cached = BigInt(record.get('cache_read') ?? '0');
+          count = count > cached ? count - cached : 0n;
+        }
+        totals.set(key, (totals.get(key) ?? 0n) + count);
+      }
+      engines.add(engine === 'codex' ? 'Codex' : 'Claude');
+      runs++;
+    }
+    if (!runs) return '';
+    const preferred = ['in', 'out'].filter(key => totals.has(key));
+    const tokens = (preferred.length ? preferred : [...totals.keys()])
+      .map(key => `${compactTokens.format(totals.get(key))} ${fields[key]}`).join(' + ');
+    return `${plural(runs, 'run', 'runs')} · ${[...engines].sort().join(', ')} · ${tokens} tokens`;
+  }
+
   function renderClaim(t) {
     // a finished run leaves no banner, just one "Last run" line with its link (older cards kept a claim with status done)
     const done = t.claim && t.claim.status === 'done', live = t.claim && !done ? t.claim : null, last = t.last_run || (done ? t.claim : null), lr = $('cLastRun');
-    const cx = cancelledRun(t); lr.textContent = ''; lr.hidden = (!last && !cx) || !!live;
+    const cx = cancelledRun(t), usage = runUsageSummary(t.comments);
+    lr.textContent = ''; lr.removeAttribute('title'); lr.hidden = !usage && ((!last && !cx) || !!live);
     if (cx && !live) lr.append(el('div', 'lroutcome', 'Outcome: cancelled' + (cx.note ? ' · ' + cx.note : '')));
     if (last && !live) {
       lr.append(el('span', null, `${cx ? '' : '✓ '}Last run: ${last.agent || 'agent'}${last.on_behalf_of ? ' for @' + last.on_behalf_of : ''} · ${ago(last.finished_at || last.heartbeat_at || last.claimed_at)}`));
       if (last.session_url && safeUrl(last.session_url)) { const a = el('a', 'sesslink', /\/routines\//.test(last.session_url) ? 'Routine runs ↗' : 'Open session ↗'); a.href = safeUrl(last.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; lr.append(document.createTextNode(' · '), a); }
       if (last.note) lr.title = last.note;
     }
+    if (usage) { const row = el('div', null, usage); row.id = 'cRunUsage'; lr.append(row); }
     const wrap = $('cClaimWrap'); if (!live) { wrap.textContent = ''; wrap.hidden = true; delete wrap.dataset.sig; return; } wrap.hidden = false;
     const k = t.claim, st = claimState(k), tone = st === 'running' ? 'ok' : st === 'stuck' ? 'danger' : st === 'stale' || st === 'blocked' ? 'warn' : 'info';
     const txt = el('div', 'dclaim__text'), top = el('div', 'cltop'); top.append(el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); txt.append(top);

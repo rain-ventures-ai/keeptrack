@@ -3,6 +3,7 @@
 //  - settings.max_agent_claims: a full board refuses to send work to Claude (no claim written, no cron job, a message, a relay-log line)
 //    and disables the quick-assign entries; with room, it sends, and the routine text no longer says --force and explains done --note / --cancel.
 //  - a card closed as cancelled shows a "cancelled" pill, an "Outcome: cancelled" line in the drawer and the same in the Markdown export.
+//  - the drawer sums recorded run tokens from Relay comments on active and finished cards.
 // Run: node agent-limit.test.js
 
 const assert = require('node:assert/strict');
@@ -196,6 +197,62 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       }
       await page.locator('#dlgCard').evaluate(d => d.close());
       await six.dblclick(); await page.locator('#dlgCard[open]').waitFor(); assert.doesNotMatch(await page.locator('#cLastRun').textContent(), /Outcome: cancelled/);
+      await page.close();
+    }
+
+    // ---- 4. recorded usage stays separate from the live claim and last run, including on a read-only board ----
+    {
+      const api = new Github();
+      const board = JSON.parse(api.files['tasks.json']); board.settings.min_kit = 9999; api.files['tasks.json'] = text(board);
+      const records = {
+        t_one: [{ text: 'run usage: engine=claude cost_usd=2.75 turns=3' }, { text: 'run usage: engine=codex in=-15' }],
+        t_two: [
+          { text: 'run usage: engine=codex in=2000 cache_read=1500 out=40 turns=1' },
+          { text: 'run usage: engine=claude in=700 cache_read=500 out=80 cost_usd=3.25 turns=3' },
+          { body: 'run usage (older report): engine=codex in=300 cache_read=600 out=5 \n' },
+          { text: 'run usage: engine=claude cost_usd=4.50' },
+          { text: 'run usage: engine=codex in=1.5 out=80' },
+          { text: 'run usage: engine=codex in=10 in=20' },
+          { text: 'quoted: run usage: engine=codex in=9999' },
+        ],
+        t_six: [{ text: 'run usage: engine=claude out=45' }],
+      };
+      for (const [id, comments] of Object.entries(records)) {
+        const c = api.card(id);
+        c.comments = comments.map((record, i) => ({ id: 'c_usage_' + i, by: 'relay', at: c.created, ...record }));
+        if (id === 't_two') c.title = 'Review a long implementation plan with two agents and recorded run usage';
+        api.files[`cards/${id}.json`] = text(c);
+      }
+      const page = await openBoard(browser, api, []);
+      const drawer = page.locator('#dlgCard'), usage = page.locator('#cRunUsage'), lastRun = page.locator('#cLastRun');
+      await page.evaluate(() => { location.hash = '#2'; }); await usage.waitFor();
+      assert.equal(await page.locator('#cTitle').isDisabled(), true);
+      assert.equal(await page.locator('#cClaimWrap').isVisible(), true);
+      assert.equal(await lastRun.textContent(), '3 runs · Claude, Codex · 1.2K fresh input + 125 output tokens');
+      if (SHOTS) {
+        fs.mkdirSync(SHOTS, { recursive: true });
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 844 });
+          await page.reload(); await usage.waitFor();
+          for (const theme of ['light', 'dark']) {
+            await page.evaluate(theme => window.kbTheme.set(theme), theme);
+            await drawer.screenshot({ path: path.join(SHOTS, `run-usage-${width}-${theme}.png`) });
+          }
+        }
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await drawer.locator('#cBody').evaluate(body => body.scrollWidth === body.clientWidth), true);
+      await page.evaluate(() => { location.hash = '#6'; });
+      await page.waitForFunction(() => document.getElementById('cTitle').value === 'Sixth');
+      assert.match(await lastRun.textContent(), /Last run: claude/);
+      assert.equal(await usage.textContent(), '1 run · Claude · 45 output tokens');
+      if (SHOTS) await drawer.screenshot({ path: path.join(SHOTS, 'run-usage-finished.png') });
+      await page.evaluate(() => { location.hash = '#1'; });
+      await page.waitForFunction(() => document.getElementById('cTitle').value === 'First');
+      assert.equal(await usage.count(), 0);
+      assert.equal(await lastRun.isVisible(), false);
+      if (SHOTS) await drawer.screenshot({ path: path.join(SHOTS, 'run-usage-empty.png') });
+      assert.equal(api.writes, 0, 'rendering recorded usage saves nothing');
       await page.close();
     }
 
