@@ -28,11 +28,13 @@ A board gets slower when the file gets large. The archive moves old items to oth
 - people at the stage **Lost** with no change for 180 days and no next step,
 - old history lines (each card keeps its last 20). The trimmed lines are kept in the archive file, not deleted.
 
+When your AI assistant archives a card (`keeptrack.py archive`), the archive keeps a compact copy. The copy has the card's details, checklist, links, labels, dates and last 3 comments. It does not have the card's history lines, its agent run record or its older comments. Git keeps the full card: the archived card names the commit and the file that hold it. To keep full cards, set `settings.archive.compact` to `false`. To shrink cards that are already archived, run `keeptrack.py archive-compact` to see the sizes before and after, then `keeptrack.py archive-compact --apply`.
+
 Open **⚙️ Settings → Board → Archive** to see the board size and to archive now. When the board file is larger than 600 KB, a bar at the top asks you to archive.
 
 Archived items are not deleted. The **Archive** view lists them, and search finds them when you tick **Include archive**. Open one to read it, and click **Put back on the board** to bring it back.
 
-For one task, open its **⋯ → Archive task** menu, or choose **Archive task instead** on the delete screen. This removes it from the active board without deleting any details, checklist, comments or history, regardless of its status or age. Tasks with an unfinished agent claim must be released or finished first. Prefer archiving to deleting when you want to keep a record.
+For one task, open its **⋯ → Archive task** menu, or choose **Archive task instead** on the delete screen. This removes it from the active board without deleting any details, checklist, comments or history, regardless of its status or age. (From the CLI the archive keeps a compact copy, as above.) Tasks with an unfinished agent claim must be released or finished first. Prefer archiving to deleting when you want to keep a record.
 
 From the CLI: `keeptrack.py archive '#102' --dry-run` previews one task; `keeptrack.py archive '#102'` archives it; `keeptrack.py unarchive '#102'` restores it. Without a reference, `archive` keeps its existing bulk age-based behaviour. Individual references cannot be combined with bulk archive rule flags.
 
