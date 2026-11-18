@@ -25,6 +25,14 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v138 (schema 4)
+
+`work-research-box-handoff`: approve one signed research press atomically, used by the relay button-to-box route. The command
+was added in PR 223 without a version bump, so a board on v137 does not have it; v138 is the first kit that does. A board on
+an older kit must refuse the route, never create-then-move. No new required field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v138, and `work-research-box-handoff --help` is listed.
+
 ### v137 (schema 4)
 
 A routine register's finished report gains `usage`: `{"engine", "known", "in", "out", "cache_read", "cache_write",

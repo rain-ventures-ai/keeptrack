@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v138: work-research-box-handoff: approve one signed research press atomically, used by the relay button-to-box route. The command
+was added in PR 223 without a kit version, so a board on v137 did not have it. No behaviour change, no schema change and no migration.
+
 Kit v137 (card #259): a routine register's `last_run` records run usage. `routine <id> finish --usage KEY=VALUE`
 (engine, in, out, cache_read, cache_write, turns) stores it; without `--usage` the report says
 `{"engine": "unknown", "known": false}`, so a cloud run whose harness reports no usage says so plainly. The new
