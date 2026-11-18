@@ -233,13 +233,21 @@ def view(kt, task, *, data=None, archived=False):
             "next": next_step, "coordination": co, "runner_liveness": "unknown", "authority_granted": False}
 
 
-def request(kt, value):
-    value = payload(value)
-    safe_content(kt, value)
-    tid = "t_" + digest(["rook-work", value["request_id"]])[:20]
+def request(kt, value=None, *, prepare_new=None, request_key=None, derive=None, validate_existing=None):
+    if derive is None:
+        value = payload(value)
+        safe_content(kt, value)
+        request_key = value["request_id"]
+    else:
+        request_key = text(request_key, "request_id", 128, required=True)
+        if not KEY.fullmatch(request_key) or validate_existing is None:
+            fail("derived request needs a valid key and existing-identity binding")
+    submitted = value
+    tid = "t_" + digest(["rook-work", request_key])[:20]
     answer = {}
 
     def change(data):
+        value = submitted
         kt._MUT["recheck"] = kt._MUT["rerun"] = True
         answer.clear()
         ids, bootstrap_match = request_index(kt, data, kt._MUT["base"], tid)
@@ -251,6 +259,10 @@ def request(kt, value):
             if existing is None:
                 fail("indexed request card is missing; restore or locate its committed outcome, never recreate its identity")
         if existing is not None:
+            if derive is not None:
+                validate_existing(existing)
+                answer.update(view(kt, existing, data=data, archived=archived), created=False)
+                return
             receipt = (existing.get("coordination") or {}).get("request") or {}
             original = receipt.get("digest")
             legacy_exact = not receipt.get("source_project") and original == digest(value)
@@ -271,6 +283,11 @@ def request(kt, value):
             return
         if len(ids) >= MAX_REQUEST_RECEIPTS:
             fail("request receipt limit reached; retain replay identities and migrate the index before new intake")
+        if derive is not None:
+            value = payload(derive(data))
+            safe_content(kt, value)
+            if value["request_id"] != request_key:
+                fail("derived request changed its stable identity")
         pr = kt.find_project(data, value["project"])
         original = digest({**value, "project": pr["id"]})
         if not any(c.get("id") == "backlog" for c in data.get("columns", [])):
@@ -293,6 +310,8 @@ def request(kt, value):
         kt.append_priority_rank(data, task)
         kt.hist(task, "Rook request saved; awaiting explicit approval")
         data.setdefault("tasks", []).append(task)
+        if prepare_new is not None:
+            prepare_new(data, task)
         kt.assign_nums(data)
         marks = kt.mark_similar(data, task)
         answer.update(view(kt, task, data=data), created=True, possible_related=marks)
