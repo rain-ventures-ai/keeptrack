@@ -163,6 +163,29 @@ class ClaimPlaceUnknown(unittest.TestCase):
             self.assertEqual((0, "ran here --hook"), (p.returncode, p.stdout.strip()), p.stderr)
             self.assertLess(took, 8, "the prefilter stops waiting for git after 3 s; keeptrack.py decides")
 
+    @unittest.skipIf(os.name == "nt", "a POSIX shell stub stands in for git")
+    def test_slow_tracked_answers_share_one_three_second_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir, outer, inner, plugin = (os.path.join(tmp, d) for d in ("bin", "outer", "outer/inner", "plugin"))
+            for d in (bin_dir, os.path.join(outer, ".keeptrack"), os.path.join(inner, ".keeptrack"), plugin):
+                os.makedirs(d)
+            for folder in (outer, inner):
+                with open(os.path.join(folder, ".keeptrack", "config.json"), "w") as f:
+                    f.write('{"repo": "o/b"}')
+            with open(os.path.join(bin_dir, "git"), "w") as f:
+                f.write("#!/bin/sh\nexec sleep 2.5\n")
+            os.chmod(os.path.join(bin_dir, "git"), 0o755)
+            with open(os.path.join(bin_dir, "python3"), "w") as f:
+                f.write("#!/bin/sh\necho ran here --hook\n")
+            os.chmod(os.path.join(bin_dir, "python3"), 0o755)
+            env = {"PATH": bin_dir + os.pathsep + "/usr/bin:/bin", "HOME": tmp, "CLAUDE_PLUGIN_ROOT": plugin}
+            began = time.monotonic()
+            p = subprocess.run(["sh", os.path.join(KIT, "hooks", "session-start.sh")], cwd=inner, env=env,
+                               capture_output=True, text=True, timeout=20)
+            took = time.monotonic() - began
+            self.assertEqual((0, "ran here --hook"), (p.returncode, p.stdout.strip()), p.stderr)
+            self.assertLess(took, 4.5, "two slow tracked answers share one 3 s budget, they do not take 3 s each")
+
     def test_use_stops_on_a_hung_git_and_where_marks_an_unsure_path(self):
         with mock.patch.object(keeptrack, "_git_toplevel", lambda f: ("", "hung")):
             with self.assertRaises(SystemExit) as stop:
