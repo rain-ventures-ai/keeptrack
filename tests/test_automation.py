@@ -85,8 +85,8 @@ class Automation(unittest.TestCase):
         self.result['items']=[dict(key='item1',rev='r1',ref='id1',title='Review item'),dict(key='item2',rev='r2',ref='id2',title='Review item')]
         self.result.update(more=True,cursor='page2'); self.script(self.result)
 
-    def tick(self):
-        out,code=self.call('tick'); return (json.loads(out) if out else None),code
+    def tick(self, **kw):
+        out,code=self.call('tick', **kw); return (json.loads(out) if out else None),code
 
     def finish(self,status='success'):
         r=self.read(self.rp)
@@ -722,6 +722,26 @@ else:
             with self.subTest(stream=stream):
                 with self.assertRaisesRegex(ValueError,'output-limit'):
                     kt._auto_process(['python3','-c',f'import sys; sys.{stream}.write("x"*{count})'],kt._auto_env('example-pack',{},{}),5)
+
+    def test_tick_run_id_is_optional_and_refused_when_used(self):
+        self.items(); self.ready()
+        chosen = "tick-" + "ab" * 16
+        payload, code = self.tick(only="example-pack", run_id=chosen)
+        self.assertIsNone(code)
+        self.assertEqual(payload["automations"][0]["run_id"], chosen)
+        self.assertEqual(self.read(self.rp)["current_run"]["id"], chosen)
+        self.finish()
+        self.force_due()
+        before = self.rp.read_text()
+        self.assertIn("already used", self.refuse("tick", only="example-pack", run_id=chosen))
+        self.assertEqual(self.rp.read_text(), before)
+        self.assertIn("--only", self.refuse("tick", run_id=chosen))
+        self.assertIn("32 lowercase hex", self.refuse("tick", only="example-pack", run_id="tick-short"))
+        self.force_due()
+        payload, _ = self.tick()
+        got = payload["automations"][0]["run_id"]
+        self.assertRegex(got, r"^tick-[0-9a-f]{32}$")
+        self.assertNotEqual(got, chosen)
 
     def test_inv02_empty_tick_no_stdout_no_tracked_change(self):
         self.ready(); before=self.rp.read_bytes(); payload,code=self.tick()

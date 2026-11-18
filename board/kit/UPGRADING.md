@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v139 (schema 4)
+
+`automation tick --only <slug> --run-id <id>` lets the runner reserve the run id before it starts the worker. The id
+is optional. It must be `tick-` plus 32 lowercase hex characters, the same shape tick already writes, and it needs
+`--only`. Tick refuses an id that binding already used (current run, last run, or a kept run) and writes nothing.
+With no `--run-id`, tick chooses the id as before. No new field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v139. `automation tick --only <slug> --run-id tick-` and 32 hex reserves that id;
+  the same id a second time is refused and the register is unchanged.
+
 ### v138 (schema 4)
 
 `unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent run end a wait that another agent set,
