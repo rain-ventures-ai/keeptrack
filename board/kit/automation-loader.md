@@ -24,7 +24,8 @@ For each automation independently:
    On partial success OMIT cursor. Run `automation mark <slug> --run-id <run_id> --file <done.json>`.
    Mark validates the reservation digest again. Never mark an unsuccessful proposal.
 5. Run `routine <binding> finish --run-id <run_id> --status success|partial|failed --count proposals_added=N`.
-   Counts only: no item titles, message bodies, addresses or summaries. A failed mark must be retried under
+   Add `--usage engine=<your harness>` when you know it; never type token numbers (kit v137 refuses them here, and the
+   runner records what it measured). Counts only: no item titles, message bodies, addresses or summaries. A failed mark must be retried under
    the same reservation before finish; if that cannot succeed, finish failed and rely on action_key on retry.
 6. Commit/push only the register and seen log. Do not include source files, credentials or temporary done files.
 

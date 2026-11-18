@@ -473,7 +473,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 136  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 137  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -14231,10 +14231,12 @@ def cmd_checkpoint(a):
 
 def cmd_routine(a):
     """Repo-owned routine inventory and bounded run reports; scheduler credentials stay outside git."""
-    if not ROOT:
-        sys.exit("routine commands need a board repo clone")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,95}", a.id):
         sys.exit("routine id must use lowercase letters, digits, hyphens or underscores")
+    if a.action == "usage" and getattr(a, "push", False):
+        return _routine_usage_push(a)
+    if not ROOT:
+        sys.exit("routine commands need a board repo clone")
     path = _automation_path("automation/routines/" + a.id + ".json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path + ".lock", "a+b") as lock:
@@ -14262,6 +14264,11 @@ def _routine_report(a, path):
         sys.exit("routine register needs a valid GitHub owner before reporting runs")
     if owner.lower() != default_user().strip().lower():
         sys.exit("routine reports can only be updated by the registered owner; set BOARD_USER to your verified GitHub login")
+    if a.action == "usage":
+        _routine_usage_apply(data, a)
+        atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        print(f"{a.id}: usage; commit {os.path.relpath(path, ROOT)} to publish the report")
+        return
     run_id = a.run_id
     if not run_id:
         sys.exit("--run-id is required for start and finish")
@@ -14289,13 +14296,109 @@ def _routine_report(a, path):
                 if install["digest"] != current.get("digest") or install["slug"] not in packs or _auto_pack(packs[install["slug"]][1])[1] != current.get("digest"):
                     sys.exit("pack digest changed since reservation")
             current = {k: v for k, v in current.items() if k != "batch"}
-        report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts)
+        # kit v137: every finished report says what the run used, or plainly that nobody measured it (known: false).
+        usage = _routine_usage(getattr(a, "usage", None) or [], numbers=os.environ.get("KEEPTRACK_PROPOSALS_ONLY") != "1")
+        report = dict(current, finished_at=now(), status=a.status, summary=a.summary or "", counts=counts, usage=usage)
         data["last_run"] = report
         data["runs"] = (data.get("runs", []) + [report])[-30:]
         data["current_run"] = None
         if a.status == "success": data["last_successful_run_at"] = report["finished_at"]
     atomic_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     print(f"{a.id}: {a.action}; commit {os.path.relpath(path, ROOT)} to publish the report")
+
+
+# Kit v137 (card #259): run usage in a routine's last_run. Tokens only: a cost is money, and money stays off the board.
+ROUTINE_USAGE_NUMBERS = ("in", "out", "cache_read", "cache_write", "turns")
+
+
+def _routine_usage(values, numbers=True):
+    """--usage KEY=VALUE pairs as a last_run usage record: {"engine", "known", <token counts>}. No counts: known is
+    false, which says plainly that the run's usage was not measured (a cloud harness that reports none). numbers=False
+    (an automation worker under KEEPTRACK_PROPOSALS_ONLY) takes the engine only: the runner that started the worker
+    measures the numbers and adds them with `routine <id> usage`, so a worker cannot write its own."""
+    usage, engine = {}, "unknown"
+    for value in values:
+        key, sep, val = str(value).partition("=")
+        if not sep:
+            sys.exit("--usage takes KEY=VALUE, for example engine=claude or in=1200")
+        if key == "engine":
+            if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", val):
+                sys.exit("--usage engine= takes a short lower-case name such as claude, codex or claude-cloud")
+            engine = val
+        elif key in ("cost_usd", "cost"):
+            sys.exit("--usage records tokens only: a cost is money, and money stays off the board")
+        elif key in ROUTINE_USAGE_NUMBERS:
+            if not numbers:
+                sys.exit("KEEPTRACK_PROPOSALS_ONLY: --usage takes engine= only here; the runner records the numbers")
+            if not re.fullmatch(r"[0-9]{1,12}", val):
+                sys.exit(f"--usage {key}= takes a whole number")
+            if key in usage:
+                sys.exit(f"--usage {key}= given twice")
+            usage[key] = int(val)
+        else:
+            sys.exit(f"--usage: unknown key {key!r}; keys: engine, " + ", ".join(ROUTINE_USAGE_NUMBERS))
+    return {"engine": engine, "known": bool(usage), **{k: usage[k] for k in ROUTINE_USAGE_NUMBERS if k in usage}}
+
+
+def _routine_usage_apply(data, a):
+    """`routine <id> usage`: add measured usage to the register's last_run (that run only; `runs` keeps the report as
+    finish wrote it, so the history only ever grows at its end). The run is the one --run-id names, or the first run
+    started at or after --since (the runner's own start time). Usage already known is never replaced."""
+    usage = _routine_usage(getattr(a, "usage", None) or [])
+    if not usage["known"]:
+        sys.exit("usage needs at least one token count, for example --usage in=1200 --usage out=300")
+    run_id, since = getattr(a, "run_id", None), getattr(a, "since", None)
+    if bool(run_id) == bool(since):
+        sys.exit("usage needs exactly one of --run-id or --since")
+    last = data.get("last_run")
+    if not isinstance(last, dict) or not last.get("finished_at"):
+        sys.exit("no finished run to add usage to")
+    if run_id and last.get("id") != run_id:
+        sys.exit("the last finished run is not " + str(run_id) + ": usage not recorded")
+    if since:
+        at, start = _checkpoint_time(since), last.get("started_at")
+        if not isinstance(start, str) or _checkpoint_time(start) < at:
+            sys.exit("no run finished that started at or after " + since + ": usage not recorded")
+    old = last.get("usage")
+    if isinstance(old, dict) and old.get("known") is True:
+        sys.exit("the last run already has its usage: not replaced")
+    if isinstance(old, dict) and old.get("engine") not in (None, "unknown", usage["engine"]) and usage["engine"] == "unknown":
+        usage["engine"] = old["engine"]
+    last["usage"] = usage
+
+
+def _routine_usage_push(a):
+    """`routine <id> usage --push`: the same change, read from and saved to the board branch through the GitHub API,
+    for a runner whose board checkout is the owner's (it never commits there). A changed file is read again."""
+    rel = "automation/routines/" + a.id + ".json"
+    if FILE:
+        sys.exit("usage --push saves to GitHub; with --file use usage without --push")
+    for _ in range(4):
+        rc, out, err = gh(f"repos/{REPO}/contents/{rel}?ref={urllib.parse.quote(BRANCH, safe='')}")
+        if rc:
+            sys.exit(("routine register is missing; register this routine before reporting runs"
+                      if "404" in err or "Not Found" in out else f"cannot read {rel}: {err.strip() or out.strip()}"))
+        d = json.loads(out)
+        data = json.loads(content_text(rel, d))
+        if not isinstance(data, dict) or data.get("version") != 1 or data.get("id") != a.id:
+            sys.exit("routine register version/id mismatch")
+        if data.get("board_repo") != REPO or data.get("branch") != BRANCH or data.get("board_path") != PATH:
+            sys.exit("routine register does not match the resolved board/branch/path")
+        owner = data.get("owner")
+        if not isinstance(owner, str) or owner.lower() != default_user().strip().lower():
+            sys.exit("routine reports can only be updated by the registered owner; set BOARD_USER to your verified GitHub login")
+        _routine_usage_apply(data, a)
+        text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+        body = {"message": f"routine {a.id}: run usage", "branch": BRANCH, "sha": d["sha"],
+                "content": base64.b64encode(text.encode()).decode()}
+        path = "/".join(urllib.parse.quote(x, safe="") for x in rel.split("/"))
+        rc, out, err = gh("-X", "PUT", f"repos/{REPO}/contents/{path}", "--input", "-", body=body)
+        if rc == 0:
+            print(f"{a.id}: usage saved to {REPO}@{BRANCH}")
+            return
+        if not _sha_mismatch(out, err):
+            _api_error(rc, out, err)
+    sys.exit("write failed: the register kept changing; run the command again")
 
 
 # Automations keep checks cheap and reserve agent work in the routine register.
@@ -15257,11 +15360,15 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
         work_module().parser(sub, cmd_work)
-    s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report")
-    s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish"])
+    s = sub.add_parser("routine", help="show, start or finish a registered routine's structured run report, or add its run usage")
+    s.add_argument("id"); s.add_argument("action", choices=["show", "start", "finish", "usage"])
     s.add_argument("--run-id"); s.add_argument("--status", choices=["success", "partial", "failed", "blocked"])
     s.add_argument("--summary", help="brief outcome; no secrets or email text")
     s.add_argument("--count", action="append", default=[], help="structured count such as touches_logged=3")
+    s.add_argument("--usage", action="append", default=[], help="run usage: engine=claude, in=N, out=N, cache_read=N, "
+                   "cache_write=N or turns=N (tokens only, never a cost); finish without it records usage as not known")
+    s.add_argument("--since", help="usage: the first run started at or after this UTC time (YYYY-MM-DDTHH:MM:SSZ)")
+    s.add_argument("--push", action="store_true", help="usage: save to the board branch through the GitHub API, not the clone")
     s.set_defaults(f=cmd_routine)
     s = sub.add_parser("checkpoint", help="read/save a registered routine's owner-bound durable checkpoint (local clone; commit separately)")
     s.add_argument("id"); s.add_argument("action", choices=["show", "save"])
