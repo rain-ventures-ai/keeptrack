@@ -3,6 +3,7 @@
 //  - settings.max_agent_claims: a full board refuses to send work to Claude (no claim written, no cron job, a message, a relay-log line)
 //    and disables the quick-assign entries; with room, it sends, and the routine text no longer says --force and explains done --note / --cancel.
 //  - a card closed as cancelled shows a "cancelled" pill, an "Outcome: cancelled" line in the drawer and the same in the Markdown export.
+//  - the drawer shows measured tokens from the last run record on active and finished cards.
 // Run: node agent-limit.test.js
 
 const assert = require('node:assert/strict');
@@ -196,6 +197,63 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       }
       await page.locator('#dlgCard').evaluate(d => d.close());
       await six.dblclick(); await page.locator('#dlgCard[open]').waitFor(); assert.doesNotMatch(await page.locator('#cLastRun').textContent(), /Outcome: cancelled/);
+      await page.close();
+    }
+
+    // ---- 4. recorded usage stays separate from the live claim and last run, including on a read-only board ----
+    {
+      const api = new Github();
+      const board = JSON.parse(api.files['tasks.json']); board.settings.min_kit = 9999; api.files['tasks.json'] = text(board);
+      for (const id of ['t_one', 't_two', 't_three', 't_five', 't_six']) {
+        const c = api.card(id);
+        c.comments = [{ id: 'c_usage', by: 'relay', at: c.created, text: 'run usage: engine=claude in=9999 out=8888' }];
+        if (id === 't_two') {
+          c.title = 'Review a long implementation plan with two agents and recorded run usage';
+          c.last_run = { agent: 'codex', status: 'done', finished_at: c.created, usage: { engine: 'codex', known: true, in: 2000, cache_read: 1500, out: 40 } };
+          c.claim.usage = { engine: 'claude', known: true, in: 6000, out: 500 };
+        }
+        if (id === 't_three') c.last_run = { usage: { engine: 'codex', known: false, in: 42, out: 15 } };
+        if (id === 't_five') c.last_run = { usage: { engine: 'claude', known: true, in: '100', out: 2.5, cache_read: -3, cache_write: 1e12, turns: 3 } };
+        if (id === 't_six') c.last_run.usage = { engine: 'claude', known: true, in: 2000, cache_read: 1500, out: 0 };
+        api.files[`cards/${id}.json`] = text(c);
+      }
+      const page = await openBoard(browser, api, []);
+      const drawer = page.locator('#dlgCard'), usage = page.locator('#cRunUsage'), lastRun = page.locator('#cLastRun');
+      async function openCard(id) {
+        const { num, title } = api.card(id);
+        await page.goto(`${base}/board/index.html?card=${id}#${num}`);
+        await page.waitForFunction(t => document.getElementById('cTitle').value === t, title);
+      }
+      await openCard('t_two'); await usage.waitFor();
+      assert.equal(await page.locator('#cTitle').isDisabled(), true);
+      assert.equal(await page.locator('#cClaimWrap').isVisible(), true);
+      assert.equal(await lastRun.textContent(), 'Last run usage: Codex · 500 fresh input + 40 output tokens');
+      if (SHOTS) {
+        fs.mkdirSync(SHOTS, { recursive: true });
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: 844 });
+          await page.reload(); await usage.waitFor();
+          for (const theme of ['light', 'dark']) {
+            await page.evaluate(theme => window.kbTheme.set(theme), theme);
+            await drawer.screenshot({ path: path.join(SHOTS, `run-usage-${width}-${theme}.png`) });
+          }
+        }
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await drawer.locator('#cBody').evaluate(body => body.scrollWidth === body.clientWidth), true);
+      await openCard('t_six');
+      assert.match(await lastRun.textContent(), /Last run: claude/);
+      assert.equal(await usage.textContent(), 'Last run usage: Claude · 2K fresh input + 0 output tokens');
+      if (SHOTS) await drawer.screenshot({ path: path.join(SHOTS, 'run-usage-finished.png') });
+      await openCard('t_one');
+      assert.equal(await usage.count(), 0);
+      assert.equal(await lastRun.isVisible(), false);
+      if (SHOTS) await drawer.screenshot({ path: path.join(SHOTS, 'run-usage-empty.png') });
+      for (const id of ['t_three', 't_five']) {
+        await openCard(id);
+        assert.equal(await usage.count(), 0);
+      }
+      assert.equal(api.writes, 0, 'rendering recorded usage saves nothing');
       await page.close();
     }
 

@@ -5249,16 +5249,39 @@ if (typeof window !== 'undefined') (() => {
     });
   }
 
+  const compactTokens = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+  const tokenCount = value => Number.isSafeInteger(value) && value >= 0 && value < 1e12;
+  function runUsageSummary(usage) {
+    if (usage?.known !== true || (usage.engine !== 'claude' && usage.engine !== 'codex')) return '';
+    const tokens = [];
+    const add = (value, label) => { if (tokenCount(value)) tokens.push(`${compactTokens.format(value)} ${label}`); };
+    if (tokenCount(usage.in)) {
+      // Codex includes cached reads in input. Claude reports those separately.
+      if (usage.engine === 'codex' && tokenCount(usage.cache_read)) add(Math.max(0, usage.in - usage.cache_read), 'fresh input');
+      else add(usage.in, usage.engine === 'claude' ? 'fresh input' : 'input');
+    }
+    add(usage.out, 'output');
+    if (!tokens.length) {
+      add(usage.cache_read, 'cached input');
+      add(usage.cache_write, 'cache write');
+    }
+    if (!tokens.length) return '';
+    const engine = usage.engine === 'codex' ? 'Codex' : 'Claude';
+    return `Last run usage: ${engine} · ${tokens.join(' + ')} tokens`;
+  }
+
   function renderClaim(t) {
     // a finished run leaves no banner, just one "Last run" line with its link (older cards kept a claim with status done)
     const done = t.claim && t.claim.status === 'done', live = t.claim && !done ? t.claim : null, last = t.last_run || (done ? t.claim : null), lr = $('cLastRun');
-    const cx = cancelledRun(t); lr.textContent = ''; lr.hidden = (!last && !cx) || !!live;
+    const cx = cancelledRun(t), usage = runUsageSummary(t.last_run?.usage);
+    lr.textContent = ''; lr.removeAttribute('title'); lr.hidden = !usage && ((!last && !cx) || !!live);
     if (cx && !live) lr.append(el('div', 'lroutcome', 'Outcome: cancelled' + (cx.note ? ' · ' + cx.note : '')));
     if (last && !live) {
       lr.append(el('span', null, `${cx ? '' : '✓ '}Last run: ${last.agent || 'agent'}${last.on_behalf_of ? ' for @' + last.on_behalf_of : ''} · ${ago(last.finished_at || last.heartbeat_at || last.claimed_at)}`));
       if (last.session_url && safeUrl(last.session_url)) { const a = el('a', 'sesslink', /\/routines\//.test(last.session_url) ? 'Routine runs ↗' : 'Open session ↗'); a.href = safeUrl(last.session_url); a.target = '_blank'; a.rel = 'noopener noreferrer'; lr.append(document.createTextNode(' · '), a); }
       if (last.note) lr.title = last.note;
     }
+    if (usage) { const row = el('div', null, usage); row.id = 'cRunUsage'; lr.append(row); }
     const wrap = $('cClaimWrap'); if (!live) { wrap.textContent = ''; wrap.hidden = true; delete wrap.dataset.sig; return; } wrap.hidden = false;
     const k = t.claim, st = claimState(k), tone = st === 'running' ? 'ok' : st === 'stuck' ? 'danger' : st === 'stale' || st === 'blocked' ? 'warn' : 'info';
     const txt = el('div', 'dclaim__text'), top = el('div', 'cltop'); top.append(el('b', null, k.agent), document.createTextNode(`${k.on_behalf_of ? ' for @' + k.on_behalf_of : ''} · ${st} · beat ${ago(k.heartbeat_at || k.claimed_at)}`)); txt.append(top);
