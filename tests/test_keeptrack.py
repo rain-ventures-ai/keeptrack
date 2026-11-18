@@ -122,6 +122,7 @@ class LocalBoard(unittest.TestCase):
         write(os.path.join(self.dir.name, "board", "archive", "2024.json"), {"tasks": [], "contacts": [], "history": {"t_live": older}})
         write(os.path.join(self.dir.name, "board", "archive", year + ".json"), {"tasks": [], "contacts": [], "history": {"t_live": older}})
         data["archive"] = {"files": {"2024": {"tasks": 0, "contacts": 0}, year: {"tasks": 0, "contacts": 0}}}
+        data.setdefault("settings", {})["archive"] = {"compact": False}   # the full-card opt-out (card #557)
         write(self.file, data)
         before = copy.deepcopy(target)
         before["history"] = older + before["history"]
