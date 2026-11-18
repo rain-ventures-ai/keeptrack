@@ -2707,7 +2707,7 @@ if (typeof window !== 'undefined') (() => {
       if (!ticket.failed.has(name)) next[name + 'Failures'] = (flowMeta[name + 'Failures'] || 0) + 1;
       ticket.failed.add(name);
       next[name + 'CooldownUntil'] = Math.max(next[name + 'CooldownUntil'] || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next[name + 'Failures'] - 1)));
-      // Only an explicitly exhausted shared GitHub quota pauses the other endpoint too.
+      // GitHub's exhausted quota or explicit rate-limit Retry-After applies to both optional reads.
       if (error.sharedLimited) next.cooldownUntil = Math.max(next.cooldownUntil || 0, error.retryAt || 0);
       if ([401, 403, 404].includes(error.status) && !error.limited) {
         delete next[name]; delete next[name + 'Tag'];
@@ -2723,7 +2723,7 @@ if (typeof window !== 'undefined') (() => {
         const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
         if (r.status === 304) return { unchanged: true };
         if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); e.sharedLimited = e.limited && r.headers.get('x-ratelimit-remaining') === '0'; if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); e.sharedLimited = e.limited && (r.headers.get('x-ratelimit-remaining') === '0' || r.headers.has('retry-after')); if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
         let data = await r.json();
         if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
         return { data, tag: r.headers.get('ETag') };

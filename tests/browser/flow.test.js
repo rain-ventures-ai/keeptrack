@@ -56,7 +56,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerNetwork) return route.abort('failed');
-        if (runnerSharedLimit) return json({}, 403, { 'retry-after': '120', 'x-ratelimit-remaining': '0' });
+        if (runnerSharedLimit) return json({}, runnerSharedLimit === 'primary' ? 403 : 429, { 'retry-after': '120', 'x-ratelimit-remaining': runnerSharedLimit === 'primary' ? '0' : '300' });
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
@@ -64,7 +64,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsNetwork) return route.abort('failed'); if (commitsLimited) return json({}, 429, { 'retry-after': '120' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsNetwork) return route.abort('failed'); if (commitsLimited) return json({}, 429, { 'retry-after': '120', 'x-ratelimit-remaining': '300' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -169,11 +169,10 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     const limitedCount = counts.commits;
     const independentRunnerCount = counts.runner;
-    const independentRunner = page.waitForResponse(r => r.url().includes('local-runner.json'));
     await page.clock.fastForward(61000);
-    await independentRunner;
+    await page.clock.runFor(100);
     assert.equal(counts.commits, limitedCount, 'Retry-After prevents metadata retries for 120 seconds');
-    assert.ok(counts.runner > independentRunnerCount, 'endpoint Retry-After does not pause healthy runner status');
+    assert.equal(counts.runner, independentRunnerCount, 'secondary rate-limit Retry-After also pauses runner status despite remaining primary quota');
     commitsLimited = false; await page.clock.fastForward(91000);
     await page.waitForFunction(() => !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     // The Done button overrides the existing Hide Done switch.
@@ -352,6 +351,20 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     runnerNetwork = commitsNetwork = false;
     await page.clock.fastForward(181000);
     await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh') && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
+    // Ordinary activity network failures back off without stopping the healthy runner endpoint.
+    commitsNetwork = true;
+    for (let i = 0; i < 2; i++) {
+      const failure = page.waitForEvent('requestfailed', r => r.url().includes('/commits?'));
+      await page.clock.fastForward(61000); await failure; await page.clock.runFor(100);
+    }
+    const activityBackoff = { ...counts };
+    const healthyRunner = page.waitForResponse(r => r.url().includes('local-runner.json'));
+    await page.clock.fastForward(61000); await healthyRunner; await page.clock.runFor(100);
+    assert.equal(counts.commits, activityBackoff.commits, 'ordinary activity failures retain their own retry backoff');
+    assert.ok(counts.runner > activityBackoff.runner, 'healthy runner reads continue during activity network backoff');
+    commitsNetwork = false;
+    await page.clock.fastForward(181000);
+    await page.waitForFunction(() => !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
     // Persistent runner failures must not inherit the activity endpoint's schedule.
     runnerNetwork = true;
     const runnerBeforeFailures = counts.runner;
@@ -366,16 +379,18 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.clock.fastForward(301000);
     await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     // An exhausted shared quota still pauses both optional endpoints until its retry deadline.
-    runnerSharedLimit = true;
-    await page.clock.fastForward(61000);
-    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
-    const sharedCounts = { ...counts };
-    await page.clock.fastForward(61000);
-    assert.equal(counts.runner, sharedCounts.runner);
-    assert.equal(counts.commits, sharedCounts.commits, 'explicitly exhausted GitHub quota pauses activity too');
-    runnerSharedLimit = false;
-    await page.clock.fastForward(91000);
-    await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    for (const limit of ['primary', 'secondary']) {
+      runnerSharedLimit = limit;
+      await page.clock.fastForward(61000);
+      await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+      const sharedCounts = { ...counts };
+      await page.clock.fastForward(61000); await page.clock.runFor(100);
+      assert.equal(counts.runner, sharedCounts.runner);
+      assert.equal(counts.commits, sharedCounts.commits, limit + ' GitHub rate limit pauses activity too');
+      runnerSharedLimit = false;
+      await page.clock.fastForward(91000);
+      await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    }
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
