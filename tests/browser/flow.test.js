@@ -25,6 +25,7 @@ let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, co
 let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, boardGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false, runnerNetwork = false, runnerSharedLimit = false, commitsNetwork = false;
 const otherBoardSubject = 'PRIVATE fixture: another board client changed confidential strategy <script>unsafe</script>';
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : otherBoardSubject, author: { date: now } } }));
+let primaryReset = 0;
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
   const browser = await chromium.launch({ headless: true });
@@ -100,7 +101,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     });
     await page.route('https://api.test/**', async route => {
       const req = route.request(), u = new URL(req.url()), p = u.pathname.replace('/repos/acme/board', '');
-      const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag, X-RateLimit-Remaining, Retry-After', ...headers }, body: JSON.stringify(data) });
+      const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After', ...headers }, body: JSON.stringify(data) });
       if (req.method() !== 'GET') counts.writes++;
       if (req.method() === 'PUT' && ['/contents/board/tasks.json', '/contents/tasks.json'].includes(p)) { raw = JSON.parse(Buffer.from(req.postDataJSON().content, 'base64').toString()); revision++; return json({ content: { sha: 'board' + revision } }); }
       if (p === '') return json({ private: true, permissions: { push: true } });
@@ -119,7 +120,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerNetwork) return route.abort('failed');
-        if (runnerSharedLimit) return json({}, runnerSharedLimit === 'primary' ? 403 : 429, { 'retry-after': '120', 'x-ratelimit-remaining': runnerSharedLimit === 'primary' ? '0' : '300' });
+        if (runnerSharedLimit) return json({}, runnerSharedLimit === 'primary' ? 403 : 429, { 'retry-after': '120', 'x-ratelimit-remaining': runnerSharedLimit === 'primary' ? '0' : '300', ...(runnerSharedLimit === 'primary' ? { 'x-ratelimit-reset': String(primaryReset) } : {}) });
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
@@ -446,6 +447,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     // An exhausted shared quota still pauses both optional endpoints until its retry deadline.
     for (const limit of ['primary', 'secondary']) {
+      primaryReset = Math.floor((await page.evaluate(() => Date.now()) + 301000) / 1000);
       runnerSharedLimit = limit;
       await page.clock.fastForward(61000);
       await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
@@ -455,6 +457,12 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       assert.equal(counts.commits, sharedCounts.commits, limit + ' GitHub rate limit pauses activity too');
       runnerSharedLimit = false;
       await page.clock.fastForward(91000);
+      if (limit === 'primary') {
+        await page.clock.runFor(100);
+        assert.equal(counts.runner, sharedCounts.runner, 'a later primary reset takes precedence over the shorter Retry-After');
+        assert.equal(counts.commits, sharedCounts.commits);
+        await page.clock.fastForward(121000);
+      }
       await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     }
     assert.deepEqual(errors, []);
