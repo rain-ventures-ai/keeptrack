@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v139: `automation tick --only <slug> --run-id <id>` reserves the runner's id instead of choosing one. The id is
+optional and has the same shape as the ids tick already writes (`tick-` and 32 lowercase hex). It is refused without
+`--only`, when the shape is wrong, and when that binding already used it (the current run, the last run, or a kept
+run); a refusal writes nothing. With no `--run-id`, tick still chooses the id. `routine <id> usage --run-id` then
+binds to that exact run. No schema change.
+
 Kit v138: `unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent end a wait another agent set,
 only on a card assigned to the owner (`BOARD_USER`) and only when the wait is on the owner, an agent or nobody. The quote
 (at most 300 characters, never empty), the agent and the time go into history (`owner_said`), a card comment and

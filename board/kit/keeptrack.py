@@ -474,7 +474,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 138  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 139  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -14937,10 +14937,41 @@ def _auto_only(a, packs, owner, runner, pin=None):
     return os.path.basename(rp)
 
 
+_AUTO_RUN_ID = re.compile(r"tick-[0-9a-f]{32}")
+
+
+def _auto_requested_run_id(a):
+    """tick --run-id: the id the runner reserved before launch, or None when the kit should choose one.
+    Same shape as the ids tick already writes (tick- and 32 lowercase hex). --run-id without --only is refused:
+    one id cannot be shared across every due automation."""
+    run_id = getattr(a, "run_id", None)
+    if not run_id:
+        return None
+    if getattr(a, "only", None) is None:
+        sys.exit("automation tick --run-id needs --only <slug>")
+    if not isinstance(run_id, str) or not _AUTO_RUN_ID.fullmatch(run_id):
+        sys.exit("automation tick --run-id: expected tick- and 32 lowercase hex characters")
+    return run_id
+
+
+def _auto_run_id_used(register, run_id):
+    """True when this binding already has run_id on the current run, the last run, or a kept run."""
+    ids = []
+    for key in ("current_run", "last_run"):
+        run = register.get(key)
+        if isinstance(run, dict):
+            ids.append(run.get("id"))
+    for run in register.get("runs") or []:
+        if isinstance(run, dict):
+            ids.append(run.get("id"))
+    return run_id in ids
+
+
 def _auto_tick(a, packs, owner):
     runner = getattr(a, "runner", None) or "local"
     if runner not in _AUTO_RUNNERS: sys.exit("--runner must be cloud or local")
     pin = _auto_digest_pin(a)
+    requested = _auto_requested_run_id(a)
     only = _auto_only(a, packs, owner, runner, pin) if getattr(a, "only", None) is not None else None
     # Every cloud check is recorded in the committed register, work or not: a cloud worker is a fresh clone, so
     # local state is lost and `due` reads only the register.
@@ -15006,7 +15037,9 @@ def _auto_tick(a, packs, owner):
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
                         if cloud: _auto_keep_cloud_cursor(r, result)
                         if result["items"]:
-                            run_id = "tick-" + uuid.uuid4().hex
+                            run_id = requested or ("tick-" + uuid.uuid4().hex)
+                            if _auto_run_id_used(r, run_id):
+                                raise SystemExit("automation tick --run-id: " + run_id + " is already used")
                             r["last_started_at"] = started
                             r["current_run"] = dict(id=run_id, started_at=r["last_started_at"], status="running", digest=digest,
                                 batch=dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"]))
@@ -15019,6 +15052,8 @@ def _auto_tick(a, packs, owner):
                             r["last_started_at"] = started; _auto_write(rp, r)
                         _auto_save_check(binding, result=result, register=r)
                     except (ValueError, OSError, SystemExit) as error:
+                        if isinstance(error, SystemExit) and str(error).startswith("automation tick --run-id:"):
+                            raise
                         if reserved: raise
                         if commit_start and started is not None:
                             r["last_started_at"] = started; _auto_write(rp, r)
@@ -15378,6 +15413,7 @@ def _automation_parser(sub):
         if name == "tick":
             p.add_argument("--only", metavar="SLUG", help="tick exactly this automation (relay workers)")
             p.add_argument("--digest", help="with --only: refuse unless the approved digest is this one")
+            p.add_argument("--run-id", help="with --only: reserve this id (tick- and 32 hex) instead of choosing one")
         if name == "list": p.add_argument("--installed", action="store_true")
         if name == "install":
             p.add_argument("--every", choices=sorted(_AUTO_INTERVALS)); p.add_argument("--set", action="append", default=[])
