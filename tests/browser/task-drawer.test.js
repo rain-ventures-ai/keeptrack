@@ -81,15 +81,28 @@ async function assertFits(page, where) {
   try {
     // Stable query identities beat stale/reassigned numeric hashes, including comment links and previews.
     {
-      const fresh = async api => {
+      const fresh = async (api, token = 'test') => {
         const p = await browser.newPage({ viewport: { width: 1200, height: 860 } });
-        await p.addInitScript(() => {
-          Object.entries({ kb_repo: 'acme/board', kb_branch: 'main', kb_path: 'board/tasks.json', kb_token: 'test', kb_me: 'alex', kb_api: 'https://api.test', kb_layout: 'classic', kb_tour_seen: '1' }).forEach(([k, v]) => localStorage.setItem(k, v));
+        await p.addInitScript(token => {
+          Object.entries({ kb_repo: 'acme/board', kb_branch: 'main', kb_path: 'board/tasks.json', kb_me: 'alex', kb_api: 'https://api.test', kb_layout: 'classic', kb_tour_seen: '1' }).forEach(([k, v]) => localStorage.setItem(k, v));
+          if (token) localStorage.setItem('kb_token', token);
           sessionStorage.setItem('kb_view', 'board'); window.__openedTitles = [];
           new MutationObserver(() => { const d = document.getElementById('dlgCard'); if (d?.open) window.__openedTitles.push(document.getElementById('cTitle').value); }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
-        });
-        await p.route('https://api.test/**', r => api.route(r)); return p;
+        }, token);
+        await p.route('https://api.test/**', r => { if (!token) assert.equal(r.request().headers().authorization, undefined, 'public reads have no token'); return api.route(r); }); return p;
       };
+      const publicApi = new Github(), publicPage = await fresh(publicApi, '');
+      const publicBoard = JSON.parse(publicApi.files['tasks.json']);
+      publicBoard.version = 3; delete publicBoard.layout;
+      publicBoard.tasks = ['t_one', 't_two'].map(id => publicApi.card(id));
+      publicApi.files['tasks.json'] = text(publicBoard);
+      await publicPage.goto(base + '/board/index.html?card=t_two');
+      await publicPage.locator('#dlgCard[open]').waitFor();
+      assert.equal(await publicPage.locator('#cTitle').inputValue(), 'Second', 'an anonymous public ID-only link opens its card');
+      assert.equal(await publicPage.locator('#dlgSettings').evaluate(d => d.open), false, 'explicit public navigation does not open connection settings');
+      assert.equal(await publicPage.evaluate(() => localStorage.getItem('kb_token')), null);
+      assert.equal(publicApi.writes, 0);
+      await publicPage.close();
       for (const [route, expected] of [['?card=t_two#1', 'Second'], ['?card=t_two', 'Second'], ['#1', 'First']]) {
         const api = new Github(), p = await fresh(api);
         await p.goto(base + '/board/index.html' + route); await p.locator('#dlgCard[open]').waitFor();
