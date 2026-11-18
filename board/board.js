@@ -2695,17 +2695,20 @@ if (typeof window !== 'undefined') (() => {
     const c = { ...cfg() }, key = flowKey(c);
     if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
     if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
-    const ticket = flowRequest = { key, deniedCommits: false, failed: false, attempted: false };
+    const ticket = flowRequest = { key, deniedCommits: false, attempted: new Set(), failed: new Set() };
     flowMeta = { ...flowMeta, checked: Date.now() };
     const current = () => flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token;
     const publish = patch => { if (current()) { flowMeta = { ...flowMeta, ...patch }; syncFlowLive(); } };
     const failed = (name, error, path) => {
       if (!current()) return;
-      ticket.failed = true;
       const next = { ...flowMeta, [name + 'Error']: 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
       if (name === 'commits') { next.commitErrors = new Map(flowMeta.commitErrors || []); next.commitErrors.set(path, true); }
-      next.rateFailures = (flowMeta.rateFailures || 0) + 1;
-      next.cooldownUntil = Math.max(next.cooldownUntil || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next.rateFailures - 1)));
+      // Optional endpoints back off independently. Several split-board paths count as one failed activity refresh.
+      if (!ticket.failed.has(name)) next[name + 'Failures'] = (flowMeta[name + 'Failures'] || 0) + 1;
+      ticket.failed.add(name);
+      next[name + 'CooldownUntil'] = Math.max(next[name + 'CooldownUntil'] || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next[name + 'Failures'] - 1)));
+      // Only an explicitly exhausted shared GitHub quota pauses the other endpoint too.
+      if (error.sharedLimited) next.cooldownUntil = Math.max(next.cooldownUntil || 0, error.retryAt || 0);
       if ([401, 403, 404].includes(error.status) && !error.limited) {
         delete next[name]; delete next[name + 'Tag'];
         if (name === 'commits') { next.commitParts = new Map(); ticket.deniedCommits = true; }
@@ -2720,15 +2723,15 @@ if (typeof window !== 'undefined') (() => {
         const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
         if (r.status === 304) return { unchanged: true };
         if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); e.sharedLimited = e.limited && r.headers.get('x-ratelimit-remaining') === '0'; if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
         let data = await r.json();
         if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
         return { data, tag: r.headers.get('ETag') };
       } finally { clearTimeout(timer); }
     };
     const runnerRead = async () => {
-      if (flowMeta.runnerMissingUntil > Date.now() || flowMeta.cooldownUntil > Date.now()) return;
-      ticket.attempted = true;
+      if (flowMeta.runnerMissingUntil > Date.now() || flowMeta.runnerCooldownUntil > Date.now() || flowMeta.cooldownUntil > Date.now()) return;
+      ticket.attempted.add('runner');
       try {
         const r = await read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, flowMeta.runnerTag);
         if (r.unchanged) publish({ runnerError: '' });
@@ -2740,10 +2743,10 @@ if (typeof window !== 'undefined') (() => {
     // Never query the parent directory: it can contain other boards.
     const paths = [c.path];
     if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
-    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute && !(flowMeta.cooldownUntil > Date.now());
+    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute && !(flowMeta.commitsCooldownUntil > Date.now()) && !(flowMeta.cooldownUntil > Date.now());
     if (commitDue) publish({ commitsMinute: minute, commitsPending: paths.length });
     const commitReads = !commitDue ? [] : paths.map(async path => {
-      ticket.attempted = true;
+      ticket.attempted.add('commits');
       try {
         const old = flowMeta.commitParts?.get(path);
         const r = await read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(path)}&per_page=20`, old?.tag);
@@ -2758,7 +2761,10 @@ if (typeof window !== 'undefined') (() => {
       finally { if (current()) publish({ commitsPending: Math.max(0, (flowMeta.commitsPending || 0) - 1) }); }
     });
     await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
-    if (current()) { if (ticket.attempted && !ticket.failed) flowMeta = { ...flowMeta, rateFailures: 0 }; flowRequest = null; }
+    if (current()) {
+      for (const name of ticket.attempted) if (!ticket.failed.has(name)) flowMeta = { ...flowMeta, [name + 'Failures']: 0, [name + 'CooldownUntil']: 0 };
+      flowRequest = null;
+    }
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowComponents(tasks) {

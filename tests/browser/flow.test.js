@@ -22,7 +22,7 @@ tasks.find(t => t.num === 10).after = ['t_10'];
 tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
 tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, boardGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false, runnerNetwork = false, commitsNetwork = false;
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, boardGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false, runnerNetwork = false, runnerSharedLimit = false, commitsNetwork = false;
 const otherBoardSubject = 'PRIVATE fixture: another board client changed confidential strategy <script>unsafe</script>';
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : otherBoardSubject, author: { date: now } } }));
 (async () => {
@@ -56,6 +56,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerNetwork) return route.abort('failed');
+        if (runnerSharedLimit) return json({}, 403, { 'retry-after': '120', 'x-ratelimit-remaining': '0' });
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
@@ -161,11 +162,18 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'transient network failures preserve the loaded graph');
     boardNetwork = false; await page.clock.fastForward(31000);
     commitsLimited = true;
+    const limitedResponse = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 429);
     await page.clock.fastForward(61000);
+    await (await limitedResponse).finished();
+    await page.clock.runFor(100);
     await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     const limitedCount = counts.commits;
+    const independentRunnerCount = counts.runner;
+    const independentRunner = page.waitForResponse(r => r.url().includes('local-runner.json'));
     await page.clock.fastForward(61000);
+    await independentRunner;
     assert.equal(counts.commits, limitedCount, 'Retry-After prevents metadata retries for 120 seconds');
+    assert.ok(counts.runner > independentRunnerCount, 'endpoint Retry-After does not pause healthy runner status');
     commitsLimited = false; await page.clock.fastForward(91000);
     await page.waitForFunction(() => !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     // The Done button overrides the existing Hide Done switch.
@@ -331,6 +339,30 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     runnerNetwork = commitsNetwork = false;
     await page.clock.fastForward(181000);
     await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh') && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
+    // Persistent runner failures must not inherit the activity endpoint's schedule.
+    runnerNetwork = true;
+    const runnerBeforeFailures = counts.runner;
+    for (let i = 1; i <= 6; i++) {
+      commits[0].sha = String(i).repeat(40);
+      await page.clock.fastForward(61000);
+      await page.waitForFunction(sha => document.querySelector('.flow-event a')?.href.endsWith('/commit/' + sha), commits[0].sha);
+      assert.ok(!(await page.locator('.flow-feed').innerText()).includes('Could not refresh'), 'fresh commits continue during repeated runner failure');
+    }
+    assert.ok(counts.runner - runnerBeforeFailures < 6, 'the failing runner endpoint independently backs off');
+    runnerNetwork = false;
+    await page.clock.fastForward(301000);
+    await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    // An exhausted shared quota still pauses both optional endpoints until its retry deadline.
+    runnerSharedLimit = true;
+    await page.clock.fastForward(61000);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    const sharedCounts = { ...counts };
+    await page.clock.fastForward(61000);
+    assert.equal(counts.runner, sharedCounts.runner);
+    assert.equal(counts.commits, sharedCounts.commits, 'explicitly exhausted GitHub quota pauses activity too');
+    runnerSharedLimit = false;
+    await page.clock.fastForward(91000);
+    await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
