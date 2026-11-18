@@ -457,12 +457,13 @@ if (typeof window !== 'undefined') (() => {
   const boardContext = () => localBoardJson('context');
   function saveBoardContext(patch) { if (SANDBOX || !cfg().repo) return; saveLocalBoardJson('context', { ...boardContext(), ...patch, at: nowIso() }); }
   // ---- move settings between browsers/devices: one pasteable code or a setup link (token included) --------------
-  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'] } };
+  const XFER = { text: ['repo', 'branch', 'path', 'me', 'token', 'collapsed', 'undated', 'tab', 'claude_url', 'claude_token', 'cron_key', 'agents', 'boards'], pick: { theme: (window.kbTheme && window.kbTheme.list || ['auto']).filter(x => x !== 'custom'), style: ['classic', 'colorful'], view: ['board', 'flow', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'] } };
   const xEnc = o => { const b = new TextEncoder().encode(JSON.stringify(o)); let s = ''; b.forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
   const xDec = t => JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
   const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
   function exportCode(secrets = false) { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
     XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '' && (secrets || !XFER_SECRETS.includes(k))) o[k] = v; });
+    if (XFER.pick.view.includes(view)) o.view = view; else delete o.view;   // never export a stale preference from another view group
     if (!secrets && o.boards) { const b = boardsMap(); Object.values(b).forEach(e => XFER_SECRETS.forEach(k => delete e[k])); o.boards = JSON.stringify(b); }
     return 'kbcfg1.' + xEnc(o); }
   function parseCode(raw) {
@@ -483,11 +484,20 @@ if (typeof window !== 'undefined') (() => {
     // activateBoard does, or the next stashBoard() would overwrite that entry with the empty top-level values
     const mine = boardsMap()[LS.get('kb_repo')] || {}; BOARD_KEYS.forEach(k => { if (!(k in o) && mine[k]) LS.set('kb_' + k, mine[k]); });
     return o; }
+  function settingsImportDescription(o) {
+    const entries = [o];
+    if (o.boards) { try { entries.push(...Object.values(JSON.parse(o.boards))); } catch {} }
+    const types = [['token', 'GitHub tokens'], ['claude_token', 'Claude routine tokens'], ['cron_key', 'cron-job.org keys']]
+      .filter(([key]) => entries.some(entry => entry && typeof entry === 'object' && Object.hasOwn(entry, key) && entry[key]))
+      .map(([, label]) => label);
+    return [`Import board settings${o.repo ? ' for ' + o.repo : ''}${types.length ? ', including ' + types.join(', ') : ' (no tokens or keys are included; add yours again afterwards)'}?`,
+      'This replaces the settings stored in this browser.'];
+  }
   // setup link: the code rides in the #fragment, which browsers never send to any server; it is stripped straight away
   (() => { const m = /[#&]kbcfg=([^&]+)/.exec(location.hash); if (!m) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch {}
     let o; try { o = parseCode('kbcfg1.' + m[1]); } catch (e) { setTimeout(() => toast('Could not import the settings link: ' + e.message, true)); return; }
-    setTimeout(() => ask('Import settings?', [`Import board settings${o.repo ? ' for ' + o.repo : ''}${(o.token || o.claude_token || o.cron_key || o.boards) ? ', including its secrets (GitHub tokens' + (o.claude_token ? ', the Claude routine token' : '') + (o.cron_key ? ', the cron-job.org key' : '') + ')' : ''}?`, 'This replaces the settings stored in this browser.'], 'Import')
+    setTimeout(() => ask('Import settings?', settingsImportDescription(o), 'Import')
       .then(yes => { if (!yes) return; applyImportedSettings('kbcfg1.' + m[1]).catch(e => toast('Could not import the settings link: ' + e.message, true)); })); })();
   const DEFAULT = () => ({
     version: 3, settings: { stale_after_minutes: 30, title: 'Keeptrack', stages: ['New', 'Contacted', 'Talking', 'Proposal', 'Won', 'Lost'] },
@@ -610,17 +620,18 @@ if (typeof window !== 'undefined') (() => {
     String(text || '').split(/(\[[^\]\n]{1,200}\]\(https?:\/\/[^\s<>"()]+\))/g).forEach((chunk, j) => {
       const md = j % 2 === 1 && /^\[([^\]\n]+)\]\((.+)\)$/.exec(chunk), href = md && safeUrl(md[2]);
       if (!href) { linkifyPlain(parent, chunk, leaf); return; }
-      const n = /^#(\d{1,5})$/.exec(md[1].trim()), t = n && state && state.tasks.find(x => x.num === Number(n[1])), mine = t && boardCardNum(href) === t.num;
-      const a = el('a', mine ? 'mref' : null, md[1]); a.href = href;
-      if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      const n = /^#(\d{1,5})$/.exec(md[1].trim()), target = n && boardCardTarget(href), t = target?.card, mine = !!t;
+      const a = el('a', mine ? 'mref' : null, mine ? '#' + t.num : md[1]); a.href = href;
+      if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id, target.comment ? { comment: target.comment } : undefined); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
       parent.append(a);
     });
   }
-  function boardCardNum(href) { // the #N of a card link to this board (any host: a fork or a local copy of the page), else null
-    try { const u = new URL(href), q = u.searchParams, c = cfg(), m = /^#(\d{1,5})$/.exec(u.hash);
+  function boardCardTarget(href) { // explicit stable IDs win; numbers resolve only legacy links without an ID
+    try { const u = new URL(href), q = u.searchParams, c = cfg(), m = /^#(\d{1,9})(?:&comment=[^&]*)?$/.exec(u.hash);
       if (!m || !c.repo || String(q.get('repo') || '').toLowerCase() !== String(c.repo).toLowerCase()) return null;
       if ((q.get('path') || 'board/tasks.json') !== (c.path || 'board/tasks.json') || (q.get('branch') && c.branch && q.get('branch') !== c.branch)) return null;
-      return Number(m[1]); } catch { return null; }
+      const card = q.has('card') ? safeCardId(q.get('card')) && state.tasks.find(t => t.id === q.get('card')) : state.tasks.find(t => t.num === Number(m[1]));
+      return card ? { card, comment: new URLSearchParams(u.hash.slice(1)).get('comment') || '' } : null; } catch { return null; }
   }
   function linkifyPlain(parent, text, leaf = decorate) {
     String(text || '').split(/(https?:\/\/[^\s<>"')]+)/g).forEach((part, i) => {
@@ -1154,14 +1165,14 @@ if (typeof window !== 'undefined') (() => {
   }
   async function cardFirst() {
     if (HOSTED) return;
-    const c = cfg(), id = new URLSearchParams(location.search).get('card'), num = hashNum(), gen = loadGen;
-    if (DEMO || SETUP || !c.token || !c.repo || !safeCardId(id) || num === null || state.tasks.some(t => t.id === id)) return;
+    const c = cfg(), id = new URLSearchParams(location.search).get('card'), gen = loadGen;
+    if (DEMO || SETUP || !c.token || !c.repo || !safeCardId(id) || !hasCardRoute() || state.tasks.some(t => t.id === id)) return;
     try { const dir = c.path.slice(0, c.path.lastIndexOf('/') + 1);
       const [rr, cr] = await Promise.all([gh('GET'), gh('GET', null, false, { path: dir + 'cards/' + id + '.json' })]);
       if (!rr.ok || !cr.ok) return;
       const first = rr.clone();
       const [{ raw: root }, { raw: card }] = await Promise.all([fileJson(rr), fileJson(cr)]);
-      if (!isSplit(root) || card.id !== id || card.num !== num || lastSyncOk || loadGen !== gen) return;
+      if (!isSplit(root) || card.id !== id || !Number.isSafeInteger(card.num) || card.num < 1 || lastSyncOk || loadGen !== gen) return;
       // This is a drawer preview, never a snapshot or a sync baseline.
       state = normalise({ ...root, tasks: [card], contacts: [], projects: [] }); splitMeta = null; fromSnap = true;
       setStatus('Showing the card, syncing…'); contextRestored = true; openFromHash(); return first;
@@ -1180,7 +1191,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const at = { ...cfg() }, ok = await loadBoard(quiet, first); if (ok && flowKey(at) === flowKey(cfg()) && at.token === cfg().token) { const changed = flowBoardScope !== flowKey(at) || flowBoardToken !== at.token; flowBoardScope = flowKey(at); flowBoardToken = at.token; if (changed && view === 'flow') render(); } if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
+  async function load(quiet, first) { const at = { ...cfg() }, ok = await loadBoard(quiet, first); if (ok && flowKey(at) === flowKey(cfg()) && at.token === cfg().token) { const changed = flowBoardScope !== flowKey(at) || flowBoardToken !== at.token; flowBoardScope = flowKey(at); flowBoardToken = at.token; if (changed && view === 'flow') render(); checkPublic(); } if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -1231,15 +1242,25 @@ if (typeof window !== 'undefined') (() => {
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
-  let publicChecked = '';
+  let repoVisibility = { key: '', token: '', checked: 0, private: false };
+  const privateFlowAccess = c => !!c.token && repoVisibility.key === flowKey(c) && repoVisibility.token === c.token && repoVisibility.private === true;
   async function checkPublic() {
-    if (HOSTED) return;
-    const c = cfg(); if (publicChecked === c.repo) return; publicChecked = c.repo;
+    if (HOSTED || DEMO || SETUP) return;
+    const c = { ...cfg() }; if (!c.token || !c.repo) return;
+    const key = flowKey(c), same = repoVisibility.key === key && repoVisibility.token === c.token;
+    if (same && Date.now() - repoVisibility.checked < 60000) return;
+    const ticket = repoVisibility = { key, token: c.token, checked: Date.now(), private: false };
+    const current = () => repoVisibility === ticket && flowKey(cfg()) === key && cfg().token === c.token;
+    if (!same) resetFlowMeta(); else syncFlowLive(true); // Pending visibility must not display metadata from an unverified connection.
     try { const r = await fetch(`${c.api}/repos/${c.repo}`, { cache: 'no-store', headers: { Authorization: `Bearer ${c.token}`, Accept: 'application/vnd.github+json' } });
-      if (!r.ok) return; const repo = await r.json(); if (repo.private !== false) return;
-      $('pubRepo').textContent = repo.full_name; $('pubLink').href = `https://github.com/${repo.full_name}/settings`;
-      if (!$('dlgPublic').open) $('dlgPublic').showModal();
-    } catch { /* offline: the next page load checks again */ }
+      if (!r.ok) return; const repo = await r.json(); if (!current()) return;
+      ticket.private = repo.private === true;
+      if (repo.private === false) {
+        $('pubRepo').textContent = repo.full_name; $('pubLink').href = `https://github.com/${repo.full_name}/settings`;
+        if (!$('dlgPublic').open) $('dlgPublic').showModal();
+      }
+    } catch { /* Unknown visibility stays closed; a later board poll checks again. */ }
+    finally { if (current()) { if (!ticket.private) resetFlowMeta(); syncFlowLive(true); if (ticket.private) refreshFlow(); } }
   }
 
   // ---- board kit: is this repo's copy of the shared tools older than the kit published with this page? ----
@@ -1854,7 +1875,18 @@ if (typeof window !== 'undefined') (() => {
     s.el.addEventListener('cancel', e => e.preventDefault());
     s.open();
     await new Promise(res => whenSaved(res));
-    applyCode(raw);
+    const previous = { ...cfg() }, previousUrl = new URL(location.href), imported = applyCode(raw);
+    const current = cfg(), sameBoard = ['api', 'repo', 'branch', 'path'].every(k => previous[k] === current[k]);
+    const chosen = XFER.pick.view.includes(imported.view) ? imported.view : null;
+    if (chosen) {
+      SS.set('kb_view', chosen); saveBoardContext({ view: chosen, card: '' });
+    }
+    if (!sameBoard || chosen) {
+      const url = sameBoard ? previousUrl : new URL(boardUrl(), location.href);
+      url.searchParams.delete('card');
+      if (chosen) { url.searchParams.set('board_view', chosen); url.hash = 'view=' + chosen; }
+      history.replaceState(chosen ? { kbView: chosen } : {}, '', url);
+    }
     await new Promise(r => setTimeout(r, 50));   // let the sheet paint before the reload blanks the page
     location.reload();
   }
@@ -2637,7 +2669,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
   let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowCardCache = new Map(), flowCardScope = '', flowCardAuth = '', flowPage = 0, flowPageKey = '', flowBoardScope = '', flowBoardToken = '';
   const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
-  const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
+  const flowCurrentMeta = () => { const c = cfg(); return privateFlowAccess(c) && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
   function resetFlowMeta(clearBoard = false) {
     flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
     if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; flowCardCache = new Map(); if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); discardFlowCard(); } }
@@ -2669,21 +2701,24 @@ if (typeof window !== 'undefined') (() => {
   }
   async function refreshFlow() {
     syncFlowLive(); // Reconcile hidden-tab responses before applying the network throttle.
-    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public' || flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token) return;
+    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !privateFlowAccess(cfg()) || ro === 'public' || flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token) return;
     const c = { ...cfg() }, key = flowKey(c);
     if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
     if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
-    const ticket = flowRequest = { key, deniedCommits: false, failed: false, attempted: false };
+    const ticket = flowRequest = { key, deniedCommits: false, attempted: new Set(), failed: new Set() };
     flowMeta = { ...flowMeta, checked: Date.now() };
     const current = () => flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token;
     const publish = patch => { if (current()) { flowMeta = { ...flowMeta, ...patch }; syncFlowLive(); } };
     const failed = (name, error, path) => {
       if (!current()) return;
-      ticket.failed = true;
       const next = { ...flowMeta, [name + 'Error']: 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
       if (name === 'commits') { next.commitErrors = new Map(flowMeta.commitErrors || []); next.commitErrors.set(path, true); }
-      next.rateFailures = (flowMeta.rateFailures || 0) + 1;
-      next.cooldownUntil = Math.max(next.cooldownUntil || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next.rateFailures - 1)));
+      // Optional endpoints back off independently. Several split-board paths count as one failed activity refresh.
+      if (!ticket.failed.has(name)) next[name + 'Failures'] = (flowMeta[name + 'Failures'] || 0) + 1;
+      ticket.failed.add(name);
+      next[name + 'CooldownUntil'] = Math.max(next[name + 'CooldownUntil'] || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next[name + 'Failures'] - 1)));
+      // GitHub's exhausted quota or explicit rate-limit Retry-After applies to both optional reads.
+      if (error.sharedLimited) next.cooldownUntil = Math.max(next.cooldownUntil || 0, next[name + 'CooldownUntil']);
       if ([401, 403, 404].includes(error.status) && !error.limited) {
         delete next[name]; delete next[name + 'Tag'];
         if (name === 'commits') { next.commitParts = new Map(); ticket.deniedCommits = true; }
@@ -2698,15 +2733,15 @@ if (typeof window !== 'undefined') (() => {
         const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
         if (r.status === 304) return { unchanged: true };
         if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
-        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); e.sharedLimited = e.limited && (r.status === 429 || r.headers.get('x-ratelimit-remaining') === '0' || r.headers.has('retry-after')); if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0, r.headers.get('x-ratelimit-remaining') === '0' && Number.isFinite(reset) ? reset * 1000 : 0); } throw e; }
         let data = await r.json();
         if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
         return { data, tag: r.headers.get('ETag') };
       } finally { clearTimeout(timer); }
     };
     const runnerRead = async () => {
-      if (flowMeta.runnerMissingUntil > Date.now() || flowMeta.cooldownUntil > Date.now()) return;
-      ticket.attempted = true;
+      if (flowMeta.runnerMissingUntil > Date.now() || flowMeta.runnerCooldownUntil > Date.now() || flowMeta.cooldownUntil > Date.now()) return;
+      ticket.attempted.add('runner');
       try {
         const r = await read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, flowMeta.runnerTag);
         if (r.unchanged) publish({ runnerError: '' });
@@ -2718,10 +2753,10 @@ if (typeof window !== 'undefined') (() => {
     // Never query the parent directory: it can contain other boards.
     const paths = [c.path];
     if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
-    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute && !(flowMeta.cooldownUntil > Date.now());
+    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute && !(flowMeta.commitsCooldownUntil > Date.now()) && !(flowMeta.cooldownUntil > Date.now());
     if (commitDue) publish({ commitsMinute: minute, commitsPending: paths.length });
     const commitReads = !commitDue ? [] : paths.map(async path => {
-      ticket.attempted = true;
+      ticket.attempted.add('commits');
       try {
         const old = flowMeta.commitParts?.get(path);
         const r = await read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(path)}&per_page=20`, old?.tag);
@@ -2736,7 +2771,10 @@ if (typeof window !== 'undefined') (() => {
       finally { if (current()) publish({ commitsPending: Math.max(0, (flowMeta.commitsPending || 0) - 1) }); }
     });
     await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
-    if (current()) { if (ticket.attempted && !ticket.failed) flowMeta = { ...flowMeta, rateFailures: 0 }; flowRequest = null; }
+    if (flowRequest === ticket) {
+      if (current()) for (const name of ticket.attempted) if (!ticket.failed.has(name)) flowMeta = { ...flowMeta, [name + 'Failures']: 0, [name + 'CooldownUntil']: 0 };
+      flowRequest = null;
+    }
   }
   // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
   function flowComponents(tasks) {
@@ -2889,11 +2927,12 @@ if (typeof window !== 'undefined') (() => {
   function flowFeed(meta) {
     const feed = el('aside', 'flow-feed'); feed.append(el('h3', '', 'Recent board activity'));
     if (HOSTED || DEMO || ro === 'demo' || !cfg().token || ro === 'public') { feed.append(el('p', 'hint', 'Commit activity requires a signed-in GitHub board.')); return feed; }
-    if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
+    if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError + (meta.commits?.length ? ' · showing last copy' : '')));
     if (meta.commitsPending) feed.append(el('p', 'hint', 'Refreshing activity…'));
     const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
     if (!commits.length && !meta.commitsError && !meta.commitsPending) feed.append(el('p', 'hint', Array.isArray(meta.commits) ? 'No board commits found.' : 'Waiting for activity…'));
-    commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
+    // A matching commit may also update another board: its repository-wide subject is not board-scoped text.
+    commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', 'Board update'); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
     return feed;
   }
 
@@ -5262,6 +5301,8 @@ if (typeof window !== 'undefined') (() => {
   const cardHash = h => { const m = /^#(\d+)(?:&comment=([^&]*))?$/.exec(h), num = m ? Number(m[1]) : NaN;
     return Number.isSafeInteger(num) && num > 0 ? { num, comment: new URLSearchParams(h.slice(h.indexOf('&') + 1)).get('comment') || '' } : null; };
   const hashNum = () => cardHash(location.hash)?.num ?? null;
+  const hasCardRoute = () => hashNum() !== null || (!location.hash && new URLSearchParams(location.search).has('card'));
+  const linkedCard = () => { const q = new URLSearchParams(location.search); return q.has('card') ? safeCardId(q.get('card')) && state.tasks.find(t => t.id === q.get('card')) : state.tasks.find(t => t.num === hashNum()); };
   const setHash = h => { try { const u = new URL(location.href), t = state.tasks.find(t => t.num === cardHash(h)?.num); u.searchParams.delete('card'); if (safeCardId(t?.id)) u.searchParams.set('card', t.id); u.hash = h; history.replaceState(history.state, '', u); } catch {} };   // keeps the Back-button entry (below)
 
   // The Back button closes what you opened. Opening a card, a person/client/project drawer, Settings, Help, Search,
@@ -5378,7 +5419,7 @@ if (typeof window !== 'undefined') (() => {
   const copyRecordLink = (kind, key, what) => copyText(navigationLink(recordHash(kind, key)), `Link to ${what} copied`);
   function applyRoute() {
     const h = location.hash.slice(1), q = new URLSearchParams(h);
-    if (hashNum() !== null) { openFromHash(); return; }
+    if (hasCardRoute()) { openFromHash(); return; }
     routeApplying = true;
     try {
       if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(ALL_VIEWS.includes(v) ? v : 'today', true); }
@@ -5405,7 +5446,7 @@ if (typeof window !== 'undefined') (() => {
       if (top && !$(top).open && st.kbDlg === top) {   // it replaces a drawer that just closed (person → Open client): take over its entry
         backStack.pop(); history.replaceState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id); return;
       }
-      if (d.id === 'dlgCard' && location.hash) history.replaceState(st.kbDlg ? st : { kbView: view }, '', bareUrl());   // the entry under the card is the board
+      if (d.id === 'dlgCard') { const board = new URL(location.href); board.searchParams.delete('card'); board.hash = ''; history.replaceState(st.kbDlg ? st : { kbView: view }, '', board); }   // the entry under the card must not retain its stable id
       history.pushState({ kbDlg: d.id, depth: backStack.length + 1, kbView: view }, '', url); backStack.push(d.id);
     } catch {}
   }
@@ -5425,7 +5466,7 @@ if (typeof window !== 'undefined') (() => {
     pendingFilterRoute = new URLSearchParams(location.search);
     restoreFilterRoute(); // restore before history's view wins, not inside setView's render
     if (backClosing) { backClosing--; render(); setTimeout(() => { closingHash = false; }, 0); if (backDone) backDone(); return; }   // restore the underlying filter snapshot even when closing a drawer
-    const want = (history.state || {}).kbDlg || (hashNum() !== null ? 'dlgCard' : undefined);
+    const want = (history.state || {}).kbDlg || (hasCardRoute() ? 'dlgCard' : undefined);
     // A native fragment navigation has no state. Keep an open card while switching its comment target.
     if (want === 'dlgCard' && !(history.state || {}).kbDlg) try { history.replaceState({ kbDlg: want, depth: backStack.length || 1, kbView: view }, ''); } catch {}
     while (backStack.length && backStack[backStack.length - 1] !== want) {   // close everything opened after the entry we are now on
@@ -5443,8 +5484,8 @@ if (typeof window !== 'undefined') (() => {
     new MutationObserver(() => { if (d.open) backOpened(d); }).observe(d, { attributes: true, attributeFilter: ['open'] });
     d.addEventListener('close', () => backClosed(d)); });
   function openFromHash() {
-    const n = hashNum(); if (n === null || !state) return;
-    const t = state.tasks.find(x => x.num === n); if (!t) { toast(`Task #${n} was not found on this board`, true); setHash(''); return; }
+    const n = hashNum(); if (!hasCardRoute() || !state) return;
+    const t = linkedCard(); if (!t) { if (!lastSyncOk) return; toast(new URLSearchParams(location.search).has('card') ? 'The linked task was not found on this board' : `Task #${n} was not found on this board`, true); setHash(''); return; }
     const comment = cardHash(location.hash)?.comment;
     if (editing !== t.id || !$('dlgCard').open) openCard(t.id, comment ? { comment } : undefined);
     else if (comment) { cmFocus = comment; focusCardComment(); }
@@ -5452,7 +5493,7 @@ if (typeof window !== 'undefined') (() => {
   let contextRestored = false;
   function restoreBoardContext() {
     if (contextRestored || !lastSyncOk || SETUP) return; contextRestored = true;
-    if (location.hash) { if (!backStack.length && !BACK_DIALOGS.some(id => $(id)?.open)) applyRoute(); return; } // a user-opened drawer already owns this route; late startup restoration must not close it
+    if (location.hash || new URLSearchParams(location.search).has('card')) { if (!backStack.length && !BACK_DIALOGS.some(id => $(id)?.open)) applyRoute(); return; } // a user-opened drawer already owns this route; late startup restoration must not close it
     const id = boardContext().card; if (!id) return;
     if (state.tasks.some(t => t.id === id)) openCard(id); else { clearDraft(id); saveBoardContext({ view, card: '' }); }
   }
@@ -5574,7 +5615,7 @@ if (typeof window !== 'undefined') (() => {
   $('xLink').onclick = async () => { if (await askExport('setup link')) copyText(`${location.origin}${location.pathname}#kbcfg=${exportCode(xSecrets()).slice(7)}`, copiedMsg('Setup link')); };
   $('xImport').onclick = async () => { const v = $('xPaste').value.trim(); if (!v) { toast('Paste a settings code or setup link first'); return; }
     try { const m = /kbcfg=([A-Za-z0-9_-]+)/.exec(v), o = parseCode(m ? 'kbcfg1.' + m[1] : v);
-      if (!(await ask('Import settings?', `Import settings${o.repo ? ' for ' + o.repo : ''}${o.token ? ' including the token' : ' (it holds no tokens: add yours again afterwards)'}? This replaces this browser's settings.`, 'Import'))) return;
+      if (!(await ask('Import settings?', settingsImportDescription(o), 'Import'))) return;
       await applyImportedSettings(m ? 'kbcfg1.' + m[1] : v);   // queued saves finish inside, before the settings change
     } catch (e) { toast(e.message); } };
   // ---- @ and # suggestions in comment/description boxes -----------------------------------------------------
@@ -7376,7 +7417,7 @@ if (typeof window !== 'undefined') (() => {
   const stages = () => (Array.isArray(state.settings.stages) && state.settings.stages.length ? state.settings.stages : DEFAULT_STAGES);
   const closedStage = s => /^(won|lost)$/i.test(String(s || ''));
   const modes = () => (Array.isArray(state.settings.modes) && state.settings.modes.length ? state.settings.modes : ['tasks', 'crm']);
-  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'];
+  const CRM_VIEWS = ['people', 'companies', 'pipeline'], TASK_VIEWS = ['board', 'flow', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'];
   function syncModeSettings() {
     const m = modes(), locked = !!ro || !!newerSchema || busy;
     $('sModeTasks').checked = m.includes('tasks'); $('sModeCrm').checked = m.includes('crm');
@@ -9158,10 +9199,10 @@ if (typeof window !== 'undefined') (() => {
         }); };
       }
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
-      const cardNum = boardCardNum(l.url), card = cardNum != null && state.tasks.find(t => t.num === cardNum);
+      const target = boardCardTarget(l.url), card = target?.card;
       if (card) {   // a Follow-up / Split from link (or any link to a card on this board) opens that card here
         const a = row.querySelector('a.ui-listrow__main');
-        if (a) { a.removeAttribute('target'); a.removeAttribute('rel'); a.title = `Open #${card.num}${card.title ? ' ' + card.title : ''}`; a.onclick = e => { e.preventDefault(); openCard(card.id); }; }
+        if (a) { a.removeAttribute('target'); a.removeAttribute('rel'); a.title = `Open #${card.num}${card.title ? ' ' + card.title : ''}`; a.onclick = e => { e.preventDefault(); openCard(card.id, target.comment ? { comment: target.comment } : undefined); }; }
         const meta = row.querySelector('.ui-listrow__meta'); if (meta && card.title) meta.textContent = card.title;
       }
       box.append(row);
@@ -10748,5 +10789,5 @@ if (typeof window !== 'undefined') (() => {
   }
 
   if (HOSTED) { startHosted(); return; }
-  (async () => { await signinReturned; if (!LS.get('kb_me', '') && cfg().repo && authMethod(cfg().repo) === 'app') learnMe(cfg().token); await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
+  (async () => { await signinReturned; if (!LS.get('kb_me', '') && cfg().repo && authMethod(cfg().repo) === 'app') learnMe(cfg().token); await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && linkedCard()) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash || hasCardRoute()) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit numeric navigation may use a cached preview; ID-only restored tabs wait for live state unless cardFirst fetched it.
 })();

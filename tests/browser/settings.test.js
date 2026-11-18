@@ -29,10 +29,10 @@ const card = (id, num, title) => ({ id, num, title, column: 'todo', client: '', 
 // A small GitHub: contents API for reads and single-file writes, git data API for multi-file commits (as in task-drawer.test.js),
 // plus what Health reads: the branch, the kit version and the rate limit.
 class Github {
-  constructor() { this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First')) }; this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0; }
+  constructor(repo = 'acme/board') { this.repo = repo; this.files = { 'tasks.json': text(root), 'cards/t_one.json': text(card('t_one', 1, 'First')) }; this.head = 'head-1'; this.n = 1; this.blobs = {}; this.pending = null; this.writes = 0; }
   sha(p) { return crypto.createHash('sha1').update(this.files[p] || '').digest('hex'); }
   async route(route) {
-    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/acme/board', '');
+    const req = route.request(), u = new URL(req.url()), method = req.method(), p = u.pathname.replace('/repos/' + this.repo, '');
     const json = (body, status = 200) => route.fulfill({ status, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (method !== 'GET') this.writes++;
     if (this.failWrite && method !== 'GET') return json({ message: 'Synthetic write failure' }, 500);
@@ -44,7 +44,7 @@ class Github {
     if (p === '/user' && method === 'GET') return json({ login: 'alex' });
     if (p.startsWith('/user/repos')) return json([]);
     if (p === '/rate_limit') return json({ resources: { core: { remaining: 4900, limit: 5000 } } });
-    if (p === '' && method === 'GET') return json({ full_name: 'acme/board', private: true, permissions: { push: true }, default_branch: 'main' });
+    if (p === '' && method === 'GET') return json({ full_name: this.repo, private: true, permissions: { push: true }, default_branch: 'main' });
     if (p === '/branches/main') return json({ name: 'main' });
     if (p.startsWith('/contents/board/KIT_VERSION')) return route.fulfill({ status: 200, headers: { 'Content-Type': 'text/plain' }, body: '999' });
     if (p.startsWith('/contents/README.md')) return json({ message: 'Not Found' }, 404);
@@ -68,13 +68,13 @@ let base;
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); } };
 const TABS = ['Prefs', 'Board', 'Conn', 'Agents'];
 async function open(browser, { width = 1280, height = 860, token = 'test', demo = false, repo = 'acme/board', query = '', settings = null } = {}) {
-  const api = new Github(), page = await browser.newPage({ viewport: { width, height } }), errors = [];
+  const api = new Github(repo || 'acme/board'), page = await browser.newPage({ viewport: { width, height } }), errors = [];
   if (settings) { const data = JSON.parse(api.files['tasks.json']); Object.assign(data.settings, settings); api.files['tasks.json'] = text(data); }
   page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => { errors.push('native dialog: ' + d.message()); d.dismiss(); });
   await page.addInitScript(([token, repo]) => {
     if (repo) { localStorage.setItem('kb_repo', repo); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); }
     if (token) localStorage.setItem('kb_token', token);
-    localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); sessionStorage.setItem('kb_view', 'board');
+    localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); if (!sessionStorage.getItem('kb_view')) sessionStorage.setItem('kb_view', 'board');
     window.__copied = ''; Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async t => { window.__copied = t; } } });
   }, [token, demo ? '' : repo]);
   await page.route('https://api.test/**', r => api.route(r));
@@ -93,6 +93,34 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Pasted codes and setup links describe every included credential type, without displaying its value.
+    {
+      const kinds = { token: 'GitHub tokens', claude_token: 'Claude routine tokens', cron_key: 'cron-job.org keys' };
+      const variants = [{ extra: { boards: JSON.stringify({ 'acme/board': { branch: 'main' } }) }, expected: [] },
+        { extra: { token: '', claude_token: '', cron_key: '', boards: JSON.stringify({ 'acme/board': { token: '' } }) }, expected: [] }];
+      for (const key of Object.keys(kinds)) {
+        variants.push({ extra: { [key]: 'synthetic-private-' + key }, expected: [kinds[key]] });
+        variants.push({ extra: { boards: JSON.stringify({ 'acme/board': { [key]: 'synthetic-nested-' + key } }) }, expected: [kinds[key]] });
+      }
+      variants.push({ extra: { token: 'synthetic-github', boards: JSON.stringify({ 'acme/board': { claude_token: 'synthetic-routine', cron_key: 'synthetic-cron' } }) }, expected: Object.values(kinds) });
+      for (const variant of variants) for (const mode of ['paste', 'setup']) {
+        const payload = { repo: 'acme/board', branch: 'main', path: 'board/tasks.json', ...variant.extra };
+        const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url'), code = 'kbcfg1.' + encoded;
+        const page = await open(browser, { query: mode === 'setup' ? '#kbcfg=' + encoded : '' });
+        if (mode === 'paste') { await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xPaste').fill(code); await page.locator('#xImport').click(); }
+        const confirmation = page.getByRole('alertdialog'); await confirmation.waitFor();
+        const description = await confirmation.textContent();
+        if (!variant.expected.length) assert.match(description, /no tokens or keys are included/, mode);
+        else {
+          assert.ok(!description.includes('no tokens or keys'), 'credential-bearing inputs never claim to be credential-free');
+          for (const label of Object.values(kinds)) assert.equal(description.includes(label), variant.expected.includes(label), mode + ': ' + label);
+        }
+        assert.ok(!description.includes('synthetic-'), 'the confirmation never displays credential values');
+        await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+        assert.equal(page.api.writes, 0, 'checking/cancelling an import does not write to the board');
+        assert.deepEqual(page.errors, []); await page.close();
+      }
+    }
     // Unrelated Settings saves finish with docs controls enabled and preserve the user's dirty draft.
     for (const fail of [false, true]) {
       const page = await open(browser);
@@ -467,6 +495,90 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       assert.deepEqual([got.email, got.steps, got.ok], ['1', '3', '1'], 'imported per-board keys are live');
       assert.deepEqual([got.entry.email_sync, got.entry.claude_steps, got.entry.claude_ok], ['1', '3', '1'], 'and stay in kb_boards after the load-time stash');
       assert.deepEqual(other.errors, []); await other.close();
+    }
+    // The selected Flow view survives settings transfer into a browser using another view.
+    {
+      const page = await open(browser);
+      await page.goto(base + '/board/index.html?board_view=flow#view=flow'); await page.locator('.flow-card').first().waitFor();
+      await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xCode').click();
+      await page.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await page.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const code = await page.evaluate(() => window.__copied); await page.close();
+      const other = await open(browser);
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(code); await other.locator('#xImport').click();
+      const nav = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await nav;
+      await other.locator('.flow-card').first().waitFor();
+      assert.equal(await other.locator('#dlgSettings').evaluate(d => d.open), false);
+      assert.equal(await other.evaluate(() => sessionStorage.getItem('kb_view')), 'flow');
+      // Export uses the current view even when an imported legacy preference still names Flow.
+      await other.locator('#viewSw [data-view="board"]').click(); await other.locator('.card').first().waitFor();
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xCode').click();
+      await other.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await other.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const exportedView = await other.evaluate(() => JSON.parse(atob(window.__copied.slice(7).replace(/-/g, '+').replace(/_/g, '/'))).view);
+      assert.equal(exportedView, 'board', 'a stale imported Flow preference does not override the selected board view');
+      const boardCode = await other.evaluate(() => window.__copied);
+      await other.locator('#sClose').click(); await other.locator('#dlgSettings').waitFor({ state: 'hidden' });
+      await other.locator('#viewSw [data-view="flow"]').click(); await other.locator('.flow-card').first().waitFor();
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(boardCode); await other.locator('#xImport').click();
+      const importedBoard = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await importedBoard;
+      await other.locator('.card').first().waitFor();
+      assert.equal(await other.locator('.flow-card').count(), 0, 'importing Board into an already-Flow tab changes the visible view');
+      assert.equal(await other.evaluate(() => sessionStorage.getItem('kb_view')), 'board');
+      assert.equal(new URL(other.url()).searchParams.get('board_view'), 'board');
+      // Same-board settings change the view without discarding the recipient's active filter snapshot.
+      await other.goto(base + '/board/index.html?filters=1&status=todo&label=pale&priority=medium&who=alex&board_view=flow#view=flow');
+      await other.locator('.flow-card').first().waitFor();
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(boardCode); await other.locator('#xImport').click();
+      const filteredImport = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await filteredImport;
+      await other.locator('.card').first().waitFor();
+      const filterQuery = new URL(other.url()).searchParams;
+      for (const [key, expected] of Object.entries({ filters: '1', status: 'todo', label: 'pale', priority: 'medium', who: 'alex', board_view: 'board' })) {
+        assert.equal(filterQuery.get(key), expected, `same-board import preserves filter ${key}`);
+      }
+      assert.equal(await other.locator('#fStatus').inputValue(), 'todo');
+      assert.equal(await other.locator('#fLabel').inputValue(), 'pale');
+      assert.equal(await other.locator('#fPrio').inputValue(), 'medium');
+      assert.equal(await other.locator('#fWho').inputValue(), 'alex');
+      assert.deepEqual(other.errors, []); await other.close();
+    }
+    // Unsupported CRM views must not export a stale transferable task-view preference.
+    {
+      const page = await open(browser, { settings: { modes: ['tasks', 'crm'] } });
+      await page.locator('#viewSw [data-view="people"]').click();
+      await page.evaluate(() => localStorage.setItem('kb_view', 'flow'));
+      await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xCode').click();
+      await page.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await page.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const hasView = await page.evaluate(() => Object.hasOwn(JSON.parse(atob(window.__copied.slice(7).replace(/-/g, '+').replace(/_/g, '/'))), 'view'));
+      assert.equal(hasView, false, 'a CRM export omits the unsupported view instead of leaking stale Flow');
+      assert.deepEqual(page.errors, []); await page.close();
+    }
+    // A code without an optional view still replaces an old board URL with the imported connection.
+    {
+      const source = await open(browser, { repo: 'acme/source', settings: { modes: ['tasks', 'crm'] } });
+      await source.locator('#viewSw [data-view="people"]').click();
+      await source.evaluate(() => window.kbSettings.open('move')); await source.locator('#xSecrets').check();
+      await source.locator('#xCode').click();
+      await source.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await source.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const code = await source.evaluate(() => window.__copied);
+      const decoded = JSON.parse(Buffer.from(code.slice(7), 'base64url').toString());
+      assert.equal(Object.hasOwn(decoded, 'view'), false, 'the real People-view export has no task view');
+      assert.equal(decoded.repo, 'acme/source');
+      source.api.files['cards/t_one.json'] = text(card('t_one', 1, 'Imported source board card'));
+      const target = await open(browser, { query: '?repo=acme/board&branch=main&path=board/tasks.json&filters=1&status=todo&label=pale&priority=medium' });
+      await target.route('https://api.test/repos/acme/source/**', r => source.api.route(r));
+      await target.evaluate(() => window.kbSettings.open('move')); await target.locator('#xPaste').fill(code); await target.locator('#xImport').click();
+      const navigation = target.waitForNavigation(); await target.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await navigation;
+      await target.locator('.card', { hasText: 'Imported source board card' }).waitFor();
+      assert.equal(new URL(target.url()).searchParams.get('repo'), 'acme/source');
+      assert.equal(await target.evaluate(() => localStorage.getItem('kb_repo')), 'acme/source');
+      for (const [key, old] of Object.entries({ status: 'todo', label: 'pale', priority: 'medium' })) {
+        assert.notEqual(new URL(target.url()).searchParams.get(key), old, 'cross-board imports do not carry old ' + key);
+      }
+      assert.deepEqual(source.errors, []); assert.deepEqual(target.errors, []);
+      await source.close(); await target.close();
     }
     // 15. Backlog auto-research (kit v60): off by default; the switch and "Cards each run" save settings.backlog_research.
     {

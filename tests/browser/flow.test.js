@@ -22,12 +22,77 @@ tasks.find(t => t.num === 10).after = ['t_10'];
 tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
 tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false;
-const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, boardGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false, runnerNetwork = false, runnerSharedLimit = false, commitsNetwork = false;
+const otherBoardSubject = 'PRIVATE fixture: another board client changed confidential strategy <script>unsafe</script>';
+const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : otherBoardSubject, author: { date: now } } }));
+let primaryReset = 0;
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
   const browser = await chromium.launch({ headless: true });
   try {
+    // A token is not proof that this repository is private. Reuse the repository metadata check.
+    {
+      const p = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), seen = { runner: 0, commits: 0, writes: 0 };
+      let visibility = false, visibilityStatus = 200, visibilityGate = null;
+      await p.clock.install();
+      await p.addInitScript(() => {
+        Object.entries({ kb_repo: 'acme/board', kb_branch: 'main', kb_path: 'board/tasks.json', kb_token: 'test', kb_me: 'alex', kb_api: 'https://api.test', kb_layout: 'classic', kb_tour_seen: '1' }).forEach(([k, v]) => localStorage.setItem(k, v));
+        sessionStorage.setItem('kb_view', 'flow');
+      });
+      await p.route('https://api.test/**', async route => {
+        const request = route.request(), path = new URL(request.url()).pathname.replace('/repos/acme/board', '');
+        const json = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+        if (request.method() !== 'GET') seen.writes++;
+        if (!path) {
+          const privateValue = request.headers().authorization === 'Bearer replacement' ? false : visibility, status = visibilityStatus, held = visibilityGate;
+          if (held) { visibilityGate = null; held.arrived(); await held.wait; }
+          return json({ private: privateValue, full_name: 'acme/board' }, status);
+        }
+        if (path === '/contents/board/tasks.json') return json({ sha: 'private-fixture', encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') });
+        if (path === '/contents/automation/local-runner.json') { seen.runner++; return json({ encoding: 'base64', content: Buffer.from(JSON.stringify({ status: 'paused', pause_reason: 'Verified private fixture' })).toString('base64') }); }
+        if (path === '/commits') { seen.commits++; return json(commits); }
+        return json({}, 404);
+      });
+      const metadataResponse = () => p.waitForResponse(r => new URL(r.url()).pathname === '/repos/acme/board');
+      await p.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`);
+      await p.locator('#dlgPublic[open]').waitFor(); await p.locator('.flow-card').first().waitFor();
+      assert.deepEqual(seen, { runner: 0, commits: 0, writes: 0 }, 'signed-in public boards make no optional metadata requests');
+      await p.evaluate(() => document.querySelector('#dlgPublic').close());
+      for (const [privateValue, status] of [[null, 200], [true, 503]]) {
+        visibility = privateValue; visibilityStatus = status;
+        const response = metadataResponse(); await p.clock.fastForward(61000); await (await response).finished(); await p.clock.runFor(100);
+        assert.deepEqual(seen, { runner: 0, commits: 0, writes: 0 }, 'unknown or failed visibility stays closed');
+        assert.equal(await p.locator('.flow-event').count(), 0);
+      }
+      visibility = true; visibilityStatus = 200;
+      let releasePrivate, privateArrived;
+      const privateStarted = new Promise(resolve => { privateArrived = resolve; });
+      visibilityGate = { arrived: privateArrived, wait: new Promise(resolve => { releasePrivate = resolve; }) };
+      await p.clock.fastForward(61000); await privateStarted;
+      assert.deepEqual(seen, { runner: 0, commits: 0, writes: 0 }, 'pending initial confirmation authorises no metadata');
+      releasePrivate(); await p.locator('.flow-event').first().waitFor();
+      await p.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Verified private fixture'));
+      assert.ok(seen.runner && seen.commits, 'confirmed private repositories retain both panels');
+      visibilityStatus = 503;
+      const failedVisibility = metadataResponse(); await p.clock.fastForward(61000); await (await failedVisibility).finished(); await p.clock.runFor(100);
+      assert.equal(await p.locator('.flow-event').count(), 0, 'lost confirmation clears activity');
+      assert.ok(!(await p.locator('.flow-status').innerText()).includes('Verified private fixture'), 'lost confirmation clears runner status');
+      const closed = { ...seen };
+      visibilityStatus = 200;
+      let releaseOld, oldArrived;
+      const oldStarted = new Promise(resolve => { oldArrived = resolve; });
+      visibilityGate = { arrived: oldArrived, wait: new Promise(resolve => { releaseOld = resolve; }) };
+      await p.clock.fastForward(61000); await oldStarted;
+      await p.locator('#btnSettings').click(); await p.locator('#tabConn').click();
+      await p.locator('#bEditFold > summary').click(); await p.locator('#sToken').fill('replacement');
+      const replacementVisibility = metadataResponse(); await p.locator('#sSave').click(); await (await replacementVisibility).finished();
+      await p.locator('#dlgPublic[open]').waitFor();
+      const oldReply = metadataResponse(); releaseOld(); await (await oldReply).finished(); await p.clock.runFor(100);
+      assert.deepEqual(seen, closed, 'a stale private response cannot authorise a new public connection');
+      assert.equal(await p.locator('.flow-event').count(), 0);
+      assert.ok(!(await p.locator('.flow-status').innerText()).includes('Verified private fixture'));
+      await p.close();
+    }
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }), errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.clock.install();
@@ -36,13 +101,26 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     });
     await page.route('https://api.test/**', async route => {
       const req = route.request(), u = new URL(req.url()), p = u.pathname.replace('/repos/acme/board', '');
-      const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag, X-RateLimit-Remaining, Retry-After', ...headers }, body: JSON.stringify(data) });
+      const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag, X-RateLimit-Remaining, X-RateLimit-Reset, Retry-After', ...headers }, body: JSON.stringify(data) });
       if (req.method() !== 'GET') counts.writes++;
+      if (req.method() === 'PUT' && ['/contents/board/tasks.json', '/contents/tasks.json'].includes(p)) { raw = JSON.parse(Buffer.from(req.postDataJSON().content, 'base64').toString()); revision++; return json({ content: { sha: 'board' + revision } }); }
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardNetwork) return route.abort('failed'); if (boardLost) return json({}, 401); if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') {
+        counts.board++;
+        const responseRevision = revision, responseBody = JSON.stringify(raw), held = boardGate;
+        if (held) { boardGate = null; held.arrived(); await held.wait; }
+        if (boardNetwork) return route.abort('failed');
+        if (boardLost) return json({}, 401);
+        if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' });
+        if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; }
+        if (!held && req.headers()['if-none-match'] === 'board' + responseRevision) return route.fulfill({ status: 304 });
+        return json({ sha: 'board' + responseRevision, encoding: 'base64', content: Buffer.from(responseBody).toString('base64') }, 200, { ETag: 'board' + responseRevision });
+      }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
+        if (runnerNetwork) return route.abort('failed');
+        if (runnerSharedLimit) return json({}, runnerSharedLimit === 'primary' ? 403 : 429, { ...(runnerSharedLimit !== 'headerless' ? { 'retry-after': '120' } : {}), 'x-ratelimit-remaining': runnerSharedLimit === 'primary' ? '0' : '300', ...(runnerSharedLimit === 'primary' ? { 'x-ratelimit-reset': String(primaryReset) } : {}) });
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
@@ -50,7 +128,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsLimited) return json({}, 429, { 'retry-after': '120' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsNetwork) return route.abort('failed'); if (commitsLimited) return json({}, 429, { ...(commitsLimited !== 'headerless' ? { 'retry-after': '120' } : {}), 'x-ratelimit-remaining': '300' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -70,7 +148,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     const box = n => page.locator(`[data-card="t_${n}"]`).boundingBox();
     assert.ok((await box(1)).x < (await box(2)).x && (await box(2)).x < (await box(3)).x);
     assert.equal(await page.locator('.flow-event').count(), 20);
-    assert.match(await page.locator('.flow-feed').innerText(), /<script>unsafe<\/script>/);
+    const feedDom = await page.locator('.flow-feed').evaluate(node => node.outerHTML);
+    assert.ok(!feedDom.includes(otherBoardSubject) && !feedDom.includes('confidential strategy') && !feedDom.includes('unsafe'), 'matching commits never expose another board subject in text or attributes');
+    assert.equal(await page.locator('.flow-event a').first().textContent(), 'Board update');
+    assert.match(await page.locator('.flow-event a').first().getAttribute('href'), /\/commit\/0000000000000000000000000000000000000001$/);
+    assert.ok(await page.locator('.flow-event .hint').first().textContent(), 'generic activity retains its timestamp');
     // Showing Done and changing filters perform no metadata fetches or writes.
     const initial = { ...counts };
     await page.getByRole('button', { name: 'Show Done', exact: true }).click();
@@ -109,7 +191,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     const refreshed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 304);
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
     await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Maintenance'));
-    await refreshed; assert.ok(counts.board > hidden.board); assert.ok(conditional > 0);
+    await refreshed; await page.clock.runFor(100); assert.ok(counts.board > hidden.board); assert.ok(conditional > 0);
     // An unchanged board and metadata refresh keeps the exact same graph DOM.
     assert.ok(await page.evaluate(() => window.flowGraph === document.querySelector('.flow-canvas')));
     assert.notEqual(await page.locator('.flow-event .hint').first().textContent(), oldAge);
@@ -119,9 +201,11 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     const arrived = new Promise(resolve => { runnerArrived = resolve; });
     const heldUpdate = runnerGate = { arrived: runnerArrived, wait: new Promise(resolve => { releaseRunner = resolve; }) };
     commits[0].commit.message = 'Activity arrives independently';
+    commits[0].sha = 'f'.repeat(40);
     runnerVersion++; runner.pause_reason = 'Updated while hidden';
     await page.clock.fastForward(61000); await arrived;
-    await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Activity arrives independently'), null, { timeout: 1000 });
+    await page.waitForFunction(() => document.querySelector('.flow-event a')?.href.endsWith('f'.repeat(40)), null, { timeout: 1000 });
+    assert.ok(!(await page.locator('.flow-feed').evaluate(node => node.outerHTML)).includes('Activity arrives independently'), 'later commit subjects are also omitted');
     assert.equal(heldUpdate.request.failure(), null, 'successful activity is visible while runner status is still pending');
     await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }));
     const completed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 200);
@@ -140,15 +224,24 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => document.querySelector('#status').textContent.includes('Network or parse error'));
     assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'transient network failures preserve the loaded graph');
-    boardNetwork = false; await page.clock.fastForward(31000);
+    boardNetwork = false;
+    const recoveredBoard = page.waitForResponse(r => r.url().includes('/contents/board/tasks.json') && [200, 304].includes(r.status()));
+    await page.clock.fastForward(31000); await recoveredBoard; await page.clock.runFor(100);
+    await page.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Synced'));
     commitsLimited = true;
+    const limitedResponse = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 429);
     await page.clock.fastForward(61000);
+    await (await limitedResponse).finished();
+    await page.clock.runFor(100);
     await page.waitForFunction(() => document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     const limitedCount = counts.commits;
+    const independentRunnerCount = counts.runner;
     await page.clock.fastForward(61000);
+    await page.clock.runFor(100);
     assert.equal(counts.commits, limitedCount, 'Retry-After prevents metadata retries for 120 seconds');
+    assert.equal(counts.runner, independentRunnerCount, 'secondary rate-limit Retry-After also pauses runner status despite remaining primary quota');
     commitsLimited = false; await page.clock.fastForward(91000);
-    await page.waitForFunction(() => !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     // The Done button overrides the existing Hide Done switch.
     await page.getByRole('button', { name: 'Collapse Done', exact: true }).click();
     await page.selectOption('#fStatus', '__open', { force: true });
@@ -168,14 +261,32 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     }
     await page.locator('[data-card="t_2"]').focus(); await page.keyboard.press('Enter'); await page.locator('#dlgCard[open]').waitFor();
     assert.equal(counts.writes, 0); assert.deepEqual(errors, []);
+    await page.locator('#cClose').click();
+    await page.waitForFunction(() => !document.querySelector('#dlgCard').open && !new URL(location.href).searchParams.has('card') && !/^#\d/.test(location.hash));
+    await page.reload(); await page.locator('.flow-card').first().waitFor();
+    assert.equal(await page.locator('#dlgCard').evaluate(d => d.open), false, 'a reload after closing does not reopen the card');
+    await page.locator('[data-card="t_2"]').click(); await page.locator('#dlgCard[open]').waitFor();
+    // Make the close/history race deterministic: the drawer disappears before its Back traversal completes.
+    await page.evaluate(() => {
+      const back = history.back.bind(history);
+      history.back = () => { window.accessBackRequested = true; };
+      window.finishAccessBack = () => new Promise(resolve => {
+        window.addEventListener('popstate', () => { history.back = back; resolve(); }, { once: true });
+        back();
+      });
+    });
     boardLost = true;
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => !document.querySelector('#dlgCard').open);
+    await page.waitForFunction(() => window.accessBackRequested);
     assert.equal(await page.locator('.flow-card').count(), 0);
     assert.equal(await page.locator('#cTitle').inputValue(), '', 'lost access scrubs the open drawer');
     assert.equal(counts.writes, 0, 'forced drawer close does not save');
+    assert.equal(await page.evaluate(() => history.state?.kbDlg), 'dlgCard', 'a hidden drawer alone does not establish completed navigation');
+    await page.evaluate(() => window.finishAccessBack());
+    await page.waitForFunction(() => history.state?.kbDlg !== 'dlgCard' && !new URL(location.href).searchParams.has('card') && !/^#\d/.test(location.hash));
     boardLost = false;
-    // Start the remaining projection tests on an explicit view route, independent of drawer history.
+    // A pending history.back() can cancel page.goto(); navigate only after the old drawer entry is gone.
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`);
     await page.locator('.flow-event').first().waitFor();
     await page.selectOption('#fStatus', 'done', { force: true });
@@ -274,6 +385,97 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.evaluate(() => localStorage.setItem('kb_path', 'tasks.json'));
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
     await page.locator('.flow-event').first().waitFor(); // The mock asserts a file-scoped commit query.
+    // Regression coverage for existing retention: a real save supersedes a poll without invalidating connection metadata.
+    raw.tasks = [card(1), card(2, { after: ['t_1'] })]; revision++;
+    runner = { status: 'paused', pause_reason: 'Keep this last runner copy', last_tick: now }; runnerVersion++;
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && document.querySelectorAll('.flow-event').length === 20);
+    let releasePoll, pollArrived;
+    const pollStarted = new Promise(resolve => { pollArrived = resolve; });
+    boardGate = { arrived: pollArrived, wait: new Promise(resolve => { releasePoll = resolve; }) };
+    await page.clock.fastForward(31000); await pollStarted;
+    await page.locator('[data-card="t_2"]').click(); await page.locator('#dlgCard[open]').waitFor();
+    const written = page.waitForResponse(r => r.request().method() === 'PUT');
+    await page.locator('#cTitle').fill('Saved while the older board poll is pending'); await page.locator('#cTitle').blur(); await written;
+    await page.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Saved'));
+    const oldPoll = page.waitForResponse(r => r.request().method() === 'GET' && r.url().includes('/contents/tasks.json'));
+    releasePoll(); const staleResponse = await oldPoll; await staleResponse.finished();
+    const staleBoard = JSON.parse(Buffer.from((await staleResponse.json()).content, 'base64').toString());
+    assert.equal(staleBoard.tasks.find(t => t.id === 't_2').title, 'Task 2', 'the delayed response really contains the pre-save board');
+    await page.clock.runFor(100); // Let fetch/JSON continuations and rendering process the stale response.
+    assert.equal(await page.locator('#cTitle').inputValue(), 'Saved while the older board poll is pending');
+    assert.match(await page.locator('[data-card="t_2"]').innerText(), /Saved while the older board poll is pending/);
+    assert.match(await page.locator('#status').innerText(), /Saved/);
+    assert.match(await page.locator('.flow-status').innerText(), /Keep this last runner copy/);
+    assert.equal(await page.locator('.flow-event').count(), 20, 'a superseded board poll preserves the activity feed');
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    // Existing transient retention keeps both copies; the new activity label makes the last-copy state explicit.
+    runnerNetwork = commitsNetwork = true;
+    await page.clock.fastForward(61000);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('showing last copy') && document.querySelector('.flow-feed')?.textContent.includes('showing last copy'));
+    assert.match(await page.locator('.flow-status').innerText(), /Keep this last runner copy/);
+    assert.equal(await page.locator('.flow-event').count(), 20);
+    runnerNetwork = commitsNetwork = false;
+    await page.clock.fastForward(181000);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-status')?.textContent.includes('Could not refresh') && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
+    // Ordinary activity network failures back off without stopping the healthy runner endpoint.
+    commitsNetwork = true;
+    for (let i = 0; i < 2; i++) {
+      const failure = page.waitForEvent('requestfailed', r => r.url().includes('/commits?'));
+      await page.clock.fastForward(61000); await failure; await page.clock.runFor(100);
+    }
+    const activityBackoff = { ...counts };
+    const healthyRunner = page.waitForResponse(r => r.url().includes('local-runner.json'));
+    await page.clock.fastForward(61000); await healthyRunner; await page.clock.runFor(100);
+    assert.equal(counts.commits, activityBackoff.commits, 'ordinary activity failures retain their own retry backoff');
+    assert.ok(counts.runner > activityBackoff.runner, 'healthy runner reads continue during activity network backoff');
+    commitsNetwork = false;
+    await page.clock.fastForward(181000);
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
+    // Persistent runner failures must not inherit the activity endpoint's schedule.
+    runnerNetwork = true;
+    const runnerBeforeFailures = counts.runner;
+    for (let i = 1; i <= 6; i++) {
+      commits[0].sha = String(i).repeat(40);
+      await page.clock.fastForward(61000);
+      await page.waitForFunction(sha => document.querySelector('.flow-event a')?.href.endsWith('/commit/' + sha), commits[0].sha);
+      assert.ok(!(await page.locator('.flow-feed').innerText()).includes('Could not refresh'), 'fresh commits continue during repeated runner failure');
+    }
+    assert.ok(counts.runner - runnerBeforeFailures < 6, 'the failing runner endpoint independently backs off');
+    runnerNetwork = false;
+    await page.clock.fastForward(301000);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    // An exhausted shared quota still pauses both optional endpoints until its retry deadline.
+    for (const limit of ['primary', 'secondary', 'headerless']) {
+      primaryReset = Math.floor((await page.evaluate(() => Date.now()) + 301000) / 1000);
+      runnerSharedLimit = limit;
+      const limitedRunner = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === (limit === 'primary' ? 403 : 429));
+      await page.clock.fastForward(61000);
+      await (await limitedRunner).finished(); await page.clock.runFor(100);
+      await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+      const sharedCounts = { ...counts };
+      await page.clock.fastForward(limit === 'headerless' ? 31000 : 61000); await page.clock.runFor(100);
+      assert.equal(counts.runner, sharedCounts.runner);
+      assert.equal(counts.commits, sharedCounts.commits, limit + ' GitHub rate limit pauses activity too');
+      runnerSharedLimit = false;
+      await page.clock.fastForward(91000);
+      if (limit === 'primary') {
+        await page.clock.runFor(100);
+        assert.equal(counts.runner, sharedCounts.runner, 'a later primary reset takes precedence over the shorter Retry-After');
+        assert.equal(counts.commits, sharedCounts.commits);
+        await page.clock.fastForward(121000);
+      }
+      await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    }
+    commitsLimited = 'headerless';
+    const headerlessCommit = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 429);
+    await page.clock.fastForward(61000); await (await headerlessCommit).finished(); await page.clock.runFor(100);
+    const headerlessCounts = { ...counts };
+    await page.clock.fastForward(31000); await page.clock.runFor(100);
+    assert.equal(counts.runner, headerlessCounts.runner, 'a headerless activity 429 shares its fallback cooldown with runner reads');
+    assert.equal(counts.commits, headerlessCounts.commits);
+    commitsLimited = false; await page.clock.fastForward(61000);
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
