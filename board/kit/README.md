@@ -221,7 +221,9 @@ person (no `BOARD_AGENT`); such a claim never goes stale, and only its own sessi
 `unwait` runs a young blocked claim again (counted against `max_agent_claims` unless attended), puts a claim that was
 `stuck` before the wait back to `stuck` (`claim.before_wait`), and releases one older than the stale limit to To do.
 `release --column done` is refused while the card waits: use `done` or `move ID done`, which end the wait and record it. An agent run may `unwait` only a wait it set in the same session whose `who` is empty or
-the agent itself. These rules are advisory: anything with write access to the repo can edit a card, so the kit records
+the agent itself. Kit v138: with `--owner-said "<the owner's words, time>"` (at most 300 characters) an agent run also ends a wait another
+agent set, when the card is assigned to the owner (`BOARD_USER`) and the wait is on the owner, an agent or nobody. It records
+the quote, the agent and the time in history, in `agent_cleared` and as a card comment. A wait a person set stays locked. These rules are advisory: anything with write access to the repo can edit a card, so the kit records
 what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `CLAIM_BLOCKED`, `KIT_OLD` and
 `MIN_KIT_LOWERED`. Once a person has checked an agent-cleared flag, `cleared-ack <id> [--note]` marks the card's
 entries checked (`checked_by`, `checked_at`; agents are refused), and doctor and `list --attention` stop showing them
@@ -323,7 +325,8 @@ You work from the team board in `board/` using `board/keeptrack.py` (`board/task
 3. While working:  keeptrack.py heartbeat <id> --note "<what you are doing>"      # at least every 15 minutes (not for --attended)
    If blocked:     keeptrack.py heartbeat <id> --status blocked --note "<why>"
    Need a person:  keeptrack.py wait <id> --on "<who: what>" --who <user>; comment @<user> with the question; assign <id> <user>; stop
-                   (never unwait a wait you did not set in this session, or one on someone else: a person ends it)
+                   (never unwait a wait you did not set in this session, or one on someone else: a person ends it;
+                    kit v138: unless the owner told you in their own words: unwait <id> --note .. --owner-said "<words, time>")
 4. Finish:         keeptrack.py done <id> --note "<result, PR link>"
    Handoff:        keeptrack.py release <id> --column todo --watch   # frees the claim, then polls (kit v119; does not block claims)
    Give up:        keeptrack.py release <id> --column todo

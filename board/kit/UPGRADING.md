@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v138 (schema 4)
+
+`unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent run end a wait that another agent set,
+on the owner's word. It is allowed only when the card is assigned to the owner (`BOARD_USER`), the wait was set by an
+agent (`waiting.by_agent`, new in v138, or an older `agent@user` `by` whose user is the owner), and the wait is on the
+owner, an agent or nobody. `--owner-said` must not be empty and keeps at most 300 characters. The history line carries
+`owner_said` (`owner`, `quote`, `agent`, `at`), the card gets a comment with the quote, and `agent_cleared` records
+`unwait on the owner's word`. A wait a person set stays locked for agents, exactly as before, and without `--owner-said`
+the refusal is unchanged. Ending a wait is not an approval. A routine run has no owner talking to it and never uses
+`--owner-said`. Older readers ignore `by_agent` and `owner_said`; no new required field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v138. As an agent, `wait` a test card assigned to you from one session, then from another
+  session `unwait` it with `--owner-said "test, <time>"`: the card shows the quote in history and comments. The same
+  command on a wait a person set is refused.
+
 ### v137 (schema 4)
 
 A routine register's finished report gains `usage`: `{"engine", "known", "in", "out", "cache_read", "cache_write",

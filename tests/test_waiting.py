@@ -147,7 +147,7 @@ class Waiting(unittest.TestCase):
         w = self.card(1)["waiting"]
         self.assertEqual(w, {"on": "Acme finance", "who": "JezHub", "since": kt.board_today(self.read()).isoformat(),
                              "nudge": "2026-12-01", "note": "asked by email", "by": "claude@osouthgate",
-                             "by_session": kt.hashlib.sha256(b"s1").hexdigest()[:12]})
+                             "by_session": kt.hashlib.sha256(b"s1").hexdigest()[:12], "by_agent": True})
         self.assertNotIn("s1", json.dumps(w))
         self.assertEqual(self.card(1)["column"], "todo")                      # stays in its column
         self.assertTrue(self.card(1)["history"][-1]["text"].startswith("waiting on Acme finance (JezHub)"))

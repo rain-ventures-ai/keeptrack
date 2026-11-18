@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v138: `unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent end a wait another agent set,
+only on a card assigned to the owner (`BOARD_USER`) and only when the wait is on the owner, an agent or nobody. The quote
+(at most 300 characters, never empty), the agent and the time go into history (`owner_said`), a card comment and
+`agent_cleared`. New waits set by an agent carry `waiting.by_agent: true`. A wait a person set stays locked for agents.
+Backward compatible: older readers ignore the new keys; no schema change or migration.
+
 Kit v137 (card #259): a routine register's `last_run` records run usage. `routine <id> finish --usage KEY=VALUE`
 (engine, in, out, cache_read, cache_write, turns) stores it; without `--usage` the report says
 `{"engine": "unknown", "known": false}`, so a cloud run whose harness reports no usage says so plainly. The new
