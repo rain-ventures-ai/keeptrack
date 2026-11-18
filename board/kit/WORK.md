@@ -116,12 +116,18 @@ skipped. A commit over the bounds, without the board folder, with board data of
 the wrong shape or with a board file
 that is not valid JSON, or a side branch longer than the 200-commit scan cap,
 gives one `unreplayable` event (`card: null`) naming the commit or merge, and the
-replay moves on: a loud gap, never a silent one. A call stops loudly only when it
+replay moves on: a loud gap, never a silent one. An ambiguous project name or
+prefix at the cursor produces a gap event as the replay advances when the cursor's
+project ID is still one of the matches. The replay stays on that project.
+A call stops loudly only when it
 must read an unreadable board at head (head itself changed the board, or the
 cursor sits on an unreadable commit). One call can load up to the scan cap's
 worth of past boards (200); on the API transport each load costs about 5
 requests, and each watched project caches its commit parents on disk so a
 catch-up reads its compare range once (plus one small count check per poll).
+With an exact project ID, an idle poll only checks the branch head (one API
+request). A name or prefix still needs a board read to validate its scope.
+History snapshots of the current board tree prune obsolete cached blobs.
 The reply adds `more` (poll again at once) and `semantics: "commit-replay"`. A
 non-ancestor (force-push or rewrite) or unknown commit is refused loudly, never
 silently re-baselined; start a fresh baseline and reconcile. A `--file` board has

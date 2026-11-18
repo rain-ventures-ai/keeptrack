@@ -1322,11 +1322,15 @@ def _api_board_tree_read(head, missing_ok):
 
 def _api_snapshot(include_archive=False, ref=None):
     """ref (kit v134): read the board at that commit instead of the branch head. The caller has checked it. A past
-    commit never prunes the blob cache, which holds the head's blobs."""
+    commit only updates the blob cache if its board tree is still current at the branch head."""
     head = _api_head() if ref is None else ref
     root_tree, sha = _api_board_tree(head) if ref is None else _api_board_tree(head, missing_ok=True)
     if sha == "missing":
         raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board folder at that commit")
+    # The replay may end with commits that changed files outside the board. The replay planner has already looked
+    # up the head tree in this case, so a snapshot with the same board tree can refresh the cache too.
+    head_tree = _API_TREE_MEMO.get((_HISTORY_HEAD[0], PATH))
+    current = ref is None or ref == _HISTORY_HEAD[0] or (head_tree is not None and sha == head_tree[1])
     rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}?recursive=1")
     if rc:
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
@@ -1345,14 +1349,14 @@ def _api_snapshot(include_archive=False, ref=None):
             continue
         files[rel] = {"sha": item["sha"], "size": item.get("size", 0)}
         if not rel.startswith("archive/") or include_archive:
-            text = _api_blob(item["sha"]) if ref is None else _api_blob(item["sha"], persist=ref == _HISTORY_HEAD[0])
+            text = _api_blob(item["sha"]) if current else _api_blob(item["sha"], persist=False)
             files[rel]["text"] = text
             files[rel]["size"] = item.get("size", len(text.encode()))
     if "tasks.json" not in files:
         if ref is not None:
             raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board at that commit")
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
-    if ref is None:
+    if current:
         _prune_blob_cache({x["sha"] for x in tree.get("tree", []) if x.get("type") == "blob" and x.get("sha")})
     return files, {"head": head, "base_tree": root_tree}
 
@@ -1479,6 +1483,8 @@ def _git_history(since):
     """(head, every commit of since..head oldest first in topological order, {commit: parents}, trees)."""
     _check_git_clone()
     head = _git_fetch_head()
+    if since == head:
+        return head, [], {}, None
     rc, _, _ = git("cat-file", "-e", since + "^{commit}")
     if rc:
         _history_refuse(since, f"is not a commit this clone of {REPO} knows")
@@ -1662,6 +1668,8 @@ def _api_history(since, project=""):
     disk, so a run of catch-up polls against one head reads the compare range once, a newer head reads only its new
     commits, and two watchers never trim each other's backlog. Board folder trees are read once per run."""
     head = _api_head()
+    if since == head:
+        return head, [], {}, None
     cache, parents = _history_cache_read(project), None
     before = _history_cache_text(cache) if cache else None
     if cache and cache["head"] != head:
@@ -8022,6 +8030,15 @@ def person_for_email(data, email):
     return None
 
 
+class ProjectAmbiguousError(SystemExit):
+    """A project selector matches several IDs; callers can preserve an existing scoped choice."""
+
+    def __init__(self, ref, projects):
+        self.project_ids = {p["id"] for p in projects}
+        super().__init__(f"'{ref}' matches several projects: " + "; ".join(
+            f"{p['id']} {p['name']} ({p.get('client', '')})" for p in projects))
+
+
 def find_project(data, ref, allow_missing=False):
     """Resolve a project by id, id prefix, or name. Exits unless allow_missing and nothing matches."""
     projects = data.setdefault("projects", [])
@@ -8030,10 +8047,12 @@ def find_project(data, ref, allow_missing=False):
         r = ref.lower()
         m = [p for p in projects if p.get("name", "").lower() == r]
         m = m or [p for p in projects if r in (p.get("name", "") + " " + p.get("client", "")).lower()]
-    if len(m) != 1:
-        if allow_missing and not m:
+    if not m:
+        if allow_missing:
             return None
-        sys.exit(f"no project matches '{ref}'" if not m else f"'{ref}' matches several projects: " + "; ".join(f"{p['id']} {p['name']} ({p.get('client', '')})" for p in m))
+        sys.exit(f"no project matches '{ref}'")
+    if len(m) != 1:
+        raise ProjectAmbiguousError(ref, m)
     return m[0]
 
 

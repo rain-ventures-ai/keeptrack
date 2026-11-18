@@ -578,6 +578,30 @@ class Probe:
         self.assertEqual([("fields", moved)], [(e["kind"], e["commit"]) for e in second["events"]])
         self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
 
+    def test_an_ambiguous_project_at_the_cursor_reports_a_gap_and_keeps_its_scope(self):
+        cursor = self.poll(project="One")["cursor"]
+        ambiguous = self.change(lambda d: d["projects"][1].update(name="One"), push=False)
+
+        def move_both(data):
+            for task in data["tasks"]:
+                task["column"] = "todo"
+
+        moved = self.change(move_both)
+        with mock.patch.object(kt, "WATCH_HISTORY_PAGE", 1):
+            first = self.poll(cursor, project="One")
+        self.assertEqual((ambiguous, True), (decode(first["cursor"])["commit"], first["more"]))
+        second = self.poll(first["cursor"], project="One")
+        self.assertEqual([("unreplayable", ambiguous), ("column", moved)], [(e["kind"], e["commit"]) for e in second["events"]])
+        self.assertIsNone(second["events"][0]["card"])
+        self.assertIn("ambiguous", second["events"][0]["text"])
+        self.assertEqual("t_alpha", second["events"][1]["card"]["id"])
+        self.assertEqual((moved, False), (decode(second["cursor"])["commit"], second["more"]))
+        self.assertEqual([], self.poll(second["cursor"], project="One")["events"])
+        with self.assertRaisesRegex(SystemExit, "another board, project or version"):
+            self.poll(first["cursor"], project="pr_two")
+        with self.assertRaisesRegex(SystemExit, "matches several projects"):
+            self.poll(project="One")
+
 
 class ProbeGit(Probe, GitBoard):
     pass
@@ -586,7 +610,7 @@ class ProbeGit(Probe, GitBoard):
 class ProbeApi(Probe, GitBoard):
     WRITE = "api"
 
-    def test_an_idle_poll_reads_no_blobs_however_big_the_board(self):
+    def test_an_idle_poll_with_a_project_id_only_reads_the_branch_head(self):
         self.build()
         for n in range(20):   # a board of about 25 files
             self.split_card(f"t_more{n:02d}", 10 + n, f"More {n}")
@@ -594,14 +618,33 @@ class ProbeApi(Probe, GitBoard):
         calls, real = [], self.fake_gh
         counted = lambda *a, body=None: (calls.append(a[0]), real(*a, body=body))[1]
         cursor = self.poll()["cursor"]
-        blobs = []
         for _ in range(2):   # each poll is a new process: no memory carried over
             calls.clear()
             with mock.patch.object(kt, "gh", counted), mock.patch.object(kt, "_API_BLOB_MEMO", {}), \
-                    mock.patch.object(kt, "_API_TREE_MEMO", {}):
-                cursor = self.poll(cursor)["cursor"]
-            blobs.append(sum(1 for c in calls if "/git/blobs/" in c))
-        self.assertEqual(0, blobs[1], f"blob reads on two idle polls: {blobs}")
+                    mock.patch.object(kt, "_API_TREE_MEMO", {}), mock.patch.object(kt, "load_board_at") as load:
+                result = self.poll(cursor)
+            load.assert_not_called()
+            self.assertEqual(["repos/acme/board/git/ref/heads/main"], calls)
+            self.assertEqual(([], cursor, False, False),
+                             (result["events"], result["cursor"], result["baseline"], result["more"]))
+
+    def test_history_prunes_old_blobs_when_replay_reaches_the_current_board_tree(self):
+        self.build()
+        base = self.head()
+        cursor = self.poll()["cursor"]
+        old = self.run_git(self.remote, "rev-parse", f"{base}:board/cards/t_alpha.json")
+        self.assertTrue(Path(kt._blob_cache_file(old)).exists())
+        moved = self.split_card("t_alpha", 1, "Alpha moved on")
+        (Path(self.writer) / "README.md").write_text("a change outside the board\n")
+        self.run_git(self.writer, "commit", "-qam", "readme")
+        self.push()
+        new = self.run_git(self.remote, "rev-parse", f"{moved}:board/cards/t_alpha.json")
+
+        result = self.poll(cursor)
+        self.assertEqual([("fields", moved)], [(e["kind"], e["commit"]) for e in result["events"]])
+        self.assertEqual(self.head(), decode(result["cursor"])["commit"])
+        self.assertFalse(Path(kt._blob_cache_file(old)).exists())
+        self.assertTrue(Path(kt._blob_cache_file(new)).exists())
 
 
 class ApiCost(GitBoard):
@@ -629,6 +672,18 @@ class ApiCost(GitBoard):
 
     def compares(self):
         return sum(1 for c in self.calls if "/compare/" in c)
+
+    def test_idle_name_and_prefix_selectors_still_validate_the_project(self):
+        cursor = self.poll(project="One")["cursor"]
+        for alias in ("One", "pr_o"):
+            with self.subTest(alias=alias), mock.patch.object(kt, "_API_TREE_MEMO", {}):
+                self.calls.clear()
+                result = self.poll(cursor, project=alias)
+                self.assertEqual(([], cursor), (result["events"], result["cursor"]))
+                self.assertEqual(0, self.compares())
+                self.assertTrue(any(c.endswith("?recursive=1") for c in self.calls))
+        with self.assertRaisesRegex(SystemExit, "another board, project or version"):
+            self.poll(cursor, project="Two")
 
     def test_a_long_catch_up_reads_the_compare_range_once(self):
         cursor = self.poll()["cursor"]
