@@ -25,6 +25,19 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v142 (schema 4)
+
+- Copies only; no migration or live activation. New waits and semantic replacements carry `instance_id` and
+  `instance_started_at`; `settings.min_kit` rises to142 when identity/receipts are written so older writers cannot
+  silently remove them. Existing legacy waits remain unchanged on upgrade and nudge-only edits.
+- `reconcile --reask-expired --dry-run` previews no-condition waits due after seven UTC calendar days (legacy waits
+  use their existing since date). A future explicit nudge delays the question. Invalid present conditions or dates
+  fail closed. `reconcile --reask-expired` creates one canonical kit-owner Inbox question and durable `wait_reasks`
+  audit entry in the same CAS save; wait identity and current owner are rechecked after conflicts.
+- Every wait remains blocking. Answering the question does not end a wait, grant approval or start work. Use the
+  existing explicit wait-ending workflow if the owner decides it is appropriate. No raw wait notes, prompts or
+  errors are copied into questions. Hosted phase0 and proposal-only apply are refused.
+
 ### v141 (schema 4)
 
 - Copies only; no migration. The new quiet-claim release setting is absent/off by default and must remain off on upgrade.

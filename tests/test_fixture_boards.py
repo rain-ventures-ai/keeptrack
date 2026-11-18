@@ -88,6 +88,15 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_v142_wait_identity_survives_upgrade_without_reasking(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit142", "fixture.json"))
+        self.use_fixture("v4_kit142", meta)
+        before = kt.load_board()
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v141_disabled_quiet_claim_opt_in_survives_upgrade(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit141", "fixture.json"))
         self.use_fixture("v4_kit141", meta)

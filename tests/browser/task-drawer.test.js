@@ -238,9 +238,23 @@ async function assertFits(page, where) {
     { const wt = api.card().waiting; assert.equal(wt.on, 'Acme finance'); assert.equal(wt.who, 'sam'); assert.equal(wt.nudge, '2020-01-02'); assert.match(wt.since, /^\d{4}-\d{2}-\d{2}$/); assert.equal(wt.by, 'alex'); }
     await page.locator('#cWaitPill').waitFor();
     assert.match(await page.locator('#cWaitPill').innerText(), /Acme finance \(sam\) · since .* · chase 2020-01-02/);
-    assert.equal(JSON.parse(api.files['tasks.json']).settings.min_kit, 43, 'the first wait raises settings.min_kit');
+    assert.equal(JSON.parse(api.files['tasks.json']).settings.min_kit, 142, 'new wait identity requires a writer that preserves it');
     assert.match(api.card().history.slice(-1)[0].text, /^waiting on Acme finance, chase 2020-01-02/);
     assert.equal(await page.locator('.card .chip.waitchip.late').first().isVisible(), true, 'the chip is amber once the chase day has passed');
+    const originalWait = api.card().waiting;
+    assert.match(originalWait.instance_id, /^[0-9a-f]{32}$/); assert.match(originalWait.instance_started_at, /^\d{4}-\d{2}-\d{2}T/);
+    await page.locator('#cWaitPill').click(); await page.locator('dialog.dwaitsheet[open]').waitFor();
+    await page.locator('#cWaitNudge').fill('2020-01-03'); w = saved(); await page.locator('#cWaitSet').click(); await w;
+    await page.locator('dialog.dwaitsheet').waitFor({ state: 'detached' });
+    assert.equal(api.card().waiting.instance_id, originalWait.instance_id, 'nudge-only edit keeps the same wait instance');
+    assert.equal(api.card().waiting.instance_started_at, originalWait.instance_started_at);
+    await page.locator('#cWaitPill').click(); await page.locator('dialog.dwaitsheet[open]').waitFor();
+    await page.locator('#cWaitOn').fill('A different dependency'); w = saved(); await page.locator('#cWaitSet').click(); await w;
+    await page.locator('dialog.dwaitsheet').waitFor({ state: 'detached' });
+    assert.notEqual(api.card().waiting.instance_id, originalWait.instance_id, 'semantic replacement starts a new instance');
+    await page.locator('#cWaitPill').click(); await page.locator('dialog.dwaitsheet[open]').waitFor();
+    await page.locator('#cWaitOn').fill('Acme finance'); await page.locator('#cWaitNudge').fill('2020-01-02'); w = saved(); await page.locator('#cWaitSet').click(); await w;
+    await page.locator('dialog.dwaitsheet').waitFor({ state: 'detached' });
     // done ends the wait; Undo of that move brings the wait back (a wait the save itself writes is never taken as a leftover)
     w = saved(); await page.locator('#cCol').selectOption('done'); await w;
     assert.equal(api.card().waiting, null); assert.match(api.card().history.slice(-1)[0].text, /wait ended by done/);

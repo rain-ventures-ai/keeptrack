@@ -1,0 +1,38 @@
+{
+  "version": 4,
+  "layout": "split",
+  "settings": {
+    "min_kit": 142,
+    "wait_enders": [
+      "codex"
+    ],
+    "reconcile_quiet_claims": false
+  },
+  "columns": [
+    {
+      "id": "todo",
+      "name": "To do"
+    },
+    {
+      "id": "in-progress",
+      "name": "In progress"
+    },
+    {
+      "id": "done",
+      "name": "Done"
+    }
+  ],
+  "people": [
+    {
+      "github": "alex",
+      "name": "Alex"
+    }
+  ],
+  "agents": [
+    "codex"
+  ],
+  "clients": [
+    "Acme"
+  ],
+  "next_num": 3
+}

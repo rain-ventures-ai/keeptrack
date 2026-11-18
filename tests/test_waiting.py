@@ -145,20 +145,23 @@ class Waiting(unittest.TestCase):
         with self.agent():
             self.wait(1, who="jezhub", nudge="2026-12-01", note="asked by email", session="s1")
         w = self.card(1)["waiting"]
+        self.assertRegex(w["instance_id"], r"^[0-9a-f]{32}$")
+        self.assertRegex(w["instance_started_at"], r"^\d{4}-\d{2}-\d{2}T")
         self.assertEqual(w, {"on": "Acme finance", "who": "JezHub", "since": kt.board_today(self.read()).isoformat(),
                              "nudge": "2026-12-01", "note": "asked by email", "by": "claude@osouthgate",
-                             "by_session": kt.hashlib.sha256(b"s1").hexdigest()[:12], "by_agent": True})
+                             "by_session": kt.hashlib.sha256(b"s1").hexdigest()[:12], "by_agent": True,
+                             "instance_id": w["instance_id"], "instance_started_at": w["instance_started_at"]})
         self.assertNotIn("s1", json.dumps(w))
         self.assertEqual(self.card(1)["column"], "todo")                      # stays in its column
         self.assertTrue(self.card(1)["history"][-1]["text"].startswith("waiting on Acme finance (JezHub)"))
 
     def test_first_wait_raises_min_kit_and_never_lowers_it(self):
-        self.addCleanup(setattr, kt, "KIT_VERSION", kt.KIT_VERSION); kt.KIT_VERSION = 45   # a kit new enough to write a min_kit 45 board
+        self.addCleanup(setattr, kt, "KIT_VERSION", kt.KIT_VERSION); kt.KIT_VERSION = 143
         self.wait(1)
-        self.assertEqual(self.read()["settings"]["min_kit"], 43)
-        self.edit(lambda d: d["settings"].update(min_kit=45))
+        self.assertEqual(self.read()["settings"]["min_kit"], 142)
+        self.edit(lambda d: d["settings"].update(min_kit=143))
         self.wait(2)
-        self.assertEqual(self.read()["settings"]["min_kit"], 45)
+        self.assertEqual(self.read()["settings"]["min_kit"], 143)
 
     def test_who_must_be_a_person_member_or_agent_and_nudge_follows_check_date(self):
         self.assertIn("unknown --who", self.refusal(self.wait, 1, who="stranger"))
@@ -295,7 +298,11 @@ class Waiting(unittest.TestCase):
     def test_an_agent_cant_move_its_own_wait_off_another_party(self):
         with self.agent():
             self.wait(1, session="s1", who="JezHub")
-            self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1"))           # who dropped
+            self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1", who=""))  # explicit removal
+            before = self.card(1)["waiting"]
+            self.wait(1, session="s1", nudge="2026-12-01")
+            self.assertEqual("JezHub", self.card(1)["waiting"]["who"])
+            self.assertEqual(before["instance_id"], self.card(1)["waiting"]["instance_id"])
             self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1", who="claude"))
             self.wait(1, on="Jez, again", session="s1", who="jezhub")                            # same party: allowed
             self.assertIn("another party", self.refusal(self.unwait, 1, session="s1"))
@@ -597,16 +604,16 @@ class Waiting(unittest.TestCase):
 
     def test_a_typo_min_kit_above_this_kit_can_only_come_down_to_it(self):
         self.published_kit(kt.KIT_VERSION)
-        self.wait(1)   # the board's content needs kit v43
+        self.wait(1)   # durable wait identity needs kit v142
         self.edit(lambda d: d["settings"].update(min_kit=450))
         self.assertIn("lower --min-kit on its own", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION, title="New"))
-        self.assertIn("between what the board needs (43)", self.refusal(self.settings_set, min_kit=42))
+        self.assertIn("between what the board needs (142)", self.refusal(self.settings_set, min_kit=141))
         self.assertIn("between", self.refusal(self.settings_set, min_kit=kt.KIT_VERSION + 1))
         self.assertEqual(450, self.read()["settings"]["min_kit"])
         self.assertIn("will not write", self.refusal(self.settings_set, title="New"))   # only --min-kit gets past the guard
-        self.settings_set(min_kit=43)
-        self.assertEqual(43, self.read()["settings"]["min_kit"])
-        self.assertIn("between", self.refusal(self.settings_set, min_kit=42))         # from here: never lowered again
+        self.settings_set(min_kit=142)
+        self.assertEqual(142, self.read()["settings"]["min_kit"])
+        self.assertIn("between", self.refusal(self.settings_set, min_kit=141))        # from here: never lowered again
         self.settings_set(title="New")
         self.assertEqual("New", self.read()["settings"]["title"])
 
@@ -700,15 +707,15 @@ class Waiting(unittest.TestCase):
         self.assertEqual((r["merged"]["settings"]["min_kit"], r["clashes"]), (44, []))
 
     def test_a_wait_that_loses_a_race_keeps_the_higher_min_kit(self):
-        self.addCleanup(setattr, kt, "KIT_VERSION", kt.KIT_VERSION); kt.KIT_VERSION = 44
+        self.addCleanup(setattr, kt, "KIT_VERSION", kt.KIT_VERSION); kt.KIT_VERSION = 143
         real, calls = kt.save, []
         def racing(data, sha, msg):
             if not calls:
-                calls.append(1); self.edit(lambda d: d["settings"].update(min_kit=44)); return False
+                calls.append(1); self.edit(lambda d: d["settings"].update(min_kit=143)); return False
             return real(data, sha, msg)
         kt.save = racing
         self.wait(1)
-        self.assertEqual(self.read()["settings"]["min_kit"], 44)
+        self.assertEqual(self.read()["settings"]["min_kit"], 143)
         self.assertEqual(self.card(1)["waiting"]["on"], "Acme finance")
 
     def test_a_board_that_needs_a_newer_kit_is_read_only(self):
