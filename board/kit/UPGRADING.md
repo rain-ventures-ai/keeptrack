@@ -25,6 +25,21 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v139 (schema 4)
+
+On GitHub boards, use `wait ID --on "PR merge" --until 'pr:owner/repo#12:merged'` or
+`wait ID --on "Card completion" --until 'card:#42:done'`. The card form stores the referenced card's stable ID.
+An agent can run `unwait ID --note "condition met"` on another agent's event wait once GitHub reports the PR merged or
+the referenced card is Done and completed. `claim` checks its target and `next` checks its To do candidates automatically.
+Run `wait-check` from an existing board sweep to clear verified waits without claiming any card. A claim or next command
+that cannot proceed does not save its wait changes, so use `wait-check` when a dispatcher checks eligibility before claiming.
+The kit does not start a background poller. The history holds the formal condition, evidence and actor.
+Named parties, owner-authority and person-set waits use the existing rules. Free-text waits remain manual. A cleared wait
+carries no approval. The optional condition and history fields fit the existing schema. No migration is needed.
+
+- Check: `kit-check` says v139. On a test board, set `card:#42:done` from one agent session and run `wait-check` from
+  another before and after completing the target. The wait ends only after completion, and its history records the evidence.
+
 ### v138 (schema 4)
 
 `unwait ID --note "why" --owner-said "<the owner's words, time>"` lets an agent run end a wait that another agent set,

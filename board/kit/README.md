@@ -213,7 +213,7 @@ A card parked on a person or an event carries `waiting` (null or absent when it 
              "note": "asked by email on the 12th", "by": "claude@osouthgate",
              "by_session": "9f2a41c07b3d" }           // first 12 hex of a sha256 of the session id that set it (not a secret)
 ```
-`wait ID --on .. [--who ..] [--nudge +3|date] [--note ..]` sets it and `unwait ID --note ..` ends it; `done` and
+`wait ID --on .. [--who ..] [--nudge +3|date] [--until ..] [--note ..]` sets it and `unwait ID --note ..` ends it; `done` and
 `move ID done` end it too, and history keeps it. The card stays in its column and `due` is untouched. A waiting card is
 not claimable: `claim` refuses it and `next` skips it, with or without `--force`. If the card has a running claim,
 `wait` blocks that claim (`blocked_by_wait: true`, heartbeat time untouched) when it is the claim's own session or a
@@ -228,6 +228,12 @@ what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `C
 `MIN_KIT_LOWERED`. Once a person has checked an agent-cleared flag, `cleared-ack <id> [--note]` marks the card's
 entries checked (`checked_by`, `checked_at`; agents are refused), and doctor and `list --attention` stop showing them
 (kit v81). The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
+
+Kit v139: an agent-set event wait with no named party can use `--until 'pr:owner/repo#12:merged'` or
+`--until 'card:#42:done'` on a GitHub board. The second form resolves to the target's stable card ID. An agent from
+another session can `unwait ID --note "condition met"` when the kit verifies a merge or a completed Done card. `claim`
+checks the requested card, `next` checks its To do candidates, and `wait-check` checks all eligible waits. History records
+the actor and `wait_evidence`. A named party or owner-authority wait stays under the existing rules.
 
 ### Runs after (card dependencies)
 A card may carry `after`: a list of card ids it runs after (absent or `[]` when it has none). It is a hint and a gate,
