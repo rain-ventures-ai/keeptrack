@@ -100,6 +100,50 @@ class QuietClaims(unittest.TestCase):
                 self.run_quiet()
                 self.assertEqual(eligible, self.current()["tasks"][0]["claim"] is None)
 
+    def test_malformed_sessions_do_not_block_valid_mixed_board_preview_or_release(self):
+        for sid in ("bad\ud800", "bad\udfff", "bad\ud800x\udfff", "bad\udfff\ud800"):
+            with self.subTest(session=ascii(sid)):
+                self.write_claims(tr.card(1, claim=claim(session_id=sid)), tr.card(2, claim=claim(session_id="valid-東京-😀")))
+                before = self.current()["tasks"][0]
+                self.assertIn("#2", self.run_quiet(dry=True))
+                self.unchanged()
+                self.run_quiet()
+                self.assertEqual(before, self.current()["tasks"][0])
+                released = self.current()["tasks"][1]
+                self.assertIsNone(released["claim"])
+                self.assertEqual(kt.session_hash("valid-東京-😀"), released["history"][-1]["quiet_claim_release"]["session"])
+        # A valid escaped surrogate pair in JSON decodes to an ordinary Unicode scalar.
+        self.write_claims(tr.card(1, claim=claim(session_id="worker-\ud83d\ude00")))
+        self.run_quiet()
+        self.assertEqual(kt.session_hash("worker-😀"), self.current()["tasks"][0]["history"][-1]["quiet_claim_release"]["session"])
+
+    def test_min_kit_typo_repair_cannot_change_quiet_consent_or_any_mixed_setting(self):
+        class Args(SimpleNamespace):
+            def __getattr__(self, name):
+                return None
+        for value in ("on", "off"):
+            for mixed in ({}, {"title": "Must not land"}, {"waiting_days": 10}):
+                with self.subTest(value=value, mixed=mixed):
+                    self.write_claims(tr.card(1, claim=claim()), enabled=value == "off")
+                    data = self.current()
+                    data["settings"].update(kit_owner="osouthgate", min_kit=999)
+                    self.write(data)
+                    with patch.dict(os.environ, BOARD_AGENT=""), patch.object(kt, "kit_published", return_value=kt.KIT_VERSION):
+                        with self.assertRaisesRegex(SystemExit, "on its own first"):
+                            kt.cmd_settings_set(Args(min_kit=kt.KIT_VERSION, reconcile_quiet_claims=value, **mixed))
+                    self.unchanged()
+        with patch.dict(os.environ, BOARD_AGENT=""), patch.object(kt, "kit_published", return_value=kt.KIT_VERSION), contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_settings_set(Args(min_kit=kt.KIT_VERSION))
+        self.assertEqual(kt.KIT_VERSION, self.current()["settings"]["min_kit"])
+        self.assertIs(True, self.current()["settings"]["reconcile_quiet_claims"])
+
+    def test_json_writer_retains_invalid_code_units_and_ordinary_unicode_without_loss(self):
+        value = {"high": "x\ud800", "low": "x\udfff", "literal": r"\ud800", "unicode": "東京-😀", "null": None}
+        text = kt._json_text(value)
+        self.assertEqual(value, json.loads(text.encode("utf-8").decode("utf-8")))
+        self.assertIn("東京-😀", text)
+        self.assertEqual(json.dumps({"normal": "東京-😀"}, indent=2, ensure_ascii=False) + "\n", kt._json_text({"normal": "東京-😀"}))
+
     def test_missing_heartbeat_uses_claim_start_but_corrupt_present_heartbeat_does_not(self):
         original = claim()
         original.pop("heartbeat_at")
@@ -189,7 +233,8 @@ class QuietClaims(unittest.TestCase):
         self.assertEqual(after, Path(self.file).read_text())
 
     def test_cas_refresh_replacement_generation_and_progress_never_release_new_claim(self):
-        changes = [dict(heartbeat_at=tr.CLOCK), dict(generation="b" * 24), dict(note="new progress"), dict(attended=True)]
+        changes = [dict(heartbeat_at=tr.CLOCK), dict(generation="b" * 24), dict(note="new progress"), dict(attended=True),
+                   dict(session_id="bad\ud800"), dict(session_id="bad\udfff")]
         for fields in changes:
             with self.subTest(fields=fields):
                 self.write_claims(tr.card(1, claim=claim()))

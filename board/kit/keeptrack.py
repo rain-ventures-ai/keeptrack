@@ -1072,7 +1072,9 @@ def content_text(path, d, ref=None):
 
 
 def _json_text(value):
-    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
+    # JSON can retain escaped lone surrogates from stored data. Keep those escaped so an unrelated
+    # valid edit can still be encoded as UTF-8, without changing ordinary Unicode or stored values.
+    return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8", errors="backslashreplace").decode("utf-8")
 
 
 def _remote_path(rel):
@@ -10689,7 +10691,7 @@ def cmd_settings_set(a):
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root",
-                                                                  "card_contact_details", "github_app_signin")) or clear or clear_signin or enders is not None:
+                                                                  "card_contact_details", "github_app_signin", "reconcile_quiet_claims")) or clear or clear_signin or enders is not None:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
@@ -14215,6 +14217,10 @@ def quiet_claim_evidence(task, owner, clock):
         return None
     sid = claim.get("session_id")
     if not isinstance(sid, str) or not usable_session(sid):
+        return None
+    try:
+        sid.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
         return None
     raw = claim["heartbeat_at"] if "heartbeat_at" in claim else claim.get("claimed_at")
     if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", raw):
