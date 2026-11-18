@@ -15,12 +15,17 @@ def read(*p):
 SKILLS = {"repo board skill": read("repo-skills", "board", "SKILL.md"), "plugin keeptrack skill": read("skills", "keeptrack", "SKILL.md")}
 TEMPLATE = read("templates", "AGENTS.md")
 MINUTES = keeptrack.HEARTBEAT_EVERY // 60
+VERIFIED_WAIT_RULES = (
+    r"another agent's event wait (?:after|when|once) the kit verifies (?:the condition|that condition|its PR merge or card completion)",
+    r"(?:[Oo]mit `--who`|without naming a party)",
+    r"A wait a person set stays locked\.",
+)
 
 
 class SkillParity(unittest.TestCase):
     # the two board skills are written by hand side by side: the key agent rules must be in both
     RULES = [r"\bclaim\b", r"\bheartbeat\b", r"\bdone\b.*--note", r"\brelease\b", r"\bwait\b.*--on .*--who",
-             r"[Nn]ever `unwait` a wait you did not set", r"never your claude\.ai session id",
+             *VERIFIED_WAIT_RULES, r"never your claude\.ai session id",
              r"[Nn]ever pass `--session` with an id you did not generate", r"`--force`", r"done .*--cancel"]
 
     def test_key_rules_are_in_both_skills(self):
@@ -67,7 +72,8 @@ class Templates(unittest.TestCase):
         self.assertRegex(v46, r"Update plugin copies .* at the same time as this repo")
 
     def test_template_has_the_wait_rules(self):
-        self.assertRegex(TEMPLATE, r"never `unwait` a wait you did not set")
+        for rule in VERIFIED_WAIT_RULES:
+            self.assertRegex(TEMPLATE, rule)
 
 
 class GoodCards(unittest.TestCase):
