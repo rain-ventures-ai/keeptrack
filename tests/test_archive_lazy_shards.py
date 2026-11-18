@@ -198,6 +198,9 @@ class ArchiveLazyShards(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as folder:
                     board, path, run = self._large_board(folder, 'split', min_kit)
                     (board / 'widgets.json').write_text('{"widgets": []}')   # the kit's own file: not another board
+                    live = json.loads(path.read_text())   # full cards (card #557 opt-out): this test checks the packed history
+                    live.setdefault('settings', {}).setdefault('archive', {})['compact'] = False
+                    path.write_text(json.dumps(live, indent=2))
                     run('archive')
                     saved = json.loads(path.read_text()); self.assertEqual(list((board / 'cards').glob('*.json')), [])
                     self.assertEqual(saved['settings']['min_kit'], 107)

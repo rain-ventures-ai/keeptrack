@@ -8079,7 +8079,7 @@ HELP_TOPICS = {
     "board-structure": ["labels", "label-add", "label-set", "label-rm", "columns", "column-add", "column-set",
                         "column-move", "column-rm", "members", "me", "member-add", "member-set", "member-rm",
                         "agents", "agent-add", "agent-rm", "settings", "settings-set"],
-    "archive": ["archive", "archived", "archived-history", "unarchive"],
+    "archive": ["archive", "archive-compact", "archived", "archived-history", "unarchive"],
     "review-inbox": ["inbound", "inbound-source", "inbound-schedule", "propose", "proposal-add", "proposals", "proposal-show", "proposal-accept", "proposal-merge",
                      "proposal-ignore", "proposal-reopen", "proposal-undo", "proposal-answer", "proposal-result", "proposal-done"],
     "setup": ["use", "where", "here", "boards", "board-head", "resolve", "help", "init", "import", "kit-check", "kit-update", "kit-owner",
@@ -13391,14 +13391,130 @@ def cmd_proposal_done(a):
 
 
 # ---- archive: old done tasks, old Lost people and long histories move to <board dir>/archive/<year>.json ----------
-ARCHIVE_DEFAULTS = {"done_days": 90, "lost_days": 180, "keep_history": 20}
+ARCHIVE_DEFAULTS = {"done_days": 90, "lost_days": 180, "keep_history": 20, "keep_comments": 3}
 ARCHIVE_SCHEMA = 3
 
 
 def archive_rules(data):
     r = dict(ARCHIVE_DEFAULTS)
-    r.update({k: v for k, v in ((data.get("settings") or {}).get("archive") or {}).items() if isinstance(v, int) and v >= 0})
+    r.update({k: v for k, v in ((data.get("settings") or {}).get("archive") or {}).items()
+              if k != "compact" and isinstance(v, int) and not isinstance(v, bool) and v >= 0})
     return r
+
+
+# ---- compact archived cards (card #557) -------------------------------------------------------------------------------
+# An archived card keeps what a reader needs: id, number, title, column, client, project, labels, details, to-dos,
+# links, related, dates and the last few comments. Its history lines and run record go, and so do older comments.
+# Git keeps every old version, so `compacted.full_at` names a commit and a path that hold the full card.
+# settings.archive.compact: false turns this off for new archives; settings.archive.keep_comments sets N (default 3).
+ARCHIVE_COMPACT_DROP = ("history", "last_run")
+
+
+def archive_compact_on(data):
+    """New archives store compact cards unless settings.archive.compact is false."""
+    return ((data.get("settings") or {}).get("archive") or {}).get("compact") is not False
+
+
+_ARCHIVE_GIT = {}
+
+
+def archive_repo_path(rel):
+    """A path in the board folder (cards/<id>.json, archive/2026.json) as a repo path. In --file mode it is relative to the
+    clone that holds the file; None when the file is not in a git clone."""
+    if not FILE:
+        return _remote_path(rel)
+    folder = os.path.dirname(os.path.abspath(FILE))
+    if folder not in _ARCHIVE_GIT:
+        try:
+            p = subprocess.run(["git", "-C", folder, "rev-parse", "--show-toplevel", "HEAD"], capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=_git_timeout())
+            lines = p.stdout.splitlines() if p.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError):
+            lines = []
+        _ARCHIVE_GIT[folder] = (lines[0], lines[1]) if len(lines) == 2 else (None, None)
+    top = _ARCHIVE_GIT[folder][0]
+    if not top:
+        return None
+    return os.path.relpath(os.path.join(folder, rel), top).replace(os.sep, "/")
+
+
+def archive_head(base):
+    """The board commit the full card can be read from: the head this run loaded (--file mode: the clone's HEAD)."""
+    head = base.get("head") if isinstance(base, dict) else base if isinstance(base, str) else None
+    if head or not FILE:
+        return head if isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40}", head) else None
+    archive_repo_path(".")
+    return _ARCHIVE_GIT.get(os.path.dirname(os.path.abspath(FILE)), (None, None))[1]
+
+
+def archive_full_at(data, base, task_id=None, rel=None):
+    """{"commit", "path"} where git keeps the full card: the card file (split board) or the board file, at the head this
+    run loaded; for a card that is already archived, the archive file rel at that head. Keys that are unknown are left out."""
+    if rel is None:
+        split = data.get("version") == 4 and data.get("layout") == "split"
+        rel = f"cards/{task_id}.json" if split else os.path.basename(FILE or PATH)
+    out = {"commit": archive_head(base), "path": archive_repo_path(rel)}
+    return {k: v for k, v in out.items() if v}
+
+
+def compact_archived_task(task, keep_comments, full_at, extra_history=0):
+    """A compact copy of one archived card, or the same object when there is nothing to drop (so it is idempotent).
+    extra_history: lines for this card that the archive file held apart from the card and that are dropped too."""
+    if not isinstance(task, dict):
+        return task
+    keep_comments = max(0, int(keep_comments))
+    drop = [k for k in ARCHIVE_COMPACT_DROP if k in task]
+    comments = task.get("comments")
+    cut = len(comments) - keep_comments if isinstance(comments, list) and len(comments) > keep_comments else 0
+    if not drop and not cut and not extra_history:
+        return task
+    out = {k: v for k, v in task.items() if k not in drop}
+    if cut:
+        out["comments"] = comments[cut:]
+    old = task.get("compacted") if isinstance(task.get("compacted"), dict) else {}
+    count = lambda key: old.get(key) if type(old.get(key)) is int and old.get(key) >= 0 else 0
+    history = task.get("history")
+    mark = {"v": 1, "at": old.get("at") if isinstance(old.get("at"), str) else now(),
+            "comments_dropped": count("comments_dropped") + cut,
+            "history_dropped": count("history_dropped") + (len(history) if isinstance(history, list) else 0) + extra_history}
+    if "last_run" in drop or old.get("last_run_dropped") is True:
+        mark["last_run_dropped"] = True
+    pointer = old.get("full_at") if isinstance(old.get("full_at"), dict) and old.get("full_at") else full_at
+    if pointer:
+        mark["full_at"] = pointer
+    out["compacted"] = mark
+    return out
+
+
+def compact_archive_tasks(cur, keep_comments, full_at, ids=None):
+    """Compact the cards in one archive file's data in place (only ids, when given). The file's separate history lines for
+    a compacted card go too. Returns how many cards changed."""
+    n = 0
+    tasks = cur.get("tasks") if isinstance(cur, dict) else None
+    if not isinstance(tasks, list):
+        return 0
+    lines = cur.get("history") if isinstance(cur.get("history"), dict) else {}
+    for i, task in enumerate(tasks):
+        if not isinstance(task, dict) or (ids is not None and task.get("id") not in ids):
+            continue
+        extra = lines.get(task.get("id"))
+        extra = extra if isinstance(extra, list) else []
+        new = compact_archived_task(task, keep_comments, full_at(task) if callable(full_at) else full_at, len(extra))
+        if new is not task:
+            tasks[i] = new; n += 1
+            lines.pop(task.get("id"), None)
+    return n
+
+
+def compacted_note(item):
+    """One line that says what compaction dropped and where git keeps the full card; "" for a full card."""
+    mark = item.get("compacted") if isinstance(item, dict) else None
+    if not isinstance(mark, dict):
+        return ""
+    at = mark.get("full_at") if isinstance(mark.get("full_at"), dict) else {}
+    where = f"{str(at.get('commit') or '')[:12]}:{at.get('path')}" if at.get("commit") and at.get("path") else str(at.get("path") or "git history")
+    return (f"compacted archive copy: {mark.get('history_dropped', 0)} history line(s) and {mark.get('comments_dropped', 0)} older "
+            f"comment(s) dropped; the full card is at {clean(where, 200)}")
 
 
 def valid_year(y):
@@ -13763,7 +13879,7 @@ def archive_oversize_years(data, plan, base):
     return out
 
 
-def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_history=0):
+def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_history=0, keep_comments=None):
     """Build the text of every planned year file (read, merge, and for one card its history moved onto the card), and hold
     back each year that would pass ARCHIVE_FILE_MAX: its items go back on the board (data) and the year leaves the plan; the
     other years are archived as planned. Returns (held, warnings, files): text lines, and {year: (archive data, sha)} for
@@ -13787,6 +13903,9 @@ def archive_check_sizes(data, plan, base, ref_orig=None, positions=None, keep_hi
                 task = part["tasks"][0]
                 extra_history = cur.get("history", {}).pop(task["id"], [])
                 task["history"] = extra_history + [e for e in task["history"] if e not in extra_history]
+            if keep_comments is not None and part["tasks"]:   # card #557: the archive keeps compact copies; held cards stay whole
+                compact_archive_tasks(cur, keep_comments, lambda t: archive_full_at(data, base, t.get("id")),
+                                      {t["id"] for t in part["tasks"]})
             size = len(_json_text(cur).encode())
             # part files only on split boards (one board per folder): one-file boards can share a folder and its archive/,
             # and repacking would move another board's records into parts its index never lists. They hold the year back.
@@ -14345,7 +14464,11 @@ def _cmd_archive(a):
         else:
             proposals_before = copy.deepcopy(data.get("proposals", []))
             plan = archive_plan(data, rules)
-        held, size_warnings, files = archive_check_sizes(data, plan, base, ref_orig, positions, 0 if ref else rules["keep_history"])   # a year over its limit: its items stay on the board
+        keep_comments = rules["keep_comments"] if archive_compact_on(data) else None
+        if getattr(a, "keep_comments", None) is not None:
+            keep_comments = a.keep_comments
+        held, size_warnings, files = archive_check_sizes(data, plan, base, ref_orig, positions, 0 if ref else rules["keep_history"],
+                                                         keep_comments)   # a year over its limit: its items stay on the board
         if not ref:   # after the check: a held proposal goes back on the board already slimmed, and that slimming is saved
             slimmed = sum(1 for old in proposals_before for new in data.get("proposals", [])
                           if old.get("id") == new.get("id") and old != new)
@@ -14375,6 +14498,8 @@ def _cmd_archive(a):
         if a.dry_run:
             for line in size_warnings: print(line)
             for line in held: print(line.replace("held back", "would hold back", 1))
+            if keep_comments is not None and any(p["tasks"] for p in plan.values()):
+                print(f"cards are archived compact: history lines and run records dropped, the last {keep_comments} comment(s) kept")
             for y, p in sorted(plan.items()):
                 print(f"{archive_path(y)}: {len(p['tasks'])} tasks, {len(p['contacts'])} people, {len(p.get('proposals', []))} proposals, {sum(len(h) for h in p['history'].values())} history lines")
                 for t in p["tasks"]: print(f"  #{t.get('num')} {clean(t['title'], 80)}")
@@ -14417,9 +14542,60 @@ def cmd_archived(a):
     if not n: print("(nothing archived" + (" matches" if q else "") + ")")
 
 
+def cmd_archive_compact(a):
+    with local_lock():
+        return _cmd_archive_compact(a)
+
+
+def _cmd_archive_compact(a):
+    """Compact the cards already in archive/ the way new archives store them (card #557). A dry run unless --apply."""
+    global WRITE
+    for attempt in range(6):
+        data, base = load()
+        guard_schema(data, write=a.apply); migrate_data(data, min(SCHEMA, 3))
+        keep = a.keep_comments if a.keep_comments is not None else archive_rules(data)["keep_comments"]
+        if keep < 0:
+            sys.exit("--keep-comments must be 0 or more")
+        rows, extra, total_before, total_after, cards = [], {}, 0, 0, 0
+        for key in sorted(archive_years(data)):
+            cur, _ = read_archive(key, base)
+            if not isinstance(cur, dict):
+                continue
+            if not valid_archive_records(cur):
+                sys.exit(f"not saved: archive/{key}.json contains invalid archive records; nothing changed")
+            before = getattr(cur, "stored_bytes", None) or len(_json_text(cur).encode())
+            pointer = archive_full_at(data, base, rel=f"archive/{key}.json")
+            n = compact_archive_tasks(cur, keep, pointer)
+            after = len(_json_text(cur).encode()) if n else before
+            total_before += before; total_after += after; cards += n
+            rows.append(f"archive/{key}.json: {before // 1024} KB -> {after // 1024} KB ({n} card(s) compacted)")
+            if n:
+                found = archive_size_issue(f"archive/{key}.json", after)
+                if found and found[0] == "FILE_SIZE":   # compaction only removes data, so this is a file that was already over
+                    rows.append(f"warning: archive/{key}.json: {found[1]}")
+                extra[f"archive/{key}.json"] = _json_text(dict(cur))
+        for line in rows:
+            print(line)
+        print(f"archive total: {total_before // 1024} KB -> {total_after // 1024} KB; {cards} card(s), the last {keep} comment(s) kept")
+        if not a.apply:
+            print("dry run: nothing was saved; pass --apply to write")
+            return
+        if not extra:
+            print("nothing to compact"); return
+        try:
+            ok = save_changes(data, base, f"Compact {cards} archived card(s)", extra=extra)
+        except UseGit:
+            WRITE = "git"; continue
+        if ok:
+            print(f"compacted {cards} archived card(s); git history keeps the full cards")
+            return
+        time.sleep(0.4 * (attempt + 1))
+    sys.exit("could not compact the archive after retries (board busy)")
+
+
 def cmd_archived_history(a):
     """Older history lines that `archive` moved off a live task or person, or the whole history of an archived one. ID is a task #N / id / person id."""
-    data, base = load(); ref = a.ref.lstrip("#"); rid = None
+    data, base = load(); ref = a.ref.lstrip("#"); rid = None; notes = []
     for k in ("tasks", "contacts"):
         hit = [x for x in data.get(k, []) if x["id"] == ref or str(x.get("num")) == ref or x["id"].startswith(ref)]
         if len(hit) == 1: rid = hit[0]["id"]
@@ -14435,9 +14611,15 @@ def cmd_archived_history(a):
         for k in ("tasks", "contacts"):
             for x in cur.get(k, []):
                 if x["id"] == rid: entries += x.get("history") or []
+        for k in ("tasks", "contacts"):
+            for x in cur.get(k, []):
+                if x["id"] == rid and compacted_note(x):
+                    notes.append(f"{y[:4]}  {compacted_note(x)}")
         for h in sorted(entries, key=lambda h: h.get("at", "")):
             print(f"{y[:4]}  {h.get('at', '')[:19]}  {h.get('by', '?'):<22} {clean(h.get('text', ''))}"); n += 1
-    if not n: print(f"(no archived history for '{a.ref}')")
+    for line in notes:
+        print(line)
+    if not n and not notes: print(f"(no archived history for '{a.ref}')")
 
 
 def find_archived(data, base, ref):
@@ -14487,7 +14669,10 @@ def _cmd_unarchive(a):
             if k == "tasks" and data.get("layout") == "split" and not valid_rank(item.get("rank")):
                 ranks = [x.get("rank") for x in data["tasks"] if x.get("column") == item.get("column") and valid_rank(x.get("rank"))]
                 item["rank"] = append_rank(ranks)
-            item.setdefault("history", []).append({"at": now(), "by": who_am_i(item), "text": f"restored from {archive_path(y)}"})
+            note = compacted_note(item)   # card #557: the restored card says where git keeps what compaction dropped
+            item.pop("compacted", None)
+            item.setdefault("history", []).append({"at": now(), "by": who_am_i(item), "text": f"restored from {archive_path(y)}"
+                                                   + (f" ({note})" if note else "")})
             renamed = restore_rename(item, k, a)
             if renamed:
                 field, old, new = renamed
@@ -16090,7 +16275,11 @@ def main():
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
     s.add_argument("--done-days", type=int); s.add_argument("--lost-days", type=int); s.add_argument("--keep-history", type=int)
+    s.add_argument("--keep-comments", type=int, help="comments an archived card keeps (default settings.archive.keep_comments, 3)")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_archive)
+    s = sub.add_parser("archive-compact", help="drop history, run records and older comments from cards already archived; a dry run unless --apply")
+    s.add_argument("--keep-comments", type=int, help="comments each card keeps (default settings.archive.keep_comments, 3)")
+    s.add_argument("--apply", action="store_true", help="write the compact archive files"); s.set_defaults(f=cmd_archive_compact)
     s = sub.add_parser("archived", help="list or search archived tasks and people"); s.add_argument("-q"); s.set_defaults(f=cmd_archived)
     s = sub.add_parser("archived-history", help="older history lines moved to the archive, for a task or person"); s.add_argument("ref"); s.set_defaults(f=cmd_archived_history)
     s = sub.add_parser("unarchive", help="bring an archived task or person back"); s.add_argument("ref")
