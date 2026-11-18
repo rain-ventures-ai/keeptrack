@@ -438,6 +438,13 @@ async function assertFits(page, where) {
       await p.goto(base + '/board/index.html?demo=board#2'); await p.locator('#dlgCard[open]').waitFor();
       await p.goBack(); await p.locator('#dlgCard').waitFor({ state: 'hidden' });
       const d = await at(); assert.ok(d.page === 'index.html' && d.hash === '', 'Back from a #2 link goes to the board');
+      // Stable card query ids must also disappear from the underlying shared view entry.
+      await openCard();
+      assert.ok(new URL(p.url()).searchParams.get('card'), 'the open drawer route carries its stable card id');
+      await p.locator('#cClose').click();
+      await p.waitForFunction(() => !document.getElementById('dlgCard').open && !(history.state || {}).kbDlg && !new URL(location.href).searchParams.has('card'));
+      await p.reload(); await p.locator('#roBar').waitFor({ state: 'visible' });
+      assert.equal(await p.locator('#dlgCard').evaluate(node => node.open), false, 'reloading the shared board route does not reopen the closed card');
       await p.close();
     }
 

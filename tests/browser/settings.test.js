@@ -482,6 +482,13 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       await other.locator('.flow-card').first().waitFor();
       assert.equal(await other.locator('#dlgSettings').evaluate(d => d.open), false);
       assert.equal(await other.evaluate(() => sessionStorage.getItem('kb_view')), 'flow');
+      // Export uses the current view even when an imported legacy preference still names Flow.
+      await other.locator('#viewSw [data-view="board"]').click(); await other.locator('.card').first().waitFor();
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xCode').click();
+      await other.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await other.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const exportedView = await other.evaluate(() => JSON.parse(atob(window.__copied.slice(7).replace(/-/g, '+').replace(/_/g, '/'))).view);
+      assert.equal(exportedView, 'board', 'a stale imported Flow preference does not override the selected board view');
       assert.deepEqual(other.errors, []); await other.close();
     }
     // 15. Backlog auto-research (kit v60): off by default; the switch and "Cards each run" save settings.backlog_research.

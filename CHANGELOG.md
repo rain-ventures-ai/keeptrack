@@ -24,6 +24,11 @@ Done is collapsed initially; existing project and label filters apply. GitHub bo
 commits and optional `automation/local-runner.json` status. Flow uses the board's 30-second refresh, pauses when
 hidden and catches up on return. No kit version or data schema change.
 
+Web board refinements: settings transfer preserves the selected Flow view, and closing a card removes its stable
+id from the underlying view URL so a reload stays on the board. Superseded board polls and transient metadata failures
+retain the last runner/activity copies; failed activity refreshes clearly label that retained copy. Board, access and
+credential changes still clear the old metadata.
+
 Kit v136: `wait --until` stores a checkable condition (`pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
 `release:<owner>/<repo>@<tag>`). A condition is not an owner-authority wait. `reconcile --dry-run` adds an audit line
 when that condition is met or still unresolved, and an expiry line when a wait has no condition and its start date is

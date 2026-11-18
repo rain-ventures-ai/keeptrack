@@ -22,7 +22,7 @@ tasks.find(t => t.num === 10).after = ['t_10'];
 tasks.find(t => t.num === 8).after.push('t_10'); // A link between separate cycles is not itself cyclic.
 tasks.find(t => t.num === 11).claim = { agent: 'codex', status: 'running', heartbeat_at: now };
 let raw = { version: 3, settings: { title: 'Launch team', modes: ['tasks'] }, columns: [{ id: 'todo', name: 'To do' }, { id: 'in-progress', name: 'In progress' }, { id: 'done', name: 'Done' }], tasks, projects: [{ id: 'p_blue', name: 'Blue launch', status: 'active' }], labels: [{ name: 'launch', color: '#2266aa' }], people: [{ github: 'alex', name: 'Alex' }], clients: [] };
-let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false;
+let runner = null, counts = { board: 0, runner: 0, commits: 0, writes: 0 }, conditional = 0, revision = 1, commitsLost = false, runnerVersion = 1, runnerGate = null, branchGate = null, boardGate = null, rootBoard = false, boardLimited = false, boardLost = false, boardNetwork = false, commitsLimited = false, runnerNetwork = false, commitsNetwork = false;
 const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16).padStart(40, '0'), commit: { message: i ? 'Tick checklist item ' + i : '<script>unsafe</script> claim', author: { date: now } } }));
 (async () => {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
@@ -38,11 +38,13 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
       const req = route.request(), u = new URL(req.url()), p = u.pathname.replace('/repos/acme/board', '');
       const json = (data, status = 200, headers = {}) => route.fulfill({ status, headers: { 'Content-Type': 'application/json', 'Access-Control-Expose-Headers': 'ETag, X-RateLimit-Remaining, Retry-After', ...headers }, body: JSON.stringify(data) });
       if (req.method() !== 'GET') counts.writes++;
+      if (req.method() === 'PUT' && ['/contents/board/tasks.json', '/contents/tasks.json'].includes(p)) { raw = JSON.parse(Buffer.from(req.postDataJSON().content, 'base64').toString()); revision++; return json({ content: { sha: 'board' + revision } }); }
       if (p === '') return json({ private: true, permissions: { push: true } });
       if (p === '/user') return json({ login: 'alex' });
-      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardNetwork) return route.abort('failed'); if (boardLost) return json({}, 401); if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
+      if (p === '/contents/board/tasks.json' || p === '/contents/tasks.json') { counts.board++; if (boardGate) { const gate = boardGate; boardGate = null; gate.arrived(); await gate.wait; } if (boardNetwork) return route.abort('failed'); if (boardLost) return json({}, 401); if (boardLimited) return json({}, 403, { 'x-ratelimit-remaining': '0', 'retry-after': '60' }); if (branchGate && u.searchParams.get('ref') === 'dev') { const gate = branchGate; branchGate = null; gate.arrived(); await gate.wait; } if (req.headers()['if-none-match'] === 'board' + revision) return route.fulfill({ status: 304 }); return json({ sha: 'board' + revision, encoding: 'base64', content: Buffer.from(JSON.stringify(raw)).toString('base64') }, 200, { ETag: 'board' + revision }); }
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
+        if (runnerNetwork) return route.abort('failed');
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
@@ -50,7 +52,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsLimited) return json({}, 429, { 'retry-after': '120' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsNetwork) return route.abort('failed'); if (commitsLimited) return json({}, 429, { 'retry-after': '120' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -279,6 +281,33 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.evaluate(() => localStorage.setItem('kb_path', 'tasks.json'));
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
     await page.locator('.flow-event').first().waitFor(); // The mock asserts a file-scoped commit query.
+    // A real drawer save invalidates an in-flight board poll, but not that connection's metadata.
+    raw.tasks = [card(1), card(2, { after: ['t_1'] })]; revision++;
+    runner = { status: 'paused', pause_reason: 'Keep this last runner copy', last_tick: now }; runnerVersion++;
+    await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && document.querySelectorAll('.flow-event').length === 20);
+    let releasePoll, pollArrived;
+    const pollStarted = new Promise(resolve => { pollArrived = resolve; });
+    boardGate = { arrived: pollArrived, wait: new Promise(resolve => { releasePoll = resolve; }) };
+    await page.clock.fastForward(31000); await pollStarted;
+    await page.locator('[data-card="t_2"]').click(); await page.locator('#dlgCard[open]').waitFor();
+    const written = page.waitForResponse(r => r.request().method() === 'PUT');
+    await page.locator('#cTitle').fill('Saved while the older board poll is pending'); await page.locator('#cTitle').blur(); await written;
+    await page.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Saved'));
+    const oldPoll = page.waitForResponse(r => r.request().method() === 'GET' && r.url().includes('/contents/tasks.json'));
+    releasePoll(); await oldPoll;
+    assert.match(await page.locator('.flow-status').innerText(), /Keep this last runner copy/);
+    assert.equal(await page.locator('.flow-event').count(), 20, 'a superseded board poll preserves the activity feed');
+    await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
+    // Transient metadata failures retain both copies and label them stale, then recover normally.
+    runnerNetwork = commitsNetwork = true;
+    await page.clock.fastForward(61000);
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('showing last copy') && document.querySelector('.flow-feed')?.textContent.includes('showing last copy'));
+    assert.match(await page.locator('.flow-status').innerText(), /Keep this last runner copy/);
+    assert.equal(await page.locator('.flow-event').count(), 20);
+    runnerNetwork = commitsNetwork = false;
+    await page.clock.fastForward(181000);
+    await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh') && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
