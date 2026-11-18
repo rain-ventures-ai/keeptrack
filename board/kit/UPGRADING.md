@@ -27,9 +27,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 ## Versions
 ### v142 (schema 4)
 
-- Copies only; no migration or live activation. New waits and semantic replacements carry `instance_id` and
-  `instance_started_at`; `settings.min_kit` rises to142 when identity/receipts are written so older writers cannot
-  silently remove them. Existing legacy waits remain unchanged on upgrade and nudge-only edits.
+- Copies only; no migration or live activation. Ordinary waits retain their prior kit floor until the board first
+  adopts expiry receipts by explicit apply. That atomic write raises `settings.min_kit` to142; new semantic waits
+  then carry `instance_id` and `instance_started_at` so older writers cannot silently remove them. Legacy waits
+  remain unchanged on upgrade and nudge-only edits, including on an already adopted board.
 - `reconcile --reask-expired --dry-run` previews no-condition waits due after seven UTC calendar days (legacy waits
   use their existing since date). A future explicit nudge delays the question. Invalid present conditions or dates
   fail closed. `reconcile --reask-expired` creates one canonical kit-owner Inbox question and durable `wait_reasks`

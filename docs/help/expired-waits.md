@@ -16,7 +16,9 @@ Every wait remains blocking, including owner-authority and named-person waits. N
 grants approval, clears a wait, changes a claim or starts work. If the owner decides to end a wait, use the
 existing explicit wait-ending command or web action with the appropriate authority.
 
-New or semantically replaced waits have a random instance ID and start timestamp. CLI and web editors preserve
+Upgrading tools alone does not adopt expiry identities or raise an ordinary wait's kit requirement. The first
+explicit expiry apply atomically adopts its legacy instance and receipt and raises the board's minimum kit to142.
+On an adopted board, new or semantically replaced waits have a random instance ID and start timestamp. CLI and web editors preserve
 them when only a nudge changes. A legacy wait receives an ID and an explicit legacy marker only when its first
 question and durable receipt are committed together. An expired question is never reopened daily: active,
 answered, ignored and archived questions count towards the same instance. Receipts remain outside trimmed history.

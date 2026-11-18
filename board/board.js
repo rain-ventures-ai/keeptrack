@@ -5126,9 +5126,14 @@ if (typeof window !== 'undefined') (() => {
       if (unchanged) {
         for (const k of ['instance_id', 'instance_started_at', 'instance_legacy']) if (Object.hasOwn(old, k)) t.waiting[k] = old[k];
       } else {
+        delete t.waiting.instance_id; delete t.waiting.instance_started_at;
         delete t.waiting.instance_legacy;
-        t.waiting.instance_id = crypto.randomUUID().replaceAll('-', '');
-        t.waiting.instance_started_at = new Date().toISOString(); t.waiting.since = todayIso();
+        const adopted = Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= 142 || old && Object.hasOwn(old, 'instance_id') || t.wait_reasks;
+        if (adopted) {
+          t.waiting.instance_id = crypto.randomUUID().replaceAll('-', '');
+          t.waiting.instance_started_at = new Date().toISOString();
+        }
+        t.waiting.since = todayIso();
       }
       const required = t.waiting.instance_id ? 142 : WAITING_KIT;
       if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= required)) n.settings.min_kit = required;

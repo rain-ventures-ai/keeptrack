@@ -266,6 +266,9 @@ class ExpiredWaitReasks(unittest.TestCase):
         self.assertNotIn("instance_id", self.card()["waiting"], "nudge edit must not migrate legacy identity")
         self.assertEqual("osouthgate", self.card()["waiting"]["who"])
         self.assertEqual("owner", self.card()["waiting"]["authority"])
+        # Another explicit expiry apply has adopted this board; new semantic waits now need durable identity.
+        root = json.loads((self.root / "tasks.json").read_text()); root["settings"]["min_kit"] = 142
+        (self.root / "tasks.json").write_text(json.dumps(root))
         result = subprocess.run(command + ["--on", "New dependency"], env=env, capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         current = self.card()["waiting"]
@@ -278,7 +281,7 @@ class ExpiredWaitReasks(unittest.TestCase):
         self.assertEqual(start, self.card()["waiting"]["instance_started_at"])
 
     def test_malformed_bystander_card_cannot_leak_or_stop_independent_question(self):
-        bad = tr.card("PRIVATE error", id="t_other1", waiting=waiting())
+        bad = tr.card(2, id="t_other1", waiting=waiting(since=False))
         (self.root / "cards/t_other1.json").write_text(json.dumps(bad))
         self.run_reask()
         self.assertEqual(bad, json.loads((self.root / "cards/t_other1.json").read_text()))

@@ -3390,7 +3390,7 @@ def waiting_of(t):
     return w if isinstance(w, dict) and w else None
 
 
-def identify_wait(old, new, clock):
+def identify_wait(old, new, clock, adopted=True):
     """A semantic replacement starts a new instance; changing only the chase date does not.
 
     Legacy waits keep their absent identity until the first expiry apply. Unknown fields, including authority,
@@ -3403,9 +3403,12 @@ def identify_wait(old, new, clock):
             if key in old:
                 new[key] = old[key]
     else:
+        new.pop("instance_id", None)
+        new.pop("instance_started_at", None)
         new.pop("instance_legacy", None)
-        new["instance_id"] = uuid.uuid4().hex
-        new["instance_started_at"] = clock
+        if adopted:
+            new["instance_id"] = uuid.uuid4().hex
+            new["instance_started_at"] = clock
     return unchanged
 
 
@@ -4626,7 +4629,8 @@ def cmd_wait(a):
             w["until"] = until   # a checkable condition; not owner-authority and not an approval
         elif old and old.get("on") != on:
             w.pop("until", None)   # explicit semantic replacement retains the CLI's existing condition-reset rule
-        if not identify_wait(old, w, now()):
+        adopted = board_min_kit(data) >= WAIT_INSTANCE_KIT or "instance_id" in (old or {}) or bool(t.get("wait_reasks"))
+        if not identify_wait(old, w, now(), adopted):
             w["since"] = board_today(data).isoformat()
         t["waiting"] = w
         st = data.setdefault("settings", {})
