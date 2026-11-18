@@ -7,9 +7,9 @@ description: Upgrade this repo's board tools (the board kit from rain-ventures-a
 
 You act for the board's upgrade owner (`python3 board/keeptrack.py kit-owner`). If you act for someone else, comment on the card that the upgrade belongs to the owner, assign it to them, and stop.
 
-1. `python3 board/keeptrack.py kit-check`. If it says current, offer the [repository topic](#repository-topic) if
-   missing, comment that the kit is current and finish the card with `done`.
-2. Claim the card, then check the [repository topic](#repository-topic) before starting either upgrade path.
+1. `python3 board/keeptrack.py kit-check`. If it says current, check the optional [repository topic](#repository-topic),
+   comment that the kit is current and finish the card with `done`.
+2. Claim the card. Check the optional [repository topic](#repository-topic) as part of either upgrade path.
 
 ## Main path: `board/upgrade.py`
 Use this when `board/upgrade.py` exists (kit v67 and later). For the first upgrade to v67, run the kit's copy:
@@ -52,14 +52,16 @@ Never push kit changes to the default branch yourself, and never edit `board/tas
 
 ## Repository topic
 
-During either upgrade path, identify the board's GitHub repo with `python3 board/keeptrack.py where` and check it
-with `gh repo view <owner>/<repo> --json visibility,repositoryTopics`. If the private repo lacks `keeptrack-board`,
-offer to add it so tools such as Relay can discover the board. Show the owner the command with the actual repo filled in:
+Identify the board's GitHub repo with `python3 board/keeptrack.py where` and read its metadata with
+`gh repo view <owner>/<repo> --json visibility,repositoryTopics`. If the repo is confirmed private and lacks
+`keeptrack-board`, ask the repository owner to add it under **About → Edit → Topics** so tools such as Relay can discover
+it. Give the owner this command to run, with the actual repo filled in:
 
 ```text
 gh repo edit <owner>/<repo> --add-topic keeptrack-board
 ```
 
-Run it only after the owner explicitly approves that repository setting change, then verify with `gh repo view`.
-If repository rules reserve settings changes for the owner, give them the command to run. The kit upgrade can proceed
-while the topic is pending. If the repo is public, stop and tell the owner.
+Only the repository owner makes the setting change. After they say it is set, verify it with the same read-only
+`gh repo view` query. Skip the topic step if it is already set, the repo is non-private, or its metadata is unavailable.
+Proceed with an otherwise eligible upgrade while the topic step is pending or skipped. Follow the repo's existing
+upgrade safety rules.
