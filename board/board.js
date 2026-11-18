@@ -611,17 +611,18 @@ if (typeof window !== 'undefined') (() => {
     String(text || '').split(/(\[[^\]\n]{1,200}\]\(https?:\/\/[^\s<>"()]+\))/g).forEach((chunk, j) => {
       const md = j % 2 === 1 && /^\[([^\]\n]+)\]\((.+)\)$/.exec(chunk), href = md && safeUrl(md[2]);
       if (!href) { linkifyPlain(parent, chunk, leaf); return; }
-      const n = /^#(\d{1,5})$/.exec(md[1].trim()), t = n && state && state.tasks.find(x => x.num === Number(n[1])), mine = t && boardCardNum(href) === t.num;
+      const n = /^#(\d{1,5})$/.exec(md[1].trim()), target = n && boardCardTarget(href), t = target?.card, mine = !!t;
       const a = el('a', mine ? 'mref' : null, md[1]); a.href = href;
-      if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      if (mine) { a.title = t.title; a.onclick = e => { e.preventDefault(); e.stopPropagation(); openCard(t.id, target.comment ? { comment: target.comment } : undefined); }; } else { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
       parent.append(a);
     });
   }
-  function boardCardNum(href) { // the #N of a card link to this board (any host: a fork or a local copy of the page), else null
-    try { const u = new URL(href), q = u.searchParams, c = cfg(), m = /^#(\d{1,5})$/.exec(u.hash);
+  function boardCardTarget(href) { // explicit stable IDs win; numbers resolve only legacy links without an ID
+    try { const u = new URL(href), q = u.searchParams, c = cfg(), m = /^#(\d{1,9})(?:&comment=[^&]*)?$/.exec(u.hash);
       if (!m || !c.repo || String(q.get('repo') || '').toLowerCase() !== String(c.repo).toLowerCase()) return null;
       if ((q.get('path') || 'board/tasks.json') !== (c.path || 'board/tasks.json') || (q.get('branch') && c.branch && q.get('branch') !== c.branch)) return null;
-      return Number(m[1]); } catch { return null; }
+      const card = q.has('card') ? safeCardId(q.get('card')) && state.tasks.find(t => t.id === q.get('card')) : state.tasks.find(t => t.num === Number(m[1]));
+      return card ? { card, comment: new URLSearchParams(u.hash.slice(1)).get('comment') || '' } : null; } catch { return null; }
   }
   function linkifyPlain(parent, text, leaf = decorate) {
     String(text || '').split(/(https?:\/\/[^\s<>"')]+)/g).forEach((part, i) => {
@@ -1155,14 +1156,14 @@ if (typeof window !== 'undefined') (() => {
   }
   async function cardFirst() {
     if (HOSTED) return;
-    const c = cfg(), id = new URLSearchParams(location.search).get('card'), num = hashNum(), gen = loadGen;
-    if (DEMO || SETUP || !c.token || !c.repo || !safeCardId(id) || num === null || state.tasks.some(t => t.id === id)) return;
+    const c = cfg(), id = new URLSearchParams(location.search).get('card'), gen = loadGen;
+    if (DEMO || SETUP || !c.token || !c.repo || !safeCardId(id) || !hasCardRoute() || state.tasks.some(t => t.id === id)) return;
     try { const dir = c.path.slice(0, c.path.lastIndexOf('/') + 1);
       const [rr, cr] = await Promise.all([gh('GET'), gh('GET', null, false, { path: dir + 'cards/' + id + '.json' })]);
       if (!rr.ok || !cr.ok) return;
       const first = rr.clone();
       const [{ raw: root }, { raw: card }] = await Promise.all([fileJson(rr), fileJson(cr)]);
-      if (!isSplit(root) || card.id !== id || card.num !== num || lastSyncOk || loadGen !== gen) return;
+      if (!isSplit(root) || card.id !== id || !Number.isSafeInteger(card.num) || card.num < 1 || lastSyncOk || loadGen !== gen) return;
       // This is a drawer preview, never a snapshot or a sync baseline.
       state = normalise({ ...root, tasks: [card], contacts: [], projects: [] }); splitMeta = null; fromSnap = true;
       setStatus('Showing the card, syncing…'); contextRestored = true; openFromHash(); return first;
@@ -5275,6 +5276,8 @@ if (typeof window !== 'undefined') (() => {
   const cardHash = h => { const m = /^#(\d+)(?:&comment=([^&]*))?$/.exec(h), num = m ? Number(m[1]) : NaN;
     return Number.isSafeInteger(num) && num > 0 ? { num, comment: new URLSearchParams(h.slice(h.indexOf('&') + 1)).get('comment') || '' } : null; };
   const hashNum = () => cardHash(location.hash)?.num ?? null;
+  const hasCardRoute = () => hashNum() !== null || (!location.hash && new URLSearchParams(location.search).has('card'));
+  const linkedCard = () => { const q = new URLSearchParams(location.search); return q.has('card') ? safeCardId(q.get('card')) && state.tasks.find(t => t.id === q.get('card')) : state.tasks.find(t => t.num === hashNum()); };
   const setHash = h => { try { const u = new URL(location.href), t = state.tasks.find(t => t.num === cardHash(h)?.num); u.searchParams.delete('card'); if (safeCardId(t?.id)) u.searchParams.set('card', t.id); u.hash = h; history.replaceState(history.state, '', u); } catch {} };   // keeps the Back-button entry (below)
 
   // The Back button closes what you opened. Opening a card, a person/client/project drawer, Settings, Help, Search,
@@ -5391,7 +5394,7 @@ if (typeof window !== 'undefined') (() => {
   const copyRecordLink = (kind, key, what) => copyText(navigationLink(recordHash(kind, key)), `Link to ${what} copied`);
   function applyRoute() {
     const h = location.hash.slice(1), q = new URLSearchParams(h);
-    if (hashNum() !== null) { openFromHash(); return; }
+    if (hasCardRoute()) { openFromHash(); return; }
     routeApplying = true;
     try {
       if (q.has('view')) { backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--; closePops(); const v = q.get('view'); setView(ALL_VIEWS.includes(v) ? v : 'today', true); }
@@ -5438,7 +5441,7 @@ if (typeof window !== 'undefined') (() => {
     pendingFilterRoute = new URLSearchParams(location.search);
     restoreFilterRoute(); // restore before history's view wins, not inside setView's render
     if (backClosing) { backClosing--; render(); setTimeout(() => { closingHash = false; }, 0); if (backDone) backDone(); return; }   // restore the underlying filter snapshot even when closing a drawer
-    const want = (history.state || {}).kbDlg || (hashNum() !== null ? 'dlgCard' : undefined);
+    const want = (history.state || {}).kbDlg || (hasCardRoute() ? 'dlgCard' : undefined);
     // A native fragment navigation has no state. Keep an open card while switching its comment target.
     if (want === 'dlgCard' && !(history.state || {}).kbDlg) try { history.replaceState({ kbDlg: want, depth: backStack.length || 1, kbView: view }, ''); } catch {}
     while (backStack.length && backStack[backStack.length - 1] !== want) {   // close everything opened after the entry we are now on
@@ -5456,8 +5459,8 @@ if (typeof window !== 'undefined') (() => {
     new MutationObserver(() => { if (d.open) backOpened(d); }).observe(d, { attributes: true, attributeFilter: ['open'] });
     d.addEventListener('close', () => backClosed(d)); });
   function openFromHash() {
-    const n = hashNum(); if (n === null || !state) return;
-    const t = state.tasks.find(x => x.num === n); if (!t) { toast(`Task #${n} was not found on this board`, true); setHash(''); return; }
+    const n = hashNum(); if (!hasCardRoute() || !state) return;
+    const t = linkedCard(); if (!t) { if (!lastSyncOk) return; toast(new URLSearchParams(location.search).has('card') ? 'The linked task was not found on this board' : `Task #${n} was not found on this board`, true); setHash(''); return; }
     const comment = cardHash(location.hash)?.comment;
     if (editing !== t.id || !$('dlgCard').open) openCard(t.id, comment ? { comment } : undefined);
     else if (comment) { cmFocus = comment; focusCardComment(); }
@@ -5465,7 +5468,7 @@ if (typeof window !== 'undefined') (() => {
   let contextRestored = false;
   function restoreBoardContext() {
     if (contextRestored || !lastSyncOk || SETUP) return; contextRestored = true;
-    if (location.hash) { if (!backStack.length && !BACK_DIALOGS.some(id => $(id)?.open)) applyRoute(); return; } // a user-opened drawer already owns this route; late startup restoration must not close it
+    if (location.hash || new URLSearchParams(location.search).has('card')) { if (!backStack.length && !BACK_DIALOGS.some(id => $(id)?.open)) applyRoute(); return; } // a user-opened drawer already owns this route; late startup restoration must not close it
     const id = boardContext().card; if (!id) return;
     if (state.tasks.some(t => t.id === id)) openCard(id); else { clearDraft(id); saveBoardContext({ view, card: '' }); }
   }
@@ -9171,10 +9174,10 @@ if (typeof window !== 'undefined') (() => {
         }); };
       }
       if (local) row.insertBefore(roKeep(ui.iconButton({ icon: 'copy', label: 'Copy local path', size: 'sm', onClick: () => copyText(l.url, 'Path copied.') })), row.lastChild);
-      const cardNum = boardCardNum(l.url), card = cardNum != null && state.tasks.find(t => t.num === cardNum);
+      const target = boardCardTarget(l.url), card = target?.card;
       if (card) {   // a Follow-up / Split from link (or any link to a card on this board) opens that card here
         const a = row.querySelector('a.ui-listrow__main');
-        if (a) { a.removeAttribute('target'); a.removeAttribute('rel'); a.title = `Open #${card.num}${card.title ? ' ' + card.title : ''}`; a.onclick = e => { e.preventDefault(); openCard(card.id); }; }
+        if (a) { a.removeAttribute('target'); a.removeAttribute('rel'); a.title = `Open #${card.num}${card.title ? ' ' + card.title : ''}`; a.onclick = e => { e.preventDefault(); openCard(card.id, target.comment ? { comment: target.comment } : undefined); }; }
         const meta = row.querySelector('.ui-listrow__meta'); if (meta && card.title) meta.textContent = card.title;
       }
       box.append(row);
@@ -10761,5 +10764,5 @@ if (typeof window !== 'undefined') (() => {
   }
 
   if (HOSTED) { startHosted(); return; }
-  (async () => { await signinReturned; if (!LS.get('kb_me', '') && cfg().repo && authMethod(cfg().repo) === 'app') learnMe(cfg().token); await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && state.tasks.some(t => t.num === hashNum())) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit navigation wins over the automatic connection prompt.
+  (async () => { await signinReturned; if (!LS.get('kb_me', '') && cfg().repo && authMethod(cfg().repo) === 'app') learnMe(cfg().token); await restoreUndo(); await snapLoad(); const first = await cardFirst(); if (fromSnap) { render(); if (hashNum() !== null && linkedCard()) { contextRestored = true; openFromHash(); } } if (cfg().token || !cfg().repo || SETUP || location.hash) { load(false, first); if (location.hash && hashNum() === null) applyRoute(); } else { load(); $('btnSettings').click(); settingsTab('connect'); } })();   // Explicit numeric navigation may use a cached preview; ID-only restored tabs wait for live state unless cardFirst fetched it.
 })();

@@ -79,6 +79,67 @@ async function assertFits(page, where) {
   await new Promise(ok => server.listen(0, '127.0.0.1', ok)); base = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true });
   try {
+    // Stable query identities beat stale/reassigned numeric hashes, including comment links and previews.
+    {
+      const fresh = async api => {
+        const p = await browser.newPage({ viewport: { width: 1200, height: 860 } });
+        await p.addInitScript(() => {
+          Object.entries({ kb_repo: 'acme/board', kb_branch: 'main', kb_path: 'board/tasks.json', kb_token: 'test', kb_me: 'alex', kb_api: 'https://api.test', kb_layout: 'classic', kb_tour_seen: '1' }).forEach(([k, v]) => localStorage.setItem(k, v));
+          sessionStorage.setItem('kb_view', 'board'); window.__openedTitles = [];
+          new MutationObserver(() => { const d = document.getElementById('dlgCard'); if (d?.open) window.__openedTitles.push(document.getElementById('cTitle').value); }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
+        });
+        await p.route('https://api.test/**', r => api.route(r)); return p;
+      };
+      for (const [route, expected] of [['?card=t_two#1', 'Second'], ['?card=t_two', 'Second'], ['#1', 'First']]) {
+        const api = new Github(), p = await fresh(api);
+        await p.goto(base + '/board/index.html' + route); await p.locator('#dlgCard[open]').waitFor();
+        assert.equal(await p.locator('#cTitle').inputValue(), expected, route);
+        assert.ok((await p.evaluate(() => window.__openedTitles)).every(title => title === expected), 'no wrong preview card opens first');
+        await p.locator('#cClose').click();
+        await p.waitForFunction(() => !document.getElementById('dlgCard').open && !new URL(location.href).searchParams.has('card') && !/^#\d/.test(location.hash));
+        await p.reload(); await p.locator('.card').first().waitFor();
+        assert.equal(await p.locator('#dlgCard').evaluate(d => d.open), false, 'close/reload does not resurrect the stable route');
+        await p.close();
+      }
+      for (const id of ['t_missing', 'bad/id', '']) {
+        const p = await fresh(new Github()); await p.goto(base + '/board/index.html?card=' + encodeURIComponent(id) + '#1');
+        await p.waitForFunction(() => document.getElementById('status').textContent.includes('Synced') && !new URL(location.href).searchParams.has('card'));
+        assert.equal(await p.locator('#dlgCard').evaluate(d => d.open), false);
+        assert.deepEqual(await p.evaluate(() => window.__openedTitles), [], 'a missing/invalid supplied id never falls back to #1');
+        await p.close();
+      }
+      // A cached board missing the supplied id must wait for live state, not open the cached number.
+      const api = new Github(), second = api.files['cards/t_two.json']; delete api.files['cards/t_two.json'];
+      const p = await fresh(api); await p.goto(base + '/board/index.html'); await p.locator('.card').first().waitFor();
+      await p.waitForFunction(async () => { const db = await new Promise(resolve => { const r = indexedDB.open('keeptrack', 1); r.onsuccess = () => resolve(r.result); }); return await new Promise(resolve => { const r = db.transaction('kv').objectStore('kv').get('kb_snap:acme/board:main:board/tasks.json'); r.onsuccess = () => { db.close(); resolve(!!r.result); }; }); });
+      api.files['cards/t_two.json'] = second; api.head = 'head-live';
+      let releaseLive, liveArrived;
+      const liveRead = new Promise(resolve => { liveArrived = resolve; }), liveGate = new Promise(resolve => { releaseLive = resolve; });
+      await p.route('https://api.test/repos/acme/board/git/ref/heads/main', async route => { liveArrived(); await liveGate; await api.route(route); });
+      await p.route('https://api.test/repos/acme/board/contents/board/cards/t_two.json*', route => route.fulfill({ status: 404, body: '{}' }));
+      await p.goto(base + '/board/index.html?card=t_two#1'); await liveRead;
+      assert.equal(await p.locator('#dlgCard').evaluate(d => d.open), false, 'cached #1 is not a fallback for a missing cached id');
+      releaseLive(); await p.locator('#dlgCard[open]').waitFor();
+      assert.equal(await p.locator('#cTitle').inputValue(), 'Second');
+      await p.close();
+      // A stable comment permalink follows the id and focuses that card's comment despite its stale number.
+      const commentApi = new Github(); const two = commentApi.card('t_two');
+      two.comments = [{ id: 'c_stable', at: new Date().toISOString(), by: 'alex', text: 'Stable comment target' }];
+      commentApi.files['cards/t_two.json'] = text(two);
+      const comments = await fresh(commentApi);
+      await comments.goto(base + '/board/index.html?card=t_two#1&comment=c_stable');
+      await comments.locator('#cmStream [data-cid="c_stable"].cmflash').waitFor();
+      assert.equal(await comments.locator('#cTitle').inputValue(), 'Second');
+      await comments.close();
+      const one = commentApi.card('t_one');
+      one.comments = [{ id: 'c_link', at: new Date().toISOString(), by: 'alex', text: `[#1](${base}/board/index.html?repo=acme/board&branch=main&path=board/tasks.json&card=t_two#1&comment=c_stable)` }];
+      commentApi.files['cards/t_one.json'] = text(one);
+      const linked = await fresh(commentApi); await linked.goto(base + '/board/index.html#1');
+      await linked.locator('#cmStream a.mref[href*="card=t_two"]').click();
+      await linked.locator('#cmStream [data-cid="c_stable"].cmflash').waitFor();
+      assert.equal(await linked.locator('#cTitle').inputValue(), 'Second', 'in-page Markdown/comment interception also follows the stable id');
+      await linked.close();
+    }
     const api = new Github();
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(() => { localStorage.setItem('kb_repo', 'acme/board'); localStorage.setItem('kb_branch', 'main'); localStorage.setItem('kb_path', 'board/tasks.json'); localStorage.setItem('kb_token', 'test'); localStorage.setItem('kb_me', 'alex'); localStorage.setItem('kb_api', 'https://api.test'); localStorage.setItem('kb_layout', 'classic'); localStorage.setItem('kb_tour_seen', '1'); if (![...Object.keys(localStorage)].some(k => k.startsWith('kb_context:'))) sessionStorage.setItem('kb_view', 'board'); });
