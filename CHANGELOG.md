@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v141: explicit `reconcile --release-quiet` can release this member's unchanged unattended claims after at least
+24 hours without a heartbeat. It requires the person's per-board `settings-set --reconcile-quiet-claims on` opt-in;
+`--dry-run` previews without enabling or changing anything. Normal reconcile remains read-only. Missing generations,
+attended claims, malformed metadata and every coordinated attempt stay for manual or runner recovery. A whole-board
+CAS retry checks the original claim identity and current opt-in again. The audit preserves the generation and heartbeat;
+columns, waits, questions, approval state and retained run receipts are untouched. Proposal-only and hosted callers
+cannot apply the sweep. No live board is opted in by this release; first run the dry-run period and review its results.
+
 Kit v140: a GitHub-board agent can end another agent's event wait when its structured PR condition verifies a merge or
 its card condition verifies a completed card. `claim`, `next` and `wait-check` clear eligible waits after checking the
 evidence. The card's history identifies the evidence and the actor. A person can configure `settings.wait_enders` to

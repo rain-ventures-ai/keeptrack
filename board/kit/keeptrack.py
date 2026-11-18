@@ -475,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 140  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 141  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -10386,6 +10386,7 @@ def cmd_settings(a):
     enders = wait_ender_names(st.get("wait_enders", []))
     print("wait_enders: " + ((", ".join(enders) or "none") if enders is not None
                              else "INVALID stored setting; no delegation active"))
+    print("reconcile_quiet_claims: " + ("on" if st.get("reconcile_quiet_claims") is True else "off"))
     print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
@@ -10410,7 +10411,7 @@ DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home s
 
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
-                     "card_contact_details", "github_app_signin", "wait_enders", "clear_wait_enders")
+                     "card_contact_details", "github_app_signin", "wait_enders", "clear_wait_enders", "reconcile_quiet_claims")
 
 SIGNIN_CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{8,64}")   # used with fullmatch (a "$" would accept a trailing newline the page rejects); the same shape board.js parseSigninConfig accepts
 
@@ -10548,6 +10549,12 @@ def _inside_board_checkout(path):
 
 def cmd_settings_set(a):
     """Change board settings."""
+    quiet_claims = getattr(a, "reconcile_quiet_claims", None)
+    if quiet_claims is not None:
+        if agent_run():
+            sys.exit("refused: only a person may change reconcile_quiet_claims")
+        if quiet_claims not in ("on", "off"):
+            sys.exit("--reconcile-quiet-claims needs on or off")
     requested_enders = getattr(a, "wait_enders", None)
     clear_enders = bool(getattr(a, "clear_wait_enders", False))
     enders = None
@@ -10592,6 +10599,9 @@ def cmd_settings_set(a):
         consent = docs_home_confirmation(data, home, clear)
     def fn(data):
         st = data.setdefault("settings", {})
+        if quiet_claims is not None:
+            st["reconcile_quiet_claims"] = quiet_claims == "on"
+            print("reconcile_quiet_claims: " + quiet_claims)
         if consent and (str(kit_owner(data) or "").casefold() != consent[0].casefold()
                         or ("docs_home" in st, st.get("docs_home")) != consent[1]):
             sys.exit("docs_home_changed: owner or destination changed; read back and confirm again")
@@ -14146,11 +14156,102 @@ def reconcile_rows(data, clock=None, base=None):
     return rows
 
 
+def quiet_claim_evidence(task, owner, clock):
+    """Positive, generation-bound evidence for an uncoordinated unattended claim owned by this member.
+
+    Legacy claims without a generation and any coordinated metadata need manual/runner recovery. A stale status
+    alone is never evidence. Parse the complete timestamp, including its offset and fractional seconds.
+    """
+    if not owner or task.get("column") == "done" or "coordination" in task:
+        return None
+    claim = task.get("claim")
+    if not isinstance(claim, dict) or claim.get("status") not in ("running", "blocked", "stuck"):
+        return None
+    if "attended" in claim and claim["attended"] is not False:
+        return None
+    member = claim.get("on_behalf_of")
+    if not isinstance(member, str) or member.casefold() != owner.casefold():
+        return None
+    if not isinstance(claim.get("agent"), str) or not _AGENT_NAME.fullmatch(claim["agent"]):
+        return None
+    generation = claim.get("generation")
+    if not isinstance(generation, str) or not re.fullmatch(r"[0-9a-f]{24}", generation):
+        return None
+    sid = claim.get("session_id")
+    if not isinstance(sid, str) or not usable_session(sid):
+        return None
+    raw = claim["heartbeat_at"] if "heartbeat_at" in claim else claim.get("claimed_at")
+    if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", raw):
+        return None
+    try:
+        beat = dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+        if clock.tzinfo is None or clock - beat < dt.timedelta(hours=24):
+            return None
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return {"generation": generation, "session": session_hash(sid), "last_heartbeat": raw,
+            "checked_at": clock.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")}
+
+
+def reconcile_release_quiet(a):
+    """Release only the exact stale claims observed at entry; no column, wait or approval change."""
+    dry_run = bool(getattr(a, "dry_run", False))
+    if not dry_run and os.environ.get("KEEPTRACK_PROPOSALS_ONLY") == "1":
+        sys.exit("KEEPTRACK_PROPOSALS_ONLY: quiet-claim release is refused; use --dry-run")
+    if BACKEND == "hosted" and not FILE:
+        sys.exit("capability_unavailable: quiet-claim release is unavailable in hosted phase 0")
+    owner = default_user()
+    if not owner:
+        sys.exit("reconcile --release-quiet needs BOARD_USER for the member whose claims it may release")
+    data, _ = load()
+    enabled = isinstance(data.get("settings"), dict) and data["settings"].get("reconcile_quiet_claims") is True
+    if not dry_run and not enabled:
+        sys.exit("refused: reconcile_quiet_claims is off; only a person may enable it after the dry-run period")
+    clock = reconcile_clock()
+    expected = {t["id"]: copy.deepcopy(t["claim"]) for t in data.get("tasks", [])
+                if isinstance(t, dict) and quiet_claim_evidence(t, owner, clock)}
+    if dry_run:
+        for t in data.get("tasks", []):
+            if isinstance(t, dict) and t.get("id") in expected:
+                print(f"release {_reconcile_label(t)} unattended claim after 24 hours; dry run; opt-in {'on' if enabled else 'off'}")
+        return
+    if not expected:
+        print("no eligible quiet claims; nothing changed")
+        return
+    _claim_sure()
+    def apply(current):
+        _MUT["recheck"] = True  # whole-board CAS: recheck opt-in, exact claim identity and evidence after any conflict
+        if not isinstance(current.get("settings"), dict) or current["settings"].get("reconcile_quiet_claims") is not True:
+            sys.exit("refused: reconcile_quiet_claims changed; nothing released")
+        released = 0
+        for task in current.get("tasks", []):
+            if not isinstance(task, dict) or task.get("id") not in expected or task.get("claim") != expected[task["id"]]:
+                continue
+            evidence = quiet_claim_evidence(task, owner, reconcile_clock())
+            if evidence is None:
+                continue
+            task["claim"] = None
+            hist(task, "released unattended claim: no heartbeat for at least 24 hours; column and waits preserved")
+            task["history"][-1]["quiet_claim_release"] = evidence
+            task.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(),
+                "text": "Released an unattended claim after at least 24 hours without a heartbeat. The column, waits, "
+                        "owner questions and approval state are unchanged. This does not approve or start work."})
+            task["updated"] = now()
+            # This sweep does not own the worker's local claim record. A replacement claim may write that record
+            # after this board save, so task-id-only cleanup would erase a fresh run. Keep the local record untouched.
+            print(f"released {_reconcile_label(task)} unattended claim; column and waits preserved")
+            released += 1
+        if not released:
+            print("no unchanged eligible quiet claims; nothing released")
+    mutate(apply, "Reconcile quiet unattended claims")
+
+
 def cmd_reconcile(a):
-    """Print one row per open card older than a day, then any wait audit or quiet-claim row.
-    This release only dry-runs: it never closes, clears a wait, releases a claim, merges, deploys or writes."""
+    """The default reconciliation preview never writes. Quiet-claim release is a separate, opt-in action."""
+    if getattr(a, "release_quiet", False):
+        return reconcile_release_quiet(a)
     if not getattr(a, "dry_run", False):
-        sys.exit("refused: reconcile only prints a dry run in this release (pass --dry-run). "
+        sys.exit("refused: plain reconcile only prints a dry run (pass --dry-run). "
                  "It does not close a card, clear a wait, release a claim, merge, deploy or write a rule.")
     data, base = load()
     for row in reconcile_rows(data, base=base):
@@ -15657,6 +15758,8 @@ def _proposals_only(a):
     # Fail closed: new commands must be deliberately classified before loader use.
     reads = {"list", "show", "reconcile", "work-status", "work-research-policy-snapshot", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
              "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
+    if a.cmd == "reconcile" and getattr(a, "release_quiet", False) and not getattr(a, "dry_run", False):
+        sys.exit("KEEPTRACK_PROPOSALS_ONLY: quiet-claim release is refused; use --dry-run")
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
@@ -15939,7 +16042,9 @@ def main():
     s.add_argument("--touch", help="log entry id (default: the latest)"); s.set_defaults(f=cmd_touch_url)
     s = sub.add_parser("sent", help="mark a draft as sent (the human sent it)"); s.add_argument("ref"); s.add_argument("--touch", help="draft id (default: latest)"); pf(s); s.set_defaults(f=cmd_sent)
     s = sub.add_parser("reconcile", help="one row per open card older than a day (close, ask, leave or park), plus a wait audit or a quiet-claim row; --dry-run writes nothing")
-    s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_reconcile)
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--release-quiet", action="store_true", help="release eligible unattended claims after 24 hours; requires board opt-in; --dry-run previews only")
+    s.set_defaults(f=cmd_reconcile)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
     s.add_argument("--done-days", type=int); s.add_argument("--lost-days", type=int); s.add_argument("--keep-history", type=int)
@@ -16046,6 +16151,7 @@ def main():
     ender_flags = s.add_mutually_exclusive_group()
     ender_flags.add_argument("--wait-enders", metavar="NAMES", help="person only: comma-separated agents that may end any wait")
     ender_flags.add_argument("--clear-wait-enders", action="store_true", default=None, help="person only: clear wait delegation")
+    s.add_argument("--reconcile-quiet-claims", choices=("on", "off"), help="person only: opt this board into quiet-claim release after its dry-run period")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")

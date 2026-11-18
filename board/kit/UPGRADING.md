@@ -25,6 +25,22 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v141 (schema 4)
+
+- Copies only; no migration. The new quiet-claim release setting is absent/off by default and must remain off on upgrade.
+- `reconcile --dry-run` remains the no-write board preview. `reconcile --release-quiet --dry-run` previews only the stricter
+  quiet-claim candidates without querying PRs. Run previews for the initial week and review them with the owner.
+- Only a person can run `settings-set --reconcile-quiet-claims on` (or `off`). Enabling is a separate owner action;
+  never run it as part of an upgrade. Once enabled, `reconcile --release-quiet` may release qualifying claims only.
+- Claims must belong to the acting `BOARD_USER`, have a generation and usable session, and have no heartbeat for at least
+  24 hours. Attended, malformed, legacy-generation and coordinated claims stay untouched. A concurrent heartbeat,
+  replacement claim or revoked setting cancels that candidate. No column, wait, Inbox question or approval is changed.
+- Local claim records stay untouched: a newer worker may record the same card after the board save. Its normal claim
+  records its own identity; an older worker must obey the board's missing/replaced-claim refusal.
+- Check on a fixture: preview leaves bytes unchanged, apply refuses while off, and an enabled apply releases only its
+  eligible member's claim with a history/comment audit. A second apply changes nothing. The frozen v141 fixture keeps
+  the disabled setting and every existing entity through upgrade.
+
 ### v140 (schema 4)
 
 On GitHub boards, use `wait ID --on "PR merge" --until 'pr:owner/repo#12:merged'` or
