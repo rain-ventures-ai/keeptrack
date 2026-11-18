@@ -230,7 +230,7 @@ what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `C
 entries checked (`checked_by`, `checked_at`; agents are refused), and doctor and `list --attention` stop showing them
 (kit v81). The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
 
-Kit v139: an agent-set event wait with no named party can use `--until 'pr:owner/repo#12:merged'` or
+Kit v140: an agent-set event wait with no named party can use `--until 'pr:owner/repo#12:merged'` or
 `--until 'card:#42:done'` on a GitHub board. The second form resolves to the target's stable card ID. An agent from
 another session can `unwait ID --note "condition met"` when the kit verifies a merge or a completed Done card. `claim`
 checks the requested card, `next` checks its To do candidates, and `wait-check` checks all eligible waits. History records

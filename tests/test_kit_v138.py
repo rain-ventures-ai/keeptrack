@@ -16,7 +16,7 @@ def read(*parts):
 
 
 class Version(unittest.TestCase):
-    def test_kit_is_at_least_v138_everywhere(self):
+    def test_kit_version_is_138_or_newer(self):
         version = json.loads(read("board", "kit", "manifest.json"))["version"]
         self.assertGreaterEqual(version, 138)
         self.assertEqual(str(version), re.search(r"^KIT_VERSION = (\d+)", read("board/kit/keeptrack.py"), re.M)[1])

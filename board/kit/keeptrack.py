@@ -475,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 139  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 140  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -1322,13 +1322,17 @@ def _api_board_tree_read(head, missing_ok):
     return root_tree, sha
 
 
-def _api_snapshot(include_archive=False, ref=None):
+def _api_snapshot(include_archive=False, ref=None, *, prune_cache=True):
     """ref (kit v134): read the board at that commit instead of the branch head. The caller has checked it. A past
-    commit never prunes the blob cache, which holds the head's blobs."""
+    commit only updates the blob cache if its board tree is still current at the branch head."""
     head = _api_head() if ref is None else ref
     root_tree, sha = _api_board_tree(head) if ref is None else _api_board_tree(head, missing_ok=True)
     if sha == "missing":
         raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board folder at that commit")
+    # The replay may end with commits that changed files outside the board. The replay planner has already looked
+    # up the head tree in this case, so a snapshot with the same board tree can refresh the cache too.
+    head_tree = _API_TREE_MEMO.get((_HISTORY_HEAD[0], PATH))
+    current = ref is None or ref == _HISTORY_HEAD[0] or (head_tree is not None and sha == head_tree[1])
     rc, out, err = gh(f"repos/{REPO}/git/trees/{sha}?recursive=1")
     if rc:
         sys.exit(f"cannot list board files in {REPO}@{BRANCH}: {err.strip() or out.strip()}")
@@ -1347,14 +1351,14 @@ def _api_snapshot(include_archive=False, ref=None):
             continue
         files[rel] = {"sha": item["sha"], "size": item.get("size", 0)}
         if not rel.startswith("archive/") or include_archive:
-            text = _api_blob(item["sha"]) if ref is None else _api_blob(item["sha"], persist=ref == _HISTORY_HEAD[0])
+            text = _api_blob(item["sha"]) if current else _api_blob(item["sha"], persist=False)
             files[rel]["text"] = text
             files[rel]["size"] = item.get("size", len(text.encode()))
     if "tasks.json" not in files:
         if ref is not None:
             raise BoardMissingError(f"cannot read {PATH} from {REPO}@{ref}: no board at that commit")
         sys.exit(f"cannot read {PATH} from {REPO}@{BRANCH}")
-    if ref is None:
+    if current and prune_cache:
         _prune_blob_cache({x["sha"] for x in tree.get("tree", []) if x.get("type") == "blob" and x.get("sha")})
     return files, {"head": head, "base_tree": root_tree}
 
@@ -1379,7 +1383,7 @@ def _decode_json(rel, entry):
     return obj
 
 
-def _github_load_board(ref=None):
+def _github_load_board(ref=None, *, prune_cache=True):
     """Load either layout into the v3-shaped in-memory model used by commands.
 
     ref (kit v134, read-only): the board as it was at that commit, through the same decoding and layout code. Such a
@@ -1392,7 +1396,7 @@ def _github_load_board(ref=None):
             sys.exit("refused: a --file board has no commit history to read; use the git or API transport")
         shared = _SHARED_FOLDER[0]
         try:
-            files, head = _git_snapshot(ref=ref) if WRITE == "git" else _api_snapshot(ref=ref)
+            files, head = _git_snapshot(ref=ref) if WRITE == "git" else _api_snapshot(ref=ref, prune_cache=prune_cache)
         finally:
             _SHARED_FOLDER[0] = shared
         mode = "git" if WRITE == "git" else "api"
@@ -1481,6 +1485,8 @@ def _git_history(since):
     """(head, every commit of since..head oldest first in topological order, {commit: parents}, trees)."""
     _check_git_clone()
     head = _git_fetch_head()
+    if since == head:
+        return head, [], {}, None
     rc, _, _ = git("cat-file", "-e", since + "^{commit}")
     if rc:
         _history_refuse(since, f"is not a commit this clone of {REPO} knows")
@@ -1664,6 +1670,8 @@ def _api_history(since, project=""):
     disk, so a run of catch-up polls against one head reads the compare range once, a newer head reads only its new
     commits, and two watchers never trim each other's backlog. Board folder trees are read once per run."""
     head = _api_head()
+    if since == head:
+        return head, [], {}, None
     cache, parents = _history_cache_read(project), None
     before = _history_cache_text(cache) if cache else None
     if cache and cache["head"] != head:
@@ -1758,13 +1766,66 @@ def board_history(since, limit=None, project=""):
         picked += items; examined += len(todo); last = tip
     if hasattr(trees, "flush"):   # the API transport keeps the board trees it read for the next call
         trees.flush(last)
-    return {"head": head, "commits": picked, "next": last, "more": last != head}
+    # An unrelated commit can advance the head without changing the board. A decoded snapshot of that same tree
+    # also confirms project membership at head, with no extra read of the board.
+    head_tree = known.get(head)
+    same_head_tree = {c for c, tree in known.items() if tree == head_tree} if head_tree not in (None, "missing") else set()
+    return {"head": head, "commits": picked, "next": last, "more": last != head, "same_head_tree": same_head_tree}
 
 
-def load_board_at(commit):
+WATCH_SCOPE_BYTES = 65536  # one bounded set of project IDs at the last seen head, per repository
+
+
+def _watch_scope_file():
+    return os.path.join(CACHE_DIR, *REPO.split("/"), "history-scope.json")
+
+
+def _watch_scope_bytes():
+    path = _watch_scope_file()
+    with contextlib.suppress(OSError):
+        if stat.S_ISREG(os.lstat(path).st_mode):
+            with open(path, "rb") as f:
+                return f.read(WATCH_SCOPE_BYTES + 1)
+    return b""
+
+
+def watch_project_at_head(commit, project):
+    """An idle exact-ID poll can use project membership from a previously decoded board at this head."""
+    try:
+        raw = _watch_scope_bytes()
+        if len(raw) <= WATCH_SCOPE_BYTES:
+            cached = json.loads(raw)
+            return (isinstance(cached, dict) and cached.get("scope") == [REPO, BRANCH, PATH, commit]
+                    and isinstance(cached.get("projects"), list) and project in cached["projects"])
+    except (OSError, ValueError, RecursionError):
+        pass
+    return False
+
+
+def _remember_watch_projects(commit, data):
+    projects = data.get("projects")
+    if not isinstance(projects, list) or not all(isinstance(p, dict) for p in projects):
+        return
+    ids = sorted({ident for p in projects if isinstance(ident := p.get("id"), str) and SAFE_ID.fullmatch(ident)})
+    snapshot = json.dumps({"scope": [REPO, BRANCH, PATH, commit], "projects": ids}, separators=(",", ":"))
+    if len(snapshot) > WATCH_SCOPE_BYTES or _watch_scope_bytes() == snapshot.encode():
+        return
+    path = _watch_scope_file()
+    with contextlib.suppress(OSError):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        ignore = os.path.join(CACHE_DIR, "..", ".gitignore")
+        if not os.path.exists(ignore):
+            atomic_write(ignore, "# local board files for this project; never committed\n*\n")
+        atomic_write(path, snapshot)
+
+
+def load_board_at(commit, *, prune_cache=True):
     """Kit v134, read-only: the board as it was at one commit of its branch. Never registered for a save."""
     _history_transport()
-    return _github_load_board(ref=commit)
+    data = _github_load_board(ref=commit, prune_cache=prune_cache)
+    if commit == _HISTORY_HEAD[0]:
+        _remember_watch_projects(commit, data)
+    return data
 
 
 class HostedError(Exception):
@@ -8134,6 +8195,15 @@ def person_for_email(data, email):
     return None
 
 
+class ProjectAmbiguousError(SystemExit):
+    """A project selector matches several IDs; callers can preserve an existing scoped choice."""
+
+    def __init__(self, ref, projects):
+        self.project_ids = {p["id"] for p in projects}
+        super().__init__(f"'{ref}' matches several projects: " + "; ".join(
+            f"{p['id']} {p['name']} ({p.get('client', '')})" for p in projects))
+
+
 def find_project(data, ref, allow_missing=False):
     """Resolve a project by id, id prefix, or name. Exits unless allow_missing and nothing matches."""
     projects = data.setdefault("projects", [])
@@ -8142,10 +8212,12 @@ def find_project(data, ref, allow_missing=False):
         r = ref.lower()
         m = [p for p in projects if p.get("name", "").lower() == r]
         m = m or [p for p in projects if r in (p.get("name", "") + " " + p.get("client", "")).lower()]
-    if len(m) != 1:
-        if allow_missing and not m:
+    if not m:
+        if allow_missing:
             return None
-        sys.exit(f"no project matches '{ref}'" if not m else f"'{ref}' matches several projects: " + "; ".join(f"{p['id']} {p['name']} ({p.get('client', '')})" for p in m))
+        sys.exit(f"no project matches '{ref}'")
+    if len(m) != 1:
+        raise ProjectAmbiguousError(ref, m)
     return m[0]
 
 
@@ -15090,10 +15162,41 @@ def _auto_only(a, packs, owner, runner, pin=None):
     return os.path.basename(rp)
 
 
+_AUTO_RUN_ID = re.compile(r"tick-[0-9a-f]{32}")
+
+
+def _auto_requested_run_id(a):
+    """tick --run-id: the id the runner reserved before launch, or None when the kit should choose one.
+    Same shape as the ids tick already writes (tick- and 32 lowercase hex). --run-id without --only is refused:
+    one id cannot be shared across every due automation."""
+    run_id = getattr(a, "run_id", None)
+    if not run_id:
+        return None
+    if getattr(a, "only", None) is None:
+        sys.exit("automation tick --run-id needs --only <slug>")
+    if not isinstance(run_id, str) or not _AUTO_RUN_ID.fullmatch(run_id):
+        sys.exit("automation tick --run-id: expected tick- and 32 lowercase hex characters")
+    return run_id
+
+
+def _auto_run_id_used(register, run_id):
+    """True when this binding already has run_id on the current run, the last run, or a kept run."""
+    ids = []
+    for key in ("current_run", "last_run"):
+        run = register.get(key)
+        if isinstance(run, dict):
+            ids.append(run.get("id"))
+    for run in register.get("runs") or []:
+        if isinstance(run, dict):
+            ids.append(run.get("id"))
+    return run_id in ids
+
+
 def _auto_tick(a, packs, owner):
     runner = getattr(a, "runner", None) or "local"
     if runner not in _AUTO_RUNNERS: sys.exit("--runner must be cloud or local")
     pin = _auto_digest_pin(a)
+    requested = _auto_requested_run_id(a)
     only = _auto_only(a, packs, owner, runner, pin) if getattr(a, "only", None) is not None else None
     # Every cloud check is recorded in the committed register, work or not: a cloud worker is a fresh clone, so
     # local state is lost and `due` reads only the register.
@@ -15159,7 +15262,9 @@ def _auto_tick(a, packs, owner):
                         if _auto_pack(path)[1] != digest: raise ValueError("changed")
                         if cloud: _auto_keep_cloud_cursor(r, result)
                         if result["items"]:
-                            run_id = "tick-" + uuid.uuid4().hex
+                            run_id = requested or ("tick-" + uuid.uuid4().hex)
+                            if _auto_run_id_used(r, run_id):
+                                raise SystemExit("automation tick --run-id: " + run_id + " is already used")
                             r["last_started_at"] = started
                             r["current_run"] = dict(id=run_id, started_at=r["last_started_at"], status="running", digest=digest,
                                 batch=dict(items=[{k: i[k] for k in ("key", "rev")} for i in result["items"]], cursor=result["cursor"]))
@@ -15172,6 +15277,8 @@ def _auto_tick(a, packs, owner):
                             r["last_started_at"] = started; _auto_write(rp, r)
                         _auto_save_check(binding, result=result, register=r)
                     except (ValueError, OSError, SystemExit) as error:
+                        if isinstance(error, SystemExit) and str(error).startswith("automation tick --run-id:"):
+                            raise
                         if reserved: raise
                         if commit_start and started is not None:
                             r["last_started_at"] = started; _auto_write(rp, r)
@@ -15531,6 +15638,7 @@ def _automation_parser(sub):
         if name == "tick":
             p.add_argument("--only", metavar="SLUG", help="tick exactly this automation (relay workers)")
             p.add_argument("--digest", help="with --only: refuse unless the approved digest is this one")
+            p.add_argument("--run-id", help="with --only: reserve this id (tick- and 32 hex) instead of choosing one")
         if name == "list": p.add_argument("--installed", action="store_true")
         if name == "install":
             p.add_argument("--every", choices=sorted(_AUTO_INTERVALS)); p.add_argument("--set", action="append", default=[])

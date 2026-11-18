@@ -7,8 +7,9 @@ description: Upgrade this repo's board tools (the board kit from rain-ventures-a
 
 You act for the board's upgrade owner (`python3 board/keeptrack.py kit-owner`). If you act for someone else, comment on the card that the upgrade belongs to the owner, assign it to them, and stop.
 
-1. `python3 board/keeptrack.py kit-check`. If it says current, comment that on the card and finish the card with `done`.
-2. Claim the card.
+1. `python3 board/keeptrack.py kit-check`. If it says current, check the optional [repository topic](#repository-topic),
+   comment that the kit is current and finish the card with `done`.
+2. Claim the card. Check the optional [repository topic](#repository-topic) as part of either upgrade path.
 
 ## Main path: `board/upgrade.py`
 Use this when `board/upgrade.py` exists (kit v67 and later). For the first upgrade to v67, run the kit's copy:
@@ -48,3 +49,19 @@ Use this when `board/upgrade.py` is missing or cannot run here.
 If the card is still open after the merge and the schema changed, run `python3 board/keeptrack.py migrate` from the default branch, then finish the card.
 
 Never push kit changes to the default branch yourself, and never edit `board/tasks.json` or any other board JSON file (`board/cards/`, `board/people/`, `board/projects/`, `board/proposals/`, `board/archive/`) by hand.
+
+## Repository topic
+
+Identify the board's GitHub repo with `python3 board/keeptrack.py where` and read its metadata with
+`gh repo view <owner>/<repo> --json visibility,repositoryTopics`. If the repo is confirmed private and lacks
+`keeptrack-board`, ask the repository owner to add it under **About → Edit → Topics** so tools such as Relay can discover
+it. Give the owner this command to run, with the actual repo filled in:
+
+```text
+gh repo edit <owner>/<repo> --add-topic keeptrack-board
+```
+
+Only the repository owner makes the setting change. After they say it is set, verify it with the same read-only
+`gh repo view` query. Skip the topic step if it is already set, the repo is non-private, or its metadata is unavailable.
+Proceed with an otherwise eligible upgrade while the topic step is pending or skipped. Follow the repo's existing
+upgrade safety rules.

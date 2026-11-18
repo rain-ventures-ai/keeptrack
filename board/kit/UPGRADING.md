@@ -25,7 +25,7 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
-### v139 (schema 4)
+### v140 (schema 4)
 
 On GitHub boards, use `wait ID --on "PR merge" --until 'pr:owner/repo#12:merged'` or
 `wait ID --on "Card completion" --until 'card:#42:done'`. The card form stores the referenced card's stable ID.
@@ -40,10 +40,20 @@ A person on a GitHub board can opt in with `settings-set --wait-enders rook,code
 the list, and an agent cannot set or clear it through the CLI. GitHub runs use their declared `BOARD_AGENT`.
 A cleared wait carries no approval. The optional fields fit the existing schema. No migration is needed.
 
-- Check: `kit-check` says v139. On a test board, set `card:#42:done` from one agent session and run `wait-check` from
+- Check: `kit-check` says v140. On a test board, set `card:#42:done` from one agent session and run `wait-check` from
   another before and after completing the target. The wait ends only after completion, and its history records the evidence.
   Set `--wait-enders rook` from a person session, then check that rook can clear a named wait with `--note` and that
   the same agent cannot edit the list. Clear the test setting with `--clear-wait-enders` from a person session.
+
+### v139 (schema 4)
+
+`automation tick --only <slug> --run-id <id>` lets the runner reserve the run id before it starts the worker. The id
+is optional. It must be `tick-` plus 32 lowercase hex characters, the same shape tick already writes, and it needs
+`--only`. Tick refuses an id that binding already used (current run, last run, or a kept run) and writes nothing.
+With no `--run-id`, tick chooses the id as before. No new field, no migration and no `min_kit` change.
+
+- Check: `kit-check` says v139. `automation tick --only <slug> --run-id tick-` and 32 hex reserves that id;
+  the same id a second time is refused and the register is unchanged.
 
 ### v138 (schema 4)
 

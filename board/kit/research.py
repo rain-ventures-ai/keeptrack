@@ -908,17 +908,43 @@ def watch_poll_history(kt, args):
     if not isinstance(prior["commit"], str) or not re.fullmatch(r"[0-9a-f]{40}", prior["commit"]):
         fail("invalid watch cursor commit")
     page = kt.board_history(prior["commit"], project=prior["project"])   # each watched project keeps its own cache
+    idle = page["head"] == prior["commit"]
+    if (idle and args.project == prior["project"] and kt.SAFE_ID.fullmatch(args.project)
+            and kt.watch_project_at_head(page["head"], args.project)):
+        # The branch is still at the cursor, and a decoded board already confirmed this project ID at that commit.
+        print(json.dumps({"events": [], "cursor": cursor, "baseline": False, "more": False,
+                          "semantics": "commit-replay"}, ensure_ascii=False))
+        return
+
     def resolve(board_data, past=False):
         found = kt.find_project(board_data, args.project, allow_missing=past)
         if found is None:   # not on the cursor's own commit: ask head, which stops loudly if it is gone
             raise LookupError("project not found")
         return found["id"], kt.board_today(board_data).isoformat()
+
+    def history_board(commit):
+        board_data = kt.load_board_at(commit, prune_cache=not idle)
+        if commit != page["head"] and commit in page["same_head_tree"]:
+            kt._remember_watch_projects(page["head"], board_data)
+        return board_data
+
+    steps = page["commits"]
     try:
-        data = kt.load_board_at(prior["commit"])
-        project, today = resolve(data, past=True)
+        data = history_board(prior["commit"])
+        try:
+            project, today = resolve(data, past=not idle)
+        except kt.ProjectAmbiguousError as ambiguity:
+            if prior["project"] not in ambiguity.project_ids:
+                fail("watch cursor belongs to another board, project or version")
+            # The alias no longer singles out one project. Keep the cursor's matching ID and replay it normally.
+            project, today = prior["project"], kt.board_today(data).isoformat()
+            if not idle:
+                steps = [{"commit": prior["commit"], "problem": "the project selector is ambiguous at the cursor"}] + steps
         loaded = {prior["commit"]: data}
     except (kt.BoardDecodeError, kt.BoardMissingError, Exception):   # the cursor sits on a commit whose board can't
         # be read or has the wrong shape, already reported: resolve the project at head, which stops loudly if bad
+        if idle:
+            raise
         data, loaded = kt.load_board_at(page["head"]), {}
         project, today = resolve(data)
     if project != prior["project"]:
@@ -929,16 +955,18 @@ def watch_poll_history(kt, args):
 
     def project_at(commit):   # (projection, board) at one commit; a past commit is never registered for a save
         if commit not in projected:
-            board_data = loaded.pop(commit, None) or kt.load_board_at(commit)
+            board_data = loaded.pop(commit, None) or history_board(commit)
             projected.clear()   # keep at most one: each commit is usually the next one's first parent
             projected[commit] = (watch_project(kt, board_data, project, scope, today, history=True), board_data)
         return projected[commit]
 
     events = []
-    for step in page["commits"]:
+    for step in steps:
         commit, parent = step["commit"], step.get("parent")
         found, problem = [], None
-        if "gap" in step:
+        if "problem" in step:
+            problem = step["problem"]
+        elif "gap" in step:
             problem = (f"merge brings {step['gap']} side-branch commits, more than the {kt.WATCH_HISTORY_SCAN} replayed "
                        "per call; their changes are not replayed one by one (the merge itself is)")
         elif step["missing"]:

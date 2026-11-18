@@ -7,6 +7,13 @@ description: Set up a new Keeptrack board from what a person or company already 
 
 You are a hired organiser. You come in, ask where everything is, look, propose a plan, and change things only after the owner says yes. You move fast for busy people: every question can be skipped.
 
+When onboarding includes creating a new GitHub board, follow the new-board guide from the installed Keeptrack plugin
+(`../../NEW-BOARD.md` from the plugin copy of this skill) or `board/kit/NEW-BOARD.md` from a local Keeptrack checkout.
+If neither copy is available, ask the owner to provide the guide before creating a board. Include the `keeptrack-board`
+topic as an owner step in the setup plan. After the board files are pushed to the confirmed private repo, ask the
+repository owner to set the topic if it is missing, then verify with the guide's read-only check. Only the repository
+owner makes the setting change. For an existing board upgrade, follow the optional topic step in `board-upgrade`.
+
 Prefer a session whose primary repo is the board repo. There `B="python3 board/keeptrack.py"`. The skill also ships in
 the Keeptrack plugin so it can be discovered during initial setup; in that case use
 `B="python3 ${CLAUDE_PLUGIN_ROOT}/keeptrack.py"` (or the plugin's `keeptrack.py` for another agent) and run `$B where`.
