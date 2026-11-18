@@ -1,5 +1,5 @@
 {
-  "version": 142,
+  "version": 143,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -86,7 +86,8 @@
     ".claude/skills/keeptrack-docs-home/SKILL.md": "skills/keeptrack-docs-home/SKILL.md",
     "board/keeptrack-docs-home/SKILL.md": "skills/keeptrack-docs-home/SKILL.md",
     ".claude/skills/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json",
-    "board/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json"
+    "board/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json",
+    "board/owner_questions.py": "owner_questions.py"
   },
   "optional": {
     "visibility-alarm": {

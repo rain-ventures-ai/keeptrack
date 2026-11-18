@@ -521,7 +521,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 142;
+  const PAGE_KIT = 143;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -5434,13 +5434,16 @@ if (typeof window !== 'undefined') (() => {
     if (!HOSTED && !DEMO && !SETUP && cfg().repo) ['repo', 'branch', 'path'].forEach(k => u.searchParams.set(k, cfg()[k]));
     const h = hash.replace(/^#/, ''), q = new URLSearchParams(h);
     const safe = !!cardHash(hash) || ['help', 'search', 'add-person', 'copy', 'filters', 'menu'].includes(h) ||
-      (q.has('view') && ALL_VIEWS.includes(q.get('view')) && [...q.keys()].length === 1) || !!recordRoute(q) ||
+      (q.has('view') && ALL_VIEWS.includes(q.get('view')) && [...q.keys()].length === 1) || !!recordRoute(q) || !!proposalRoute(q) ||
       (q.has('settings') && (Object.hasOwn(SET_LINKS, q.get('settings')) || SET_TABS.some(t => t[0] === q.get('settings'))) && [...q.keys()].length === 1);
     const t = state.tasks.find(t => t.num === cardHash(hash)?.num); if (safeCardId(t?.id)) u.searchParams.set('card', t.id);
+    if (proposalRoute(q) && safeCardId(source.get('card'))) u.searchParams.set('card', source.get('card'));
     u.hash = safe ? hash : '#view=' + view; return u.href;
   }
   // Deep links (card #290): a company, person or project drawer puts its record in the address, so the link opens it again
   const RECORD_ROUTES = { company: 'dlgClient', person: 'dlgContact', project: 'dlgProject' };
+  const proposalRoute = q => [...q.keys()].length === 1 && /^r_[a-z0-9]{10}$/.test(q.get('proposal') || '') ? q.get('proposal') : '';
+  let appliedProposalRoute = '';
   const recordHash = (kind, key) => '#' + new URLSearchParams({ [kind]: key }).toString();
   const recordOf = d => d.id === 'dlgClient' && editingClient ? recordHash('company', editingClient) : d.id === 'dlgContact' && editingContact ? recordHash('person', editingContact)
     : d.id === 'dlgProject' && editingProject ? recordHash('project', editingProject) : '';
@@ -5458,6 +5461,7 @@ if (typeof window !== 'undefined') (() => {
   const copyRecordLink = (kind, key, what) => copyText(navigationLink(recordHash(kind, key)), `Link to ${what} copied`);
   function applyRoute() {
     const h = location.hash.slice(1), q = new URLSearchParams(h);
+    if (!proposalRoute(q)) appliedProposalRoute = '';
     if (hasCardRoute()) { openFromHash(); return; }
     routeApplying = true;
     try {
@@ -5468,6 +5472,16 @@ if (typeof window !== 'undefined') (() => {
         // settings section (e.g. collapse the connection form after token reuse).
         if (!alreadyOpen || settingsRoute !== valid) settingsTab(valid); }
       else if (recordRoute(q)) { const r = recordRoute(q); if (!openRecord(r) && lastSyncOk) { toast(`This ${r.kind} was not found on this board`, true); try { history.replaceState({ kbView: view }, '', bareUrl() + '#view=' + view); } catch {} } }   // before the board loads, the load applies it again
+      else if (proposalRoute(q)) {
+        const key = routeBoardKey() + '|' + proposalRoute(q);
+        if (appliedProposalRoute !== key || view !== 'inbox' || BACK_DIALOGS.some(id => $(id)?.open)) {
+          appliedProposalRoute = key;
+          backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--;
+          inboxF = { status: 'all', kind: '', source: '', reviewer: '' }; inboxFocus = proposalRoute(q);
+          setView('inbox', true);
+          document.querySelector(`article.prop[data-id="${inboxFocus}"]`)?.focus({ preventScroll: false });
+        } // a poll on the same route must not rebuild the form or discard an in-progress answer
+      }
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
       else if (h === 'menu') { const docked = window.kbLayout && window.kbLayout.get() === 'dock', pop = docked ? 'dockPop' : 'morePop', trigger = docked ? 'dockMenu' : 'btnMore'; if ($(pop).hidden) $(trigger).click(); }
       else { const id = Object.keys(routeDialogs).find(id => routeDialogs[id] === h); if (id && $(id) && !$(id).open) { if (id === 'dlgSearch') openSearch(); else if (id === 'dlgAddPerson') openAddPersonForm(); else if (id === 'dlgCopy') $('btnCopy').click(); else $(id).showModal(); } }
@@ -8343,6 +8357,13 @@ if (typeof window !== 'undefined') (() => {
     if (!$('inboxLive')) { const live = el('p', 'ui-sr'); live.id = 'inboxLive'; live.setAttribute('aria-live', 'polite'); live.setAttribute('role', 'status'); document.body.append(live); }   // outside #board: a re-render must not drop what it announces
     if (!isSplit(state)) { wrap.append(ui.empty({ text: 'The Review Inbox needs split storage (schema 4). See UPGRADING.md.', icon: 'inbox' })); return; }
     const all = inboxAll(), head = el('div', 'inbox__head');
+    const routed = proposalRoute(new URLSearchParams(location.hash.slice(1)));
+    if (routed && !all.some(p => p.id === routed) && lastSyncOk) {
+      const missing = ui.empty({ text: 'This question is not in the active Inbox. It may be archived or unavailable.', icon: 'inbox' });
+      const card = new URLSearchParams(location.search).get('card'), target = safeCardId(card) && state.tasks.find(t => t.id === card);
+      if (target) missing.append(ui.button({ label: 'Open the original card', variant: 'ghost', onClick: () => openCard(target.id) }));
+      wrap.append(missing);
+    }
     head.append(el('h2', null, 'Review Inbox'), el('span', 'inbox__count', `${all.filter(p => p.status === 'pending').length} pending`)); wrap.append(head);
     wrap.append(el('p', 'inbox__hint muted', 'Review proposed changes and answer questions from agents. Nothing changes on the board until you accept.'));
     const keys = el('details', 'inbox__technical'); keys.append(el('summary', null, 'Keyboard shortcuts'), el('p', null, 'j / k move · a accepts · c records a new task as already done · e edits · m merges · i ignores · r picks the recommended answer')); wrap.append(keys);

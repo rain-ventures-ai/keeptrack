@@ -2796,7 +2796,7 @@ def min_kit_needed(data):
     if any(isinstance(t, dict) and "owner_questions" in t for t in data.get("tasks", []) or []):
         needed, what = 143, "Cards carry owner-question receipt bindings"
     if any(isinstance(t, dict) and ((waiting_of(t) or {}).get("instance_id") or t.get("wait_reasks")) for t in data.get("tasks", []) or []):
-        needed, what = WAIT_INSTANCE_KIT, "Cards carry wait-instance identities or expiry re-ask receipts"
+        needed, what = max(needed, WAIT_INSTANCE_KIT), "Cards carry wait-instance identities or expiry re-ask receipts"
     if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
         needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
     files = data.get("archive", {}).get("files") if isinstance(data.get("archive"), dict) else None

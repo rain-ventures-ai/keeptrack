@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v143: `comment CARD --owner-question FILE_OR_- --json` writes one structured choice comment, linked owner Inbox
+item and durable request receipt in one CAS transaction. Stable retries return the same identities; changed content,
+owner or inconsistent recorded data is refused. Inputs are byte/structure bounded before JSON decoding and screened
+before any write. Scores, two-to-three viewpoints, evidence or judgement, recommendation and next step stay visible.
+The web route `#proposal=r_id` opens that exact item without answering it; missing active items offer the original
+card. First explicit structured use adopts minimum kit143; ordinary comments are unchanged. No answer, permission,
+wait clear, dispatcher wake, signed owner action or live activation is implied.
+
 Kit v142: manual `reconcile --reask-expired` records one owner Inbox question and a durable receipt for each due
 no-condition wait. Seven UTC calendar days mark a wait stale for review; an explicit later nudge delays the question.
 Every wait stays blocking, including named-person and owner-authority gates. After a board adopts expiry receipts,
