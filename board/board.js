@@ -463,7 +463,7 @@ if (typeof window !== 'undefined') (() => {
   const XFER_SECRETS = ['token', 'claude_token', 'cron_key'];   // left out of a code unless the person ticks "Include tokens and keys"
   function exportCode(secrets = false) { stashBoard(); const o = {};   // stash first: kb_boards then has this board's latest per-board keys
     XFER.text.concat(Object.keys(XFER.pick)).forEach(k => { const v = LS.get('kb_' + k, null); if (v !== null && v !== '' && (secrets || !XFER_SECRETS.includes(k))) o[k] = v; });
-    if (XFER.pick.view.includes(view)) o.view = view;   // current views live in session storage, not the legacy kb_view preference
+    if (XFER.pick.view.includes(view)) o.view = view; else delete o.view;   // never export a stale preference from another view group
     if (!secrets && o.boards) { const b = boardsMap(); Object.values(b).forEach(e => XFER_SECRETS.forEach(k => delete e[k])); o.boards = JSON.stringify(b); }
     return 'kbcfg1.' + xEnc(o); }
   function parseCode(raw) {
@@ -1856,7 +1856,7 @@ if (typeof window !== 'undefined') (() => {
     s.open();
     await new Promise(res => whenSaved(res));
     const imported = applyCode(raw);
-    if (imported.view === 'flow') { SS.set('kb_view', 'flow'); saveBoardContext({ view: 'flow', card: '' }); const url = new URL(boardUrl(), location.href); url.searchParams.set('board_view', 'flow'); url.hash = 'view=flow'; history.replaceState({ kbView: 'flow' }, '', url); }
+    if (XFER.pick.view.includes(imported.view)) { const chosen = imported.view; SS.set('kb_view', chosen); saveBoardContext({ view: chosen, card: '' }); const url = new URL(boardUrl(), location.href); url.searchParams.set('board_view', chosen); url.hash = 'view=' + chosen; history.replaceState({ kbView: chosen }, '', url); }
     await new Promise(r => setTimeout(r, 50));   // let the sheet paint before the reload blanks the page
     location.reload();
   }

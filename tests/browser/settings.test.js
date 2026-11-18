@@ -489,7 +489,28 @@ async function waitStored(predicate) { const until = Date.now() + 5000; while (!
       await other.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
       const exportedView = await other.evaluate(() => JSON.parse(atob(window.__copied.slice(7).replace(/-/g, '+').replace(/_/g, '/'))).view);
       assert.equal(exportedView, 'board', 'a stale imported Flow preference does not override the selected board view');
+      const boardCode = await other.evaluate(() => window.__copied);
+      await other.locator('#sClose').click(); await other.locator('#dlgSettings').waitFor({ state: 'hidden' });
+      await other.locator('#viewSw [data-view="flow"]').click(); await other.locator('.flow-card').first().waitFor();
+      await other.evaluate(() => window.kbSettings.open('move')); await other.locator('#xPaste').fill(boardCode); await other.locator('#xImport').click();
+      const importedBoard = other.waitForNavigation(); await other.getByRole('alertdialog').locator('button', { hasText: 'Import' }).click(); await importedBoard;
+      await other.locator('.card').first().waitFor();
+      assert.equal(await other.locator('.flow-card').count(), 0, 'importing Board into an already-Flow tab changes the visible view');
+      assert.equal(await other.evaluate(() => sessionStorage.getItem('kb_view')), 'board');
+      assert.equal(new URL(other.url()).searchParams.get('board_view'), 'board');
       assert.deepEqual(other.errors, []); await other.close();
+    }
+    // Unsupported CRM views must not export a stale transferable task-view preference.
+    {
+      const page = await open(browser, { settings: { modes: ['tasks', 'crm'] } });
+      await page.locator('#viewSw [data-view="people"]').click();
+      await page.evaluate(() => localStorage.setItem('kb_view', 'flow'));
+      await page.evaluate(() => window.kbSettings.open('move')); await page.locator('#xCode').click();
+      await page.getByRole('alertdialog').locator('button', { hasText: 'Copy settings code' }).click();
+      await page.waitForFunction(() => /^kbcfg1\./.test(window.__copied));
+      const hasView = await page.evaluate(() => Object.hasOwn(JSON.parse(atob(window.__copied.slice(7).replace(/-/g, '+').replace(/_/g, '/'))), 'view'));
+      assert.equal(hasView, false, 'a CRM export omits the unsupported view instead of leaking stale Flow');
+      assert.deepEqual(page.errors, []); await page.close();
     }
     // 15. Backlog auto-research (kit v60): off by default; the switch and "Cards each run" save settings.backlog_research.
     {

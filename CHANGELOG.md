@@ -25,9 +25,9 @@ commits and optional `automation/local-runner.json` status. Flow uses the board'
 hidden and catches up on return. No kit version or data schema change.
 
 Web board refinements: settings transfer preserves the selected Flow view, and closing a card removes its stable
-id from the underlying view URL so a reload stays on the board. Superseded board polls and transient metadata failures
-retain the last runner/activity copies; failed activity refreshes clearly label that retained copy. Board, access and
-credential changes still clear the old metadata.
+id from the underlying view URL so a reload stays on the board. Failed activity refreshes now clearly label the retained
+last copy. New regressions prove the existing same-connection retention after superseded board polls and transient
+metadata failures. Existing board, access and credential clearing checks remain; the retention logic itself is unchanged.
 
 Kit v136: `wait --until` stores a checkable condition (`pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
 `release:<owner>/<repo>@<tag>`). A condition is not an owner-authority wait. `reconcile --dry-run` adds an audit line

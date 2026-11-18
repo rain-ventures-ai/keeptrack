@@ -281,7 +281,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.evaluate(() => localStorage.setItem('kb_path', 'tasks.json'));
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
     await page.locator('.flow-event').first().waitFor(); // The mock asserts a file-scoped commit query.
-    // A real drawer save invalidates an in-flight board poll, but not that connection's metadata.
+    // Regression coverage for existing retention: a real save supersedes a poll without invalidating connection metadata.
     raw.tasks = [card(1), card(2, { after: ['t_1'] })]; revision++;
     runner = { status: 'paused', pause_reason: 'Keep this last runner copy', last_tick: now }; runnerVersion++;
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?path=tasks.json&board_view=flow#view=flow`);
@@ -299,7 +299,7 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     assert.match(await page.locator('.flow-status').innerText(), /Keep this last runner copy/);
     assert.equal(await page.locator('.flow-event').count(), 20, 'a superseded board poll preserves the activity feed');
     await page.locator('#cClose').click(); await page.locator('#dlgCard').waitFor({ state: 'hidden' });
-    // Transient metadata failures retain both copies and label them stale, then recover normally.
+    // Existing transient retention keeps both copies; the new activity label makes the last-copy state explicit.
     runnerNetwork = commitsNetwork = true;
     await page.clock.fastForward(61000);
     await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('showing last copy') && document.querySelector('.flow-feed')?.textContent.includes('showing last copy'));
