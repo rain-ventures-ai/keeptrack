@@ -5,9 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push to the same PR cancels the older run. Pushes to main are never cancelled, so every merge
+# commit keeps its own full result.
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   python:
     runs-on: ubuntu-latest
+    # A hung step stops here, not at the 6-hour default (old serial p90 was 12.5 min; parallel runs take about 3).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -16,10 +24,14 @@ jobs:
         with:
           python-version: "3.12"
       - name: Python unit tests
-        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+        # The same files discover finds, one process per file, 4 at a time (ubuntu-latest has 4 CPUs).
+        # It fails if any file fails or if fewer tests run than discover loads.
+        run: python3 tests/run_parallel.py --jobs 4
 
   signin:
     runs-on: ubuntu-latest
+    # A hung step stops here, not at the 6-hour default (p90 is under 1 min).
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -30,6 +42,8 @@ jobs:
 
   browser:
     runs-on: ubuntu-latest
+    # A hung step stops here, not at the 6-hour default (the whole browser job's p90 was 9.3 min).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,6 +75,32 @@ jobs:
       - name: Feedback components (in-page confirm, toasts with Undo, no native dialogs)
         working-directory: tests/browser
         run: node feedback.test.js
+      - name: Settings dialog (tabs, section template, deep links, saves, Health, confirms, phone layout)
+        working-directory: tests/browser
+        run: node settings.test.js
+      - name: Archive view, People Archived and the remembered Include archive (kit v96)
+        working-directory: tests/browser
+        run: node archive-view.test.js
+
+  # The browser steps are split over two jobs that run at the same time, about 4.5 minutes each by
+  # measured step time. Every step still runs once; none is skipped.
+  browser-2:
+    runs-on: ubuntu-latest
+    # A hung step stops here, not at the 6-hour default (the whole browser job's p90 was 9.3 min).
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install browser test dependencies
+        working-directory: tests/browser
+        run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: tests/browser
+        run: npx playwright install chromium
       - name: Archive sizes, lazy reads, bounded shards and hosted revisions
         working-directory: tests/browser
         run: |
@@ -88,9 +128,6 @@ jobs:
       - name: Optional Prioritise List (ranking, sorting, conflicts, scroll and mobile)
         working-directory: tests/browser
         run: node prioritise.test.js
-      - name: Settings dialog (tabs, section template, deep links, saves, Health, confirms, phone layout)
-        working-directory: tests/browser
-        run: node settings.test.js
       - name: Alerts (a phone's service-worker fallback, blocked-permission guidance)
         working-directory: tests/browser
         run: node alerts.test.js
@@ -118,9 +155,6 @@ jobs:
       - name: Goals bar, Goals sheet, Goal field and filter (kit v83)
         working-directory: tests/browser
         run: node goals.test.js
-      - name: Archive view, People Archived and the remembered Include archive (kit v96)
-        working-directory: tests/browser
-        run: node archive-view.test.js
       - name: Inbound strip for failed and waiting outside items (kit v112)
         working-directory: tests/browser
         run: node inbound-bar.test.js
