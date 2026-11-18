@@ -22,7 +22,9 @@ An enabled board can then run:
 python3 board/keeptrack.py reconcile --release-quiet
 ```
 
-Use `settings-set --reconcile-quiet-claims off` to disable it. Agents cannot change this setting. The CLI's normal
+Use `settings-set --reconcile-quiet-claims off` to disable it. Only the board kit owner may enable or disable it;
+agents and other members cannot change this setting, including through mixed settings commands. Ownership is checked
+again after a save conflict. The CLI's normal
 declared caller identity applies; this is a workflow guard, not a replacement for repository access controls.
 
 The sweep releases only claims belonging to the acting `BOARD_USER`. The heartbeat must be at least 24 hours old;

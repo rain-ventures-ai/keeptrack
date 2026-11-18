@@ -30,7 +30,8 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 - Copies only; no migration. The new quiet-claim release setting is absent/off by default and must remain off on upgrade.
 - `reconcile --dry-run` remains the no-write board preview. `reconcile --release-quiet --dry-run` previews only the stricter
   quiet-claim candidates without querying PRs. Run previews for the initial week and review them with the owner.
-- Only a person can run `settings-set --reconcile-quiet-claims on` (or `off`). Enabling is a separate owner action;
+- Only the board kit owner, acting as a person, can run `settings-set --reconcile-quiet-claims on` (or `off`). Ownership
+  is rechecked after a save conflict. Enabling is a separate owner action;
   never run it as part of an upgrade. Once enabled, `reconcile --release-quiet` may release qualifying claims only.
 - Claims must belong to the acting `BOARD_USER`, have a generation and usable session, and have no heartbeat for at least
   24 hours. Attended, malformed, legacy-generation and coordinated claims stay untouched. A concurrent heartbeat,

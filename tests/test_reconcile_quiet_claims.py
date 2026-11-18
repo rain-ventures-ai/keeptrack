@@ -1,5 +1,6 @@
 """Quiet-claim release is an opt-in, identity-pinned mutation, never an approval."""
 import contextlib
+import copy
 import io
 import json
 import os
@@ -10,7 +11,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests import test_reconcile as tr
+import test_reconcile as tr
 
 kt = tr.kt
 
@@ -113,6 +114,20 @@ class QuietClaims(unittest.TestCase):
                     mutate.assert_not_called()
                 self.unchanged()
 
+    def test_invalid_offset_ranges_never_authorise_either_timestamp_field(self):
+        for field in ("heartbeat_at", "claimed_at"):
+            for offset in ("+00:60", "+00:99", "-00:60", "-00:99", "+24:00", "-24:00", "+99:00", "-99:00"):
+                with self.subTest(field=field, offset=offset):
+                    c = claim()
+                    if field == "claimed_at":
+                        c.pop("heartbeat_at")
+                    c[field] = "2026-10-01T00:00:00" + offset
+                    self.write_claims(tr.card(1, claim=c))
+                    with patch.object(kt, "mutate") as mutate:
+                        self.run_quiet()
+                        mutate.assert_not_called()
+                    self.unchanged()
+
     def test_attended_legacy_placeholder_corrupt_and_other_member_claims_are_never_released(self):
         variants = [dict(attended=True), dict(attended="false"), dict(attended=0), dict(generation=None),
                     dict(generation=""), dict(generation="b" * 23), dict(session_id="pending-codex"),
@@ -135,6 +150,34 @@ class QuietClaims(unittest.TestCase):
                     self.run_quiet()
                     mutate.assert_not_called()
                 self.unchanged()
+
+    def test_mixed_board_corrupt_metadata_cannot_stop_independent_release_or_change_valid_admission(self):
+        variants = ("corrupt", ["corrupt"], {"research": "corrupt"}, {"research": ["corrupt"]},
+                    {"research": {"admission": "corrupt"}}, {"research": {"admission": ["corrupt"]}})
+        for co in variants:
+            with self.subTest(coordination=co):
+                grant = {"id": "ra_fixture", "active": True}
+                valid = tr.card(2, id="t_valid1", project="pr_one", column="todo", details="Study the public guide.",
+                    links=[{"url": "https://example.org/guide", "title": "Guide"}],
+                    coordination={"research": {"admission": copy.deepcopy(grant)}, "runs": [{"id": "retained-proof"}]})
+                bad = tr.card(3, coordination=co)
+                self.write_claims(tr.card(1, claim=claim()), valid, bad)
+                data = self.current()
+                data["projects"] = [{"id": "pr_one", "name": "One"}]
+                data["settings"]["rook_research"] = {"v": 1, "enabled": True, "board": "owner/board", "owner": "osouthgate",
+                    "projects": ["pr_one"], "profile": "public-research", "policy_digest": "sha256:" + "b" * 64, "approval_ttl": 300}
+                self.write(data)
+                self.run_quiet()
+                after = self.current()
+                self.assertIsNone(after["tasks"][0]["claim"])
+                self.assertEqual(valid, after["tasks"][1])
+                self.assertEqual(bad, after["tasks"][2])
+                # Positive control: the same safe reader must still retire a valid admission if its signed input changes.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    kt.mutate(lambda board: board["tasks"][1].update(details="A changed research request"), "Fixture input edit")
+                changed = self.current()["tasks"][1]
+                self.assertIs(False, changed["coordination"]["research"]["admission"]["active"])
+                self.assertEqual(valid["coordination"]["runs"], changed["coordination"]["runs"])
 
     def test_success_is_idempotent_and_second_run_does_not_mutate(self):
         self.write_claims(tr.card(1, claim=claim()))
@@ -232,6 +275,79 @@ class QuietClaims(unittest.TestCase):
         with patch.dict(os.environ, BOARD_AGENT=""), contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_settings_set(Args(reconcile_quiet_claims="off"))
         self.assertIs(False, self.current()["settings"]["reconcile_quiet_claims"])
+
+    def test_non_owner_cannot_toggle_opt_in_even_with_other_settings_and_owner_case_is_normalised(self):
+        class Args(SimpleNamespace):
+            def __getattr__(self, name):
+                return None
+        for value in ("on", "off"):
+            for mixed in ({}, {"title": "Must not land"}, {"setting": "review_inbox.enabled", "value": "true"}):
+                with self.subTest(value=value, mixed=mixed):
+                    self.write_claims(tr.card(1, claim=claim()), enabled=value == "off")
+                    data = self.current()
+                    data["settings"]["kit_owner"] = "osouthgate"
+                    data["people"].append({"github": "collab"})
+                    self.write(data)
+                    with patch.dict(os.environ, BOARD_AGENT="", BOARD_USER="collab"):
+                        with self.assertRaisesRegex(SystemExit, "board kit owner"):
+                            kt.cmd_settings_set(Args(reconcile_quiet_claims=value, **mixed))
+                    self.unchanged()
+        with patch.dict(os.environ, BOARD_AGENT="", BOARD_USER="OSOUTHGATE"), contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_settings_set(Args(reconcile_quiet_claims="on"))
+        self.assertIs(True, self.current()["settings"]["reconcile_quiet_claims"])
+
+    def test_owner_change_during_settings_cas_prevents_opt_in_and_mixed_title(self):
+        class Args(SimpleNamespace):
+            def __getattr__(self, name):
+                return None
+        self.write_claims(tr.card(1, claim=claim()), enabled=False)
+        def change_owner(data, sha, message):
+            self.assertTrue(kt._MUT["recheck"])
+            current = self.current()
+            current["settings"]["kit_owner"] = "replacement"
+            with open(self.file, "w") as stream:
+                json.dump(current, stream)
+            return False
+        with patch.dict(os.environ, BOARD_AGENT=""), patch.object(kt, "save", side_effect=change_owner), patch.object(kt.time, "sleep"):
+            with self.assertRaisesRegex(SystemExit, "board kit owner"):
+                kt.cmd_settings_set(Args(reconcile_quiet_claims="on", title="Must not land"))
+        self.assertIs(False, self.current()["settings"]["reconcile_quiet_claims"])
+        self.assertNotIn("title", self.current()["settings"])
+        self.assertEqual("replacement", self.current()["settings"]["kit_owner"])
+
+    def test_explicit_owner_metadata_is_typed_and_independent_of_irrelevant_people(self):
+        class Args(SimpleNamespace):
+            def __getattr__(self, name):
+                return None
+        for value in (None, False, 0, [], {}, 1):
+            with self.subTest(explicit_owner=value):
+                self.write_claims(tr.card(1, claim=claim()), enabled=False)
+                data = self.current()
+                data["settings"]["kit_owner"] = value
+                self.write(data)
+                with patch.dict(os.environ, BOARD_AGENT=""):
+                    with self.assertRaisesRegex(SystemExit, "valid board-owner metadata"):
+                        kt.cmd_settings_set(Args(reconcile_quiet_claims="on", title="Must not land"))
+                self.unchanged()
+        for people in (None, [None]):
+            with self.subTest(people=people):
+                self.write_claims(tr.card(1, claim=claim()), enabled=False)
+                data = self.current()
+                data["settings"]["kit_owner"] = "osouthgate"
+                data["people"] = people
+                self.write(data)
+                with patch.dict(os.environ, BOARD_AGENT=""), contextlib.redirect_stdout(io.StringIO()):
+                    kt.cmd_settings_set(Args(reconcile_quiet_claims="on"))
+                self.assertIs(True, self.current()["settings"]["reconcile_quiet_claims"])
+                self.assertEqual(people, self.current()["people"])
+        for explicit in ("",):
+            self.write_claims(tr.card(1, claim=claim()), enabled=False)
+            data = self.current()
+            data["settings"]["kit_owner"] = explicit
+            self.write(data)
+            with patch.dict(os.environ, BOARD_AGENT=""), contextlib.redirect_stdout(io.StringIO()):
+                kt.cmd_settings_set(Args(reconcile_quiet_claims="on"))
+            self.assertIs(True, self.current()["settings"]["reconcile_quiet_claims"])
 
     def test_real_cli_default_is_report_only_and_proposals_only_cannot_apply(self):
         self.write_claims(tr.card(1, claim=claim()))

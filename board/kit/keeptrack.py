@@ -2718,6 +2718,14 @@ def _github_mutate(fn, message):
                 _REC.clear()
 
 
+def _research_admission(task):
+    """An admission dictionary, or None for absent/malformed coordination metadata."""
+    co = task.get("coordination") if isinstance(task, dict) else None
+    research = co.get("research") if isinstance(co, dict) else None
+    admission = research.get("admission") if isinstance(research, dict) else None
+    return admission if isinstance(admission, dict) else None
+
+
 def _mutate(fn, message):
     global WRITE
     lost = None   # after a lost race: (the board as first loaded, what we wanted to save)
@@ -2753,8 +2761,7 @@ def _mutate(fn, message):
             data.clear(); data.update(merged)
             base = theirs
             _MUT["extra"] = {}
-        if any(isinstance(t, dict) and ((t.get("coordination") or {}).get("research") or {}).get("admission")
-               for t in base.get("tasks", [])):
+        if any(_research_admission(t) for t in base.get("tasks", [])):
             work_module().research_module().revoke_changed_inputs(base, data)
         extra = _MUT["extra"]
         try:
@@ -2795,7 +2802,7 @@ def min_kit_needed(data):
             any(isinstance(t, dict) and t.get("coordination") is not None for t in data.get("tasks", []) or []):
         needed, what = max(125, needed), "Cards carry Rook coordination and execution holds"
     if (data.get("settings") or {}).get("rook_research") is not None or any(
-            isinstance(t, dict) and ((t.get("coordination") or {}).get("research") is not None)
+            isinstance(t, dict) and isinstance(t.get("coordination"), dict) and t["coordination"].get("research") is not None
             for t in data.get("tasks", []) or []):
         needed, what = max(126, needed), "The opt-in research pilot needs receipt-bound owner admission"
     if (data.get("settings") or {}).get("rook_research_control") is not None:
@@ -10547,6 +10554,27 @@ def _inside_board_checkout(path):
     return False
 
 
+def quiet_claim_setting_owner(data):
+    """The existing kit owner, checked using the ordinary CLI caller identity."""
+    settings = data.get("settings")
+    if not isinstance(settings, dict):
+        sys.exit("quiet-claim opt-in needs valid board-owner metadata; nothing changed")
+    explicit = settings.get("kit_owner", "")
+    if not isinstance(explicit, str):
+        sys.exit("quiet-claim opt-in needs valid board-owner metadata; nothing changed")
+    if explicit:
+        owner = explicit  # a valid explicit owner does not depend on unrelated legacy people metadata
+    else:
+        try:
+            owner = kit_owner(data)  # retain the existing absent/empty-string legacy fallback only
+        except (AttributeError, TypeError):
+            sys.exit("quiet-claim opt-in needs valid board-owner metadata; nothing changed")
+    user = default_user()
+    if not isinstance(owner, str) or not owner or not isinstance(user, str) or user.casefold() != owner.casefold():
+        sys.exit("quiet-claim opt-in: only the board kit owner may change reconcile_quiet_claims; nothing changed")
+    return owner.casefold()
+
+
 def cmd_settings_set(a):
     """Change board settings."""
     quiet_claims = getattr(a, "reconcile_quiet_claims", None)
@@ -10597,7 +10625,15 @@ def cmd_settings_set(a):
     if home is not None or clear:
         data, _ = load()
         consent = docs_home_confirmation(data, home, clear)
+    quiet_owner = None
+    if quiet_claims is not None:
+        data, _ = load()
+        quiet_owner = quiet_claim_setting_owner(data)
     def fn(data):
+        if quiet_claims is not None:
+            _MUT["recheck"] = True  # ownership must still hold on the exact board snapshot we save
+            if quiet_claim_setting_owner(data) != quiet_owner:
+                sys.exit("quiet-claim opt-in: board owner changed; nothing changed")
         st = data.setdefault("settings", {})
         if quiet_claims is not None:
             st["reconcile_quiet_claims"] = quiet_claims == "on"
@@ -14181,7 +14217,7 @@ def quiet_claim_evidence(task, owner, clock):
     if not isinstance(sid, str) or not usable_session(sid):
         return None
     raw = claim["heartbeat_at"] if "heartbeat_at" in claim else claim.get("claimed_at")
-    if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})", raw):
+    if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", raw):
         return None
     try:
         beat = dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(dt.timezone.utc)
@@ -16151,7 +16187,7 @@ def main():
     ender_flags = s.add_mutually_exclusive_group()
     ender_flags.add_argument("--wait-enders", metavar="NAMES", help="person only: comma-separated agents that may end any wait")
     ender_flags.add_argument("--clear-wait-enders", action="store_true", default=None, help="person only: clear wait delegation")
-    s.add_argument("--reconcile-quiet-claims", choices=("on", "off"), help="person only: opt this board into quiet-claim release after its dry-run period")
+    s.add_argument("--reconcile-quiet-claims", choices=("on", "off"), help="board kit owner only: opt this board into quiet-claim release after its dry-run period")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
