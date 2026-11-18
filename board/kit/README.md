@@ -103,6 +103,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
                                                  // v43 optional "waiting_days": 7 = chase a wait with no nudge date this many days after it began (0 = off)
                                                  // v71 optional "inbox_lapse_days": 14 = a Review Inbox question unanswered this many days shows as lapsed (0 = never)
                                                  // v60 optional "backlog_research": { "enabled": true, "per_run": 2 } = the relay dispatcher researches bare Backlog cards (off unless enabled is true)
+                                                 // v139 optional "wait_enders": ["rook"] = agents allowed to end any wait (default [])
                                                  // v130 optional "github_app_signin": { "client_id": "Iv23...", "exchange_url": "https://..." } = the web page offers Sign in with GitHub (set with settings-set --github-app-signin)
                                                  // v110 optional "card_contact_details": false = linking a person to a card copies only id, name and role, not email and phone (default true)
                                                  // v43 optional "min_kit": 43 = the oldest kit that understands every field on the cards (set by the first `wait`; only rises)
@@ -213,7 +214,7 @@ A card parked on a person or an event carries `waiting` (null or absent when it 
              "note": "asked by email on the 12th", "by": "claude@osouthgate",
              "by_session": "9f2a41c07b3d" }           // first 12 hex of a sha256 of the session id that set it (not a secret)
 ```
-`wait ID --on .. [--who ..] [--nudge +3|date] [--note ..]` sets it and `unwait ID --note ..` ends it; `done` and
+`wait ID --on .. [--who ..] [--nudge +3|date] [--until ..] [--note ..]` sets it and `unwait ID --note ..` ends it; `done` and
 `move ID done` end it too, and history keeps it. The card stays in its column and `due` is untouched. A waiting card is
 not claimable: `claim` refuses it and `next` skips it, with or without `--force`. If the card has a running claim,
 `wait` blocks that claim (`blocked_by_wait: true`, heartbeat time untouched) when it is the claim's own session or a
@@ -228,6 +229,18 @@ what it cannot prevent in `agent_cleared` and `doctor` warns `AGENT_CLEARED`, `C
 `MIN_KIT_LOWERED`. Once a person has checked an agent-cleared flag, `cleared-ack <id> [--note]` marks the card's
 entries checked (`checked_by`, `checked_at`; agents are refused), and doctor and `list --attention` stop showing them
 (kit v81). The first `wait` sets `settings.min_kit` to 43; three-way merges keep the higher value.
+
+Kit v140: an agent-set event wait with no named party can use `--until 'pr:owner/repo#12:merged'` or
+`--until 'card:#42:done'` on a GitHub board. The second form resolves to the target's stable card ID. An agent from
+another session can `unwait ID --note "condition met"` when the kit verifies a merge or a completed Done card. `claim`
+checks the requested card, `next` checks its To do candidates, and `wait-check` checks all eligible waits. History records
+the actor and `wait_evidence`. A named party or owner-authority wait stays under the existing rules for unlisted agents.
+
+On GitHub boards, a person can set `settings.wait_enders` with `settings-set --wait-enders rook,codex` or clear
+it with `settings-set --clear-wait-enders`. The list is empty by default and names match `BOARD_AGENT` without regard
+to case. A listed agent can run `unwait ID --note "why"` on any wait, including one set by a person or naming the
+owner. History records the agent, the note and `unwait.delegated: true`. Delegation does not approve work. These CLI
+checks rely on callers setting their actual `BOARD_AGENT` on GitHub boards. They do not govern direct repository writes.
 
 ### Runs after (card dependencies)
 A card may carry `after`: a list of card ids it runs after (absent or `[]` when it has none). It is a hint and a gate,

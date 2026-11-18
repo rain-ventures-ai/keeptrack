@@ -1,0 +1,22 @@
+{
+  "id": "t_followup",
+  "num": 1,
+  "title": "Confirm handoff",
+  "column": "todo",
+  "client": "Acme",
+  "project": "pr_pilot",
+  "assignees": ["alex"],
+  "rank": "a0",
+  "history": [],
+  "waiting": {
+    "on": "The handoff document",
+    "who": "",
+    "since": "2026-11-15",
+    "nudge": "",
+    "note": "",
+    "by": "codex@alex",
+    "by_session": "5d41402abc4b",
+    "by_agent": true,
+    "until": "card:t_handoff:done"
+  }
+}

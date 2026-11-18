@@ -22,9 +22,12 @@ python3 board/keeptrack.py claim <id> --note "starting: <plan in one line>"     
 python3 board/keeptrack.py heartbeat <id> --note "<what you are doing now>"        # at least every 15 minutes
 python3 board/keeptrack.py heartbeat <id> --status blocked --note "<why>"          # if you need a human
 python3 board/keeptrack.py wait <id> --on "<who: what>" --who <user>               # parked on a person or event: then comment @user, assign, stop
-# never `unwait` a wait you did not set in this session, or one on someone else: a person ends those
-# (kit v138: only when the owner tells you in their own words, `unwait <id> --note "why" --owner-said "<their words, time>"`
-#  ends another agent's wait on a card assigned to them; a person's wait stays locked)
+# An agent can `unwait` another agent's event wait once the kit verifies its PR merge or card completion (`wait --until`).
+# Omit `--who` for an event wait. For unlisted agents, the same restriction applies. A wait a person set stays locked.
+# Only a person can set `settings-set --wait-enders rook` or clear it with `--clear-wait-enders`.
+# Listed agents can `unwait <id> --note "why"` on any wait. History records the delegation, agent and note.
+# For the owner's direct instruction, use `unwait <id> --note "why" --owner-said "<their words, time>"`
+#  to end an eligible agent wait on a card assigned to the owner.
 python3 board/keeptrack.py done <id> --note "<result, PR or file link>"            # finished
 python3 board/keeptrack.py review <id> --who <user> --note "<result + options>"    # finished, but a person must decide: Pending review
 python3 board/keeptrack.py release <id> --column todo --watch                      # handoff: free the claim, then watch (does not block claims)

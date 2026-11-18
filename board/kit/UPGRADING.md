@@ -25,6 +25,26 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v140 (schema 4)
+
+On GitHub boards, use `wait ID --on "PR merge" --until 'pr:owner/repo#12:merged'` or
+`wait ID --on "Card completion" --until 'card:#42:done'`. The card form stores the referenced card's stable ID.
+An agent can run `unwait ID --note "condition met"` on another agent's event wait once GitHub reports the PR merged or
+the referenced card is Done and completed. `claim` checks its target and `next` checks its To do candidates automatically.
+Run `wait-check` from an existing board sweep to clear verified waits without claiming any card. A claim or next command
+that cannot proceed does not save its wait changes, so use `wait-check` when a dispatcher checks eligibility before claiming.
+The kit does not start a background poller. The history holds the formal condition, evidence and actor.
+Named parties, owner-authority and person-set waits use the existing rules for unlisted agents. Free-text waits remain manual.
+A person on a GitHub board can opt in with `settings-set --wait-enders rook,codex`. Listed agents can end any wait with
+`unwait ID --note "why"`. History records the delegation, actor and note. `settings-set --clear-wait-enders` revokes
+the list, and an agent cannot set or clear it through the CLI. GitHub runs use their declared `BOARD_AGENT`.
+A cleared wait carries no approval. The optional fields fit the existing schema. No migration is needed.
+
+- Check: `kit-check` says v140. On a test board, set `card:#42:done` from one agent session and run `wait-check` from
+  another before and after completing the target. The wait ends only after completion, and its history records the evidence.
+  Set `--wait-enders rook` from a person session, then check that rook can clear a named wait with `--note` and that
+  the same agent cannot edit the list. Clear the test setting with `--clear-wait-enders` from a person session.
+
 ### v139 (schema 4)
 
 `automation tick --only <slug> --run-id <id>` lets the runner reserve the run id before it starts the worker. The id

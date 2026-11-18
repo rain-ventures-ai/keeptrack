@@ -33,6 +33,7 @@ SHA conflict, so a human editing the board in the browser never gets overwritten
   keeptrack.py wait ID --on "Acme finance" [--who p_id|login] [--nudge +3|YYYY-MM-DD] [--note ..]   # park a card: not claimable until unwait
   keeptrack.py unwait ID --note "why"   # end the wait (agents: only a wait they set in this session that names nobody else)
   keeptrack.py unwait ID --note "why" --owner-said "<owner's words, time>"   # agents: another agent's wait, card assigned to the owner
+  keeptrack.py wait-check   # end verified agent-set PR and card waits
 
 Board structure (labels, clients, members, settings) lives in tasks.json; change it only with these:
   keeptrack.py labels | label-add NAME [--color #hex] | label-set NAME [--rename NEW] [--color #hex] | label-rm NAME [--force]
@@ -474,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 139  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 140  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -683,7 +684,7 @@ def hosted_api_url():
 _HOSTED_API_NOTE = False
 
 
-def http(method, path, body=None, accept="application/vnd.github+json", retries=None):
+def http(method, path, body=None, accept="application/vnd.github+json", retries=None, timeout=30):
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
     t = token()
@@ -697,7 +698,7 @@ def http(method, path, body=None, accept="application/vnd.github+json", retries=
     tries = RATE_TRIES if retries is None else retries
     for attempt in range(tries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 return 0, r.read().decode(), ""
         except urllib.error.HTTPError as e:
             out = e.read().decode(errors="replace")
@@ -729,7 +730,7 @@ def _rate_wait(code, headers, text, attempt):
     return min(int(ra) if ra.isdigit() else 2 ** (attempt + 1), 30)
 
 
-def gh(*args, body=None):
+def gh(*args, body=None, timeout=None):
     """gh-api-style call: gh("repos/x/contents/y?ref=b") or gh("-X", "PUT", "repos/x/contents/y", "--input", "-", body=...)."""
     if BACKEND == "hosted" and not FILE:
         sys.exit("capability_unavailable: GitHub transport is disabled in hosted mode")
@@ -741,13 +742,14 @@ def gh(*args, body=None):
         if path == "user" and "--jq" in rest:
             rc, out, err = http("GET", "user")
             return (rc, json.loads(out).get("login", "") if rc == 0 else out, err)
-        return http(method, path, body)
-    for attempt in range(RATE_TRIES + 1):
+        return (http(method, path, body) if timeout is None else http(method, path, body, retries=0, timeout=timeout))
+    tries = RATE_TRIES if timeout is None else 0
+    for attempt in range(tries + 1):
         p = subprocess.run(["gh", "api", *args], input=json.dumps(body) if body is not None else None,
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, **({"timeout": timeout} if timeout is not None else {}))
         m = re.search(r"HTTP (403|429)", p.stderr) if p.returncode else None
         wait = _rate_wait(int(m.group(1)), {}, p.stdout + p.stderr, attempt) if m else None   # gh shows no headers: the message says it
-        if wait is None or attempt == RATE_TRIES:
+        if wait is None or attempt == tries:
             return p.returncode, p.stdout, p.stderr
         time.sleep(wait)
 
@@ -3503,15 +3505,15 @@ def waiting_text(w, limit=80):
 
 
 # A checkable wait (`wait --until`) is a condition, never an owner-authority wait and never an approval.
-# pr: is merged state only. date: is a calendar day. release: is owner/repo@tag, published and not a draft.
-_WAIT_UNTIL_PR = re.compile(r"^pr:((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)#([0-9]+):merged$")
+# pr: is merged state only. card: is Done and not cancelled on this board. date: and release: are audit-only.
+_WAIT_UNTIL_PR = re.compile(r"^pr:((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)#([0-9]{1,10}):merged$")
+_WAIT_UNTIL_CARD = re.compile(r"^card:(#[1-9][0-9]{0,9}|t_[A-Za-z0-9_-]{1,80}):done$")
 _WAIT_UNTIL_DATE = re.compile(r"^date:(\d{4}-\d{2}-\d{2})$")
 _WAIT_UNTIL_RELEASE = re.compile(r"^release:((?!\.+/)[A-Za-z0-9_.-]+)/((?!\.+/)[A-Za-z0-9_.-]+)@([A-Za-z0-9._+-]{1,64})$")
 
 
 def wait_condition(until):
-    """('pr', owner, repo, number), ('date', day) or ('release', owner, repo, tag), else None.
-    Anything that is not one of those three forms is not a condition, including a condition with extra words."""
+    """Parse a formal PR, card, date or release condition. Extra words invalidate the condition."""
     text = " ".join(str(until or "").split())
     match = _WAIT_UNTIL_PR.fullmatch(text)
     if match:
@@ -3519,6 +3521,9 @@ def wait_condition(until):
         if 1 <= number <= 2147483647:
             return ("pr", match.group(1), match.group(2), number)
         return None
+    match = _WAIT_UNTIL_CARD.fullmatch(text)
+    if match:
+        return ("card", match.group(1))
     match = _WAIT_UNTIL_DATE.fullmatch(text)
     if match:
         try:
@@ -3536,6 +3541,8 @@ def wait_condition_text(cond):
     """The condition in the form a dry run prints and `wait --until` stores."""
     if cond[0] == "pr":
         return f"pr:{cond[1]}/{cond[2]}#{cond[3]}:merged"
+    if cond[0] == "card":
+        return f"card:{cond[1]}:done"
     if cond[0] == "date":
         return f"date:{cond[1]}"
     return f"release:{cond[1]}/{cond[2]}@{cond[3]}"
@@ -4041,8 +4048,7 @@ def refuse_waiting(t):
     w = open_waiting(t)
     if w:
         sys.exit(f"refused: #{t.get('num', '?')} {t['id']} is waiting on {waiting_text(w)} since {clean(w.get('since') or '?', 20)}; "
-                 "a waiting card can't be claimed, with or without --force. Only `unwait` ends a wait (whoever set it in that "
-                 "session, or a person); comment on the card and stop")
+                 "a waiting card can't be claimed, with or without --force. Check the wait's details before using `unwait`.")
 
 
 def _unwait_before_claim(t):
@@ -4071,6 +4077,7 @@ def do_claim(a, tid, data):
     if not asked and (t.get("asked") or {}).get("mode") == "unsure" and agent_run():
         sys.exit(f"refused: {t['id']} carries an unanswered asked mark (now or by an agent?): pass --attended --asked now "
                  "--asked-via NAME once the owner says to work on it here. Nothing changed")
+    clear_verified_waits(data, [t], a)
     refuse_waiting(t)
     user = a.for_user or default_user()
     agent = a.agent or os.environ.get("BOARD_AGENT") or "agent"
@@ -4189,19 +4196,20 @@ def cmd_next(a):
         user = a.for_user or default_user()
         ordered = sorted(data["tasks"], key=task_order_key) if data.get("layout") == "split" else data["tasks"]
         only = find_project(data, a.project)["id"] if getattr(a, "project", None) else None
-        for t in ordered:
-            if only and t.get("project") != only:
+        candidates = [t for t in ordered if (not only or t.get("project") == only) and t["column"] == "todo"
+                      and user.lower() in [x.lower() for x in t.get("assignees", [])]]
+        clear_verified_waits(data, candidates, a)
+        for t in candidates:
+            if open_waiting(t) or claim_state(data, t.get("claim")) not in (None, "done", "stale"):
                 continue
-            if t["column"] in ("todo",) and user.lower() in [x.lower() for x in t.get("assignees", [])] \
-                    and claim_state(data, t.get("claim")) in (None, "done", "stale") and not open_waiting(t):   # a waiting card is skipped
-                if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
-                    from types import SimpleNamespace
-                    work = work_module()
-                    try:
-                        work.claim_gate(SimpleNamespace(**globals()), data, t, session_id(a), getattr(a, "executor", None), attended(a))
-                    except work.Refused:
-                        continue
-                return do_claim(a, t["id"], data)
+            if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "work.py")):
+                from types import SimpleNamespace
+                work = work_module()
+                try:
+                    work.claim_gate(SimpleNamespace(**globals()), data, t, session_id(a), getattr(a, "executor", None), attended(a))
+                except work.Refused:
+                    continue
+            return do_claim(a, t["id"], data)
         sys.exit(f"nothing claimable in 'todo' for @{user}")
     _PENDING_CLAIM.clear()
     with_record(lambda: (mutate(fn, "Agent claim: next task"), write_claim_record()))
@@ -4545,18 +4553,22 @@ def cmd_wait(a):
     if len(on) > 200:
         sys.exit("--on is at most 200 characters; put the detail in --note or a comment")
     note = " ".join(str(a.note or "").split())
-    until = ""
-    if getattr(a, "until", None):
-        cond = wait_condition(a.until)
-        if not cond:
-            sys.exit("refused: --until must be pr:<owner>/<repo>#<n>:merged, date:<YYYY-MM-DD> or "
-                     "release:<owner>/<repo>@<tag>. A condition is not an approval.")
-        until = wait_condition_text(cond)
+    raw_until = getattr(a, "until", None)
+    cond = wait_condition(raw_until)
+    if raw_until and not cond:
+        sys.exit("refused: --until must be pr:<owner>/<repo>#<n>:merged, card:#<n>:done, date:<YYYY-MM-DD> or "
+                 "release:<owner>/<repo>@<tag>. A condition is not an approval.")
 
     def fn(data):
         t = find(data, a.id)
         if t.get("column") == "done":
             sys.exit(f"refused: {t['id']} is done; a done card waits on nothing")
+        until = wait_condition_text(cond) if cond else ""
+        if cond and cond[0] == "card":
+            other = find(data, cond[1])
+            if other["id"] == t["id"]:
+                sys.exit("refused: a card cannot wait on itself")
+            until = wait_condition_text(("card", other["id"]))
         who = check_who(data, a.who)
         nudge = check_date(a.nudge, data) or "" if a.nudge else ""
         sid = session_for(a); mine = session_hash(sid)
@@ -4610,6 +4622,101 @@ def wait_set_by_agent(w):
     return "by_agent" not in w and bool(agent.strip()) and bool(user.strip())
 
 
+def verifiable_wait(task):
+    """Only an agent-set, event-only PR/card wait can end on recorded evidence."""
+    w = open_waiting(task)
+    if not w or w.get("who") or w.get("authority") or not wait_set_by_agent(w):
+        return None
+    cond = wait_condition(w.get("until"))
+    return cond if cond and cond[0] in ("pr", "card") else None
+
+
+def verified_waits(data, candidates):
+    """Return condition evidence from GitHub or the current board snapshot, never from the wait's prose."""
+    prs = [cond[1:] for _, cond in candidates if cond[0] == "pr"]
+    try:
+        states = _reconcile_read_prs(prs, timeout=15, allow_partial=True)
+    except (SystemExit, OSError, subprocess.TimeoutExpired):
+        states = {}   # unread is unresolved; a failed PR read does not block independent card evidence
+    cards = {t["id"]: t for t in data["tasks"]}
+    archived = None
+    for task, cond in candidates:
+        if cond[0] == "pr":
+            owner, repo, number = cond[1:]
+            state = states.get((owner.lower(), repo.lower(), number))
+            if _reconcile_merged_day(state):
+                yield task, {"condition": wait_condition_text(cond), "merged_at": state[1]}
+            continue
+        ref = cond[1]   # wait stores the full id, even if its setter supplied a card number or prefix
+        if ref not in cards and archived is None:
+            archived = archived_tasks(data, _MUT.get("base"))
+        target = cards.get(ref) or (archived or {}).get(ref)
+        if ref != task["id"] and finished_done(target):
+            yield task, {"condition": wait_condition_text(cond), "card_num": target.get("num")}
+
+
+def restore_wait_claim(data, t, external=False):
+    """Restore the claim paused by a wait without creating approval or renewing an external clear's heartbeat."""
+    c = t.get("claim") or {}
+    if c.get("status") != "blocked" or not c.get("blocked_by_wait"):
+        return ""
+    age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
+    if age is None or age > stale_limit(data, c):
+        requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t) \
+            and t.get("column") == "in-progress"
+        t["claim"] = None
+        if requeue:
+            move_task_to_column(data, t, "todo")
+        hist(t, f"released expired claim after {_age(age)}; " + ("returned to todo" if requeue else "current column preserved; no unattended approval"))
+        tid = t["id"]
+        _MUT["after"].append(lambda d: drop_claim_file(tid))
+        return "; its old claim is released" + (" and the card is back in To do" if requeue else "; its current column is kept")
+    if c.get("before_wait") == "stuck":
+        c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
+        return "; its claim is stuck again (it was stuck before the wait)"
+    _MUT["recheck"] = True
+    try:
+        coordinated_renewal_gate(data, t, c)
+    except SystemExit as error:
+        if not external or not isinstance(error, work_module().Refused):
+            raise
+        return "; its claim stays blocked by a coordinated hold"
+    busy = [] if c.get("attended") else busy_over_limit(data, t)
+    if busy:
+        return f"; its claim stays blocked: {limit_message(data, busy)}"
+    c.pop("blocked_by_wait", None); c["status"] = "running"
+    if not external:
+        c["heartbeat_at"] = now()   # an external clear is not a heartbeat from the other session
+    hist(t, "claim running again")
+    return "; its claim is running again"
+
+
+def end_verified_wait(data, task, evidence, a, note=""):
+    _MUT["recheck"] = True   # on conflict, verify the latest wait and target again before saving
+    task["waiting"] = None
+    proof = evidence.get("merged_at") or (f"#{evidence['card_num']} is Done" if evidence.get("card_num") else "card is Done")
+    hist(task, f"unwait: verified {evidence['condition']} ({proof})" + (f"; {note}" if note else ""), who_am_i())
+    task["history"][-1]["wait_evidence"] = dict(evidence, mode="manual" if note else "automatic")
+    task["history"][-1]["unwait"] = {"session": session_hash(session_for(a)), "other": False}
+    suffix = restore_wait_claim(data, task, external=True)
+    task["updated"] = now()
+    print(f"#{task.get('num', '?')} no longer waiting; verified {evidence['condition']}{suffix}")
+
+
+def clear_verified_waits(data, tasks, a):
+    candidates = [(t, cond) for t in tasks if (cond := verifiable_wait(t))]
+    if not candidates:
+        return
+    for task, evidence in verified_waits(data, candidates):
+        end_verified_wait(data, task, evidence, a)
+
+
+def cmd_wait_check(a):
+    """Sweep eligible PR/card waits, without starting or approving work."""
+    _claim_sure()
+    mutate(lambda data: clear_verified_waits(data, data["tasks"], a), "End verified waits")
+
+
 def owner_said_refusal(data, t, w, owner):
     """Why `unwait --owner-said` may not end this wait, or '' when it may (kit v138). The owner's word ends only a wait
     another agent set, on a card assigned to the owner, that waits on the owner, an agent or nobody."""
@@ -4633,12 +4740,18 @@ def owner_said_refusal(data, t, w, owner):
     return ""
 
 
+def delegated_wait_end(data):
+    """GitHub board callers declare their runtime identity with BOARD_AGENT, as for other agent rules."""
+    if BACKEND == "hosted" and not FILE:   # hosted dispatch has no phase-0 wait or settings write
+        return False
+    settings = data.get("settings")
+    names = wait_ender_names(settings.get("wait_enders", [])) if isinstance(settings, dict) else None
+    agent = os.environ.get("BOARD_AGENT", "")
+    return bool(_AGENT_NAME.fullmatch(agent)) and any(name.casefold() == agent.casefold() for name in names or ())
+
+
 def cmd_unwait(a):
-    """End a wait. An agent run ends only a wait it set in the same session that names nobody else; anything else is a
-    person's to clear. Kit v138: with --owner-said (the owner's own words and when), an agent also ends a wait another
-    agent set, on a card assigned to the owner (owner_said_refusal); a person's wait stays locked. A claim `wait`
-    blocked runs again (a young one); an expired claim requeues only with retained unattended admission. Clearing a
-    wait never creates approval."""
+    """End a wait within the session, owner, verified event or board delegation rules."""
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     note = " ".join(str(a.note or "").split())
     if not note:
@@ -4653,31 +4766,53 @@ def cmd_unwait(a):
         if not agent_run():
             sys.exit("refused: --owner-said is for agent runs; a person ends a wait with --note alone")
 
+    verified_generation = delegated_generation = None
+
     def fn(data):
+        nonlocal verified_generation, delegated_generation
         t = find(data, a.id); w = waiting_of(t)
+        if verified_generation is not None and w != verified_generation:
+            sys.exit("refused: the wait changed during verification; read the card and retry if it still applies")
+        if delegated_generation is not None and w != delegated_generation:
+            sys.exit("refused: the wait changed during delegation; read the card and retry if it still applies")
         if not w:
             sys.exit(f"{t['id']} is not waiting")
         sid = session_for(a); mine = session_hash(sid)
         agent = agent_run()   # kit v77: a hosted agent identity too, not only BOARD_AGENT
         owner_word = False
-        if agent and w.get("by_session") != mine:
+        delegated = agent and said is None and delegated_wait_end(data)
+        if delegated:
+            delegated_generation = copy.deepcopy(w)
+            _MUT["recheck"] = True   # a newer board may have revoked this agent's delegation
+        elif agent and w.get("by_session") != mine:
             if not said:
+                cond = verifiable_wait(t)
+                if cond:
+                    matches = list(verified_waits(data, [(t, cond)]))
+                    if not matches:
+                        sys.exit(f"refused: could not verify {wait_condition_text(cond)}; wait unchanged")
+                    verified_generation = copy.deepcopy(w)
+                    return end_verified_wait(data, t, matches[0][1], a, note)
                 sys.exit(f"refused: an agent ends only a wait it set in this session; this one was set by {clean(w.get('by') or '?', 60)}. "
                          "Comment with @the assignee and stop (--force does not change this)")
             why = owner_said_refusal(data, t, w, _acting_user())
             if why:
                 sys.exit("refused: " + why)
             owner_word = True
-        if agent and not owner_word and other_party(w, claim_agent(t), data):
+        if agent and not delegated and not owner_word and other_party(w, claim_agent(t), data):
             sys.exit(f"refused: {t['id']} waits on {clean(w.get('who'), 60)}, another party; only a person ends that wait (the web "
                      "page, or a shell without BOARD_AGENT). Comment with @the assignee and stop")
         _MUT["rerun"] = True   # reads this card's claim
-        c = t.get("claim")
         other = other_party(w, claim_agent(t), data)
         if not agent and other and holds_claim(t, a):
             note_agent_cleared(t, "unwait", sid)   # (a): the session holding the claim cleared a wait on someone else
         t["waiting"] = None
-        if owner_word:
+        if delegated:
+            note_agent_cleared(t, "unwait via wait_enders", sid)
+            hist(t, f"unwait using wait_enders delegation: {note} (was waiting on {waiting_text(w)}, "
+                    f"since {clean(w.get('since') or '?', 20)}; session {redact_session(sid)})", who_am_i())
+            t["history"][-1]["unwait"] = {"session": mine, "other": False, "delegated": True}
+        elif owner_word:
             owner, me, ts = _acting_user(), who_am_i(t), now()
             note_agent_cleared(t, "unwait on the owner's word", sid)   # evidence that outlives the history trim
             hist(t, f"unwait on the owner's word: {note}; @{clean(owner, 60)} said: \"{said}\" (was waiting on {waiting_text(w)}, "
@@ -4693,31 +4828,8 @@ def cmd_unwait(a):
             hist(t, f"unwait: {note} (was waiting on {waiting_text(w)}, since {clean(w.get('since') or '?', 20)}; "
                     f"session {redact_session(sid)})")
             t["history"][-1]["unwait"] = {"session": mine, "other": other}   # a claim by this same session next is flagged too
-        msg = f"#{t.get('num', '?')} no longer waiting"
-        if c and c.get("status") == "blocked" and c.get("blocked_by_wait"):
-            age = minutes_since(c.get("heartbeat_at") or c.get("claimed_at"))
-            if age is None or age > stale_limit(data, c):   # the usual agent flow (wait, comment, assign, stop): its session is gone
-                requeue = c.get("unattended_approved") is True and not c.get("attended") and not unresolved_work(t) \
-                    and t.get("column") == "in-progress"
-                t["claim"] = None
-                if requeue:
-                    move_task_to_column(data, t, "todo")
-                hist(t, f"released expired claim after {_age(age)}; " + ("returned to todo" if requeue else "current column preserved; no unattended approval"))
-                tid = t["id"]
-                _MUT["after"].append(lambda d: drop_claim_file(tid))
-                msg += "; its old claim is released" + (" and the card is back in To do" if requeue else "; its current column is kept")
-            elif c.get("before_wait") == "stuck":
-                c.pop("blocked_by_wait", None); c.pop("before_wait", None); c["status"] = "stuck"; hist(t, "claim stuck again")
-                msg += "; its claim is stuck again (it was stuck before the wait)"
-            else:
-                _MUT["recheck"] = True
-                coordinated_renewal_gate(data, t, c)
-                busy = [] if c.get("attended") else busy_over_limit(data, t)   # reviving counts like a new claim
-                if busy:
-                    msg += f"; its claim stays blocked: {limit_message(data, busy)}"   # keeps blocked_by_wait: no stale, no release
-                else:
-                    c.pop("blocked_by_wait", None); c["status"] = "running"; c["heartbeat_at"] = now(); hist(t, "claim running again")
-                    msg += "; its claim is running again"
+        msg = f"#{t.get('num', '?')} no longer waiting" + (" via wait_enders" if delegated else "")
+        msg += restore_wait_claim(data, t, external=delegated)
         t["updated"] = now()
         print(msg)
     mutate(fn, f"Unwait: {a.id}")
@@ -7946,7 +8058,7 @@ def cmd_resolve(a):
 
 # Commands by topic, for `keeptrack.py help`. Every command belongs to exactly one topic (a test checks).
 HELP_TOPICS = {
-    "tasks": ["list", "show", "watch", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "cleared-ack", "reconcile"],
+    "tasks": ["list", "show", "watch", "card-link", "add", "similar", "related", "relate", "unrelate", "merge-card", "task-set", "move", "priority-move", "assign", "link", "unlink", "task-rm", "wait", "unwait", "wait-check", "cleared-ack", "reconcile"],
     "agent-work": ["approve", "claim", "next", "heartbeat", "release", "done", "review", "auto-heartbeat", "routine", "checkpoint", "automation", "research-lock", "research-suggest"],
     "checklists-comments": ["todo-add", "todo-done", "todo-undo", "todo-rm", "todo-edit", "todo-move", "comment", "comments", "attach", "history"],
     "crm": ["people", "today", "person", "person-add", "person-set", "person-rm", "email-key", "email-search", "email-view", "touch", "touch-url", "touch-source", "sent"],
@@ -10150,9 +10262,12 @@ def cmd_member_rm(a):
     mutate(fn, f"Remove member: {a.user}")
 
 
+_AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+
+
 def check_agent_name(name):
     name = (name or "").strip().lstrip("@")
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}", name):
+    if not _AGENT_NAME.fullmatch(name):
         sys.exit(f"'{name}' is not an agent name: use 1-40 letters, digits, '.', '_' or '-' (for example claude)")
     return name
 
@@ -10236,6 +10351,15 @@ def validate_docs_home(value):
     return {"provider": provider, "root": root}
 
 
+def wait_ender_names(value):
+    """Accept a list of distinct agent names. An invalid list grants no authority."""
+    if not isinstance(value, list) or any(not isinstance(n, str) or not _AGENT_NAME.fullmatch(n) for n in value):
+        return None
+    if len({n.casefold() for n in value}) != len(value):
+        return None
+    return value
+
+
 def cmd_settings(a):
     data, _ = load()
     st = data.get("settings") or {}
@@ -10259,6 +10383,9 @@ def cmd_settings(a):
     # From kit v44 the Review Inbox is always on for split boards; the line keeps its v42 shape for older skill copies.
     print("review_inbox.enabled: " + ("true" if review_storage_ok(data) else "false (needs split storage: keeptrack.py migrate --to 4)"))
     print(f"waiting_days: {waiting_days(data) or 'off (no automatic chase)'}")
+    enders = wait_ender_names(st.get("wait_enders", []))
+    print("wait_enders: " + ((", ".join(enders) or "none") if enders is not None
+                             else "INVALID stored setting; no delegation active"))
     print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
     print(f"backlog_research: " + (f"on, {br['per_run']} card(s) per dispatcher run" if br["enabled"] else "off"))
@@ -10283,7 +10410,7 @@ DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home s
 
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
-                     "card_contact_details", "github_app_signin")
+                     "card_contact_details", "github_app_signin", "wait_enders", "clear_wait_enders")
 
 SIGNIN_CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{8,64}")   # used with fullmatch (a "$" would accept a trailing newline the page rejects); the same shape board.js parseSigninConfig accepts
 
@@ -10420,7 +10547,18 @@ def _inside_board_checkout(path):
 
 
 def cmd_settings_set(a):
-    """Change board settings: title, stale minutes, pipeline stages (with renames)."""
+    """Change board settings."""
+    requested_enders = getattr(a, "wait_enders", None)
+    clear_enders = bool(getattr(a, "clear_wait_enders", False))
+    enders = None
+    if requested_enders is not None or clear_enders:
+        if agent_run():
+            sys.exit("refused: only a person may change wait_enders")
+        if requested_enders is not None and clear_enders:
+            sys.exit("use --wait-enders or --clear-wait-enders, not both")
+        enders = [] if clear_enders else wait_ender_names([n.strip() for n in requested_enders.split(",")])
+        if enders is None:
+            sys.exit("--wait-enders needs comma-separated distinct agent names, for example rook,codex")
     provider, root = getattr(a, "docs_provider", None), getattr(a, "docs_root", None)
     clear = getattr(a, "clear_docs_home", False)
     if (provider is None) != (root is None) or (clear and provider is not None):
@@ -10457,6 +10595,9 @@ def cmd_settings_set(a):
         if consent and (str(kit_owner(data) or "").casefold() != consent[0].casefold()
                         or ("docs_home" in st, st.get("docs_home")) != consent[1]):
             sys.exit("docs_home_changed: owner or destination changed; read back and confirm again")
+        if enders is not None:
+            st["wait_enders"] = enders
+            print("wait_enders: " + (", ".join(enders) or "none"))
         if home is not None: st["docs_home"] = dict(home); print("docs_home set")
         elif clear: st.pop("docs_home", None); print("docs_home cleared")
         if getattr(a, "setting", None) is not None:
@@ -10502,7 +10643,7 @@ def cmd_settings_set(a):
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root",
-                                                                  "card_contact_details", "github_app_signin")) or clear or clear_signin:
+                                                                  "card_contact_details", "github_app_signin")) or clear or clear_signin or enders is not None:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
@@ -13737,8 +13878,8 @@ def _reconcile_questions(data):
     return ids
 
 
-def _reconcile_read_prs(prs):
-    """One batched read of state and mergedAt. None means that pull request could not be read."""
+def _reconcile_read_prs(prs, *, timeout=None, allow_partial=False):
+    """One batched read of state and mergedAt. A partial GraphQL result can prove independent PRs for a wait sweep."""
     ordered, seen = [], set()
     for owner, repo, number in prs:
         low = (owner.lower(), repo.lower(), int(number))
@@ -13753,8 +13894,9 @@ def _reconcile_read_prs(prs):
     for i, (owner, repo, number) in enumerate(ordered):
         parts.append(f"p{i}: repository(owner: {json.dumps(owner)}, name: {json.dumps(repo)}) "
                      f"{{ pullRequest(number: {number}) {{ state mergedAt }} }}")
-    rc, out, _err = gh("-X", "POST", "graphql", "--input", "-", body={"query": "query { " + " ".join(parts) + " }"})
-    if rc != 0:
+    rc, out, _err = gh("-X", "POST", "graphql", "--input", "-", body={"query": "query { " + " ".join(parts) + " }"},
+                       **({"timeout": timeout} if timeout is not None else {}))
+    if rc != 0 and not allow_partial:
         sys.exit("reconcile: could not read pull request state (state and mergedAt only); wrote nothing")
     try:
         payload = json.loads(out)
@@ -13763,6 +13905,8 @@ def _reconcile_read_prs(prs):
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
         sys.exit("reconcile: pull request state had no data; wrote nothing")
+    if rc != 0 and not isinstance(payload.get("errors"), list):
+        sys.exit("reconcile: could not read pull request state (state and mergedAt only); wrote nothing")
     states = {}
     for i, (owner, repo, number) in enumerate(ordered):
         node = data.get(f"p{i}")
@@ -13938,7 +14082,7 @@ def _reconcile_unattended_quiet(claim, clock):
     return last.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _reconcile_extra(data, task, states, releases, clock):
+def _reconcile_extra(data, task, states, releases, cards, clock):
     """Audit and quiet-claim lines after the verb row. They describe evidence. They do not clear or release."""
     label = _reconcile_label(task)
     lines = []
@@ -13948,12 +14092,14 @@ def _reconcile_extra(data, task, states, releases, clock):
         if cond:
             text = wait_condition_text(cond)
             if cond[0] == "pr":
-                day = _reconcile_merged_day(states.get((cond[1].lower(), cond[2].lower(), cond[3])))
+                met = _reconcile_merged_day(states.get((cond[1].lower(), cond[2].lower(), cond[3])))
+            elif cond[0] == "card":
+                met = cond[1] != task.get("id") and finished_done(cards.get(cond[1]))
             elif cond[0] == "date":
-                day = cond[1] if cond[1] <= clock.date().isoformat() else ""
+                met = cond[1] if cond[1] <= clock.date().isoformat() else ""
             else:
-                day = _reconcile_release_day(releases.get((cond[1].lower(), cond[2].lower(), cond[3])))
-            state = f"met {day}" if day else "unresolved"
+                met = _reconcile_release_day(releases.get((cond[1].lower(), cond[2].lower(), cond[3])))
+            state = "met" if met is True else f"met {met}" if met else "unresolved"
             lines.append(f"audit {label} condition {text} {state}; not owner-authority; not an approval")
         else:
             since = _reconcile_expired_since(waiting, clock)
@@ -13967,7 +14113,7 @@ def _reconcile_extra(data, task, states, releases, clock):
     return lines
 
 
-def reconcile_rows(data, clock=None):
+def reconcile_rows(data, clock=None, base=None):
     """Rows for open cards older than a day, lowest number first. Done cards and newer cards are absent.
     A verb row may be followed by one wait audit and one quiet-claim row. Nothing here writes the board."""
     clock = clock or reconcile_clock()
@@ -13975,13 +14121,20 @@ def reconcile_rows(data, clock=None):
     chosen = [task for task in (data.get("tasks") or [])
               if isinstance(task, dict) and task.get("column") != "done" and _reconcile_older(task.get("updated"), clock)]
     by_id, prs, releases = {}, [], []
+    cards = {task.get("id"): task for task in data.get("tasks", []) if isinstance(task, dict)}
+    missing_card = False
     for task in chosen:
         found = _reconcile_prs(task)
         more, rel = _reconcile_condition_targets(task)
+        cond = wait_condition((open_waiting(task) or {}).get("until"))
+        if cond and cond[0] == "card" and cond[1] not in cards:
+            missing_card = True
         by_id[id(task)] = found
         prs.extend(found)
         prs.extend(more)
         releases.extend(rel)
+    if missing_card:
+        cards = {**archived_tasks(data, base), **cards}
     states = _reconcile_read_prs(prs)
     rel_states = _reconcile_read_releases(releases)
     chosen.sort(key=lambda task: (task.get("num") if isinstance(task.get("num"), int) and not isinstance(task.get("num"), bool) else 10 ** 12,
@@ -13989,7 +14142,7 @@ def reconcile_rows(data, clock=None):
     rows = []
     for task in chosen:
         rows.append(_line_guard(_reconcile_row(data, task, by_id[id(task)], states, questions, clock)))
-        rows.extend(_line_guard(line) for line in _reconcile_extra(data, task, states, rel_states, clock))
+        rows.extend(_line_guard(line) for line in _reconcile_extra(data, task, states, rel_states, cards, clock))
     return rows
 
 
@@ -13999,8 +14152,8 @@ def cmd_reconcile(a):
     if not getattr(a, "dry_run", False):
         sys.exit("refused: reconcile only prints a dry run in this release (pass --dry-run). "
                  "It does not close a card, clear a wait, release a claim, merge, deploy or write a rule.")
-    data, _base = load()
-    for row in reconcile_rows(data):
+    data, base = load()
+    for row in reconcile_rows(data, base=base):
         print(row)
 
 
@@ -15660,14 +15813,17 @@ def main():
     s.add_argument("id"); s.add_argument("--on", required=True, help="what or whom the card waits for (always shown)")
     s.add_argument("--who", help="a CRM person id (p_...), a board member's GitHub login or an agent name")
     s.add_argument("--nudge", help="the day to chase: YYYY-MM-DD, today or +N (default: settings.waiting_days after today)")
-    s.add_argument("--until", help="a checkable condition, not an approval: pr:<owner>/<repo>#<n>:merged, date:<YYYY-MM-DD> or release:<owner>/<repo>@<tag>")
+    s.add_argument("--until", help="a checkable condition, not an approval: pr:<owner>/<repo>#<n>:merged, card:#<n>:done, "
+                   "date:<YYYY-MM-DD> or release:<owner>/<repo>@<tag>")
     s.add_argument("--note"); s.add_argument("--session"); s.set_defaults(f=cmd_wait)
-    s = sub.add_parser("unwait", help="end a card's wait (--note why); agents only a wait they set in the same session, "
-                                      "or another agent's wait on an owner-assigned card with --owner-said")
+    s = sub.add_parser("unwait", help="end a card's wait (--note why); an agent can use wait_enders delegation, end a verified PR/card "
+                                      "wait or use --owner-said on an owner-assigned card")
     s.add_argument("id"); s.add_argument("--note", help="why the wait is over (required)"); s.add_argument("--session")
     s.add_argument("--owner-said", dest="owner_said", help="agents (kit v138): the owner's own words and when, quoted; ends a "
                    "wait another agent set on a card assigned to the owner (BOARD_USER). A person's wait stays locked")
     s.set_defaults(f=cmd_unwait)
+    s = sub.add_parser("wait-check", help="end verified agent-set PR/card waits without claiming or approving cards")
+    s.set_defaults(f=cmd_wait_check)
     s = sub.add_parser("cleared-ack", help="a person marks a card's agent-cleared flags checked, so doctor and list --attention stop showing them")
     s.add_argument("id"); s.add_argument("--note", help="what you checked"); s.set_defaults(f=cmd_cleared_ack)
     s = sub.add_parser("todo-add", help="add a checklist item; - reads one per line from stdin, all in one save")
@@ -15887,6 +16043,9 @@ def main():
     s.add_argument("--github-app-signin", dest="github_app_signin", metavar="JSON",
                    help='offer Sign in with GitHub on the web board: \'{"client_id":"Iv23...","exchange_url":"https://...workers.dev"}\' (https only; the page must also allow it)')
     s.add_argument("--clear-github-app-signin", dest="clear_github_app_signin", action="store_true", help="remove settings.github_app_signin")
+    ender_flags = s.add_mutually_exclusive_group()
+    ender_flags.add_argument("--wait-enders", metavar="NAMES", help="person only: comma-separated agents that may end any wait")
+    ender_flags.add_argument("--clear-wait-enders", action="store_true", default=None, help="person only: clear wait delegation")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,
                    help="most agent claims running at once across the board (0 = no limit); attended claims don't count")
