@@ -200,14 +200,27 @@ const commits = Array.from({ length: 20 }, (_, i) => ({ sha: (i + 1).toString(16
     await page.reload(); await page.locator('.flow-card').first().waitFor();
     assert.equal(await page.locator('#dlgCard').evaluate(d => d.open), false, 'a reload after closing does not reopen the card');
     await page.locator('[data-card="t_2"]').click(); await page.locator('#dlgCard[open]').waitFor();
+    // Make the close/history race deterministic: the drawer disappears before its Back traversal completes.
+    await page.evaluate(() => {
+      const back = history.back.bind(history);
+      history.back = () => { window.accessBackRequested = true; };
+      window.finishAccessBack = () => new Promise(resolve => {
+        window.addEventListener('popstate', () => { history.back = back; resolve(); }, { once: true });
+        back();
+      });
+    });
     boardLost = true;
     await page.clock.fastForward(31000);
     await page.waitForFunction(() => !document.querySelector('#dlgCard').open);
+    await page.waitForFunction(() => window.accessBackRequested);
     assert.equal(await page.locator('.flow-card').count(), 0);
     assert.equal(await page.locator('#cTitle').inputValue(), '', 'lost access scrubs the open drawer');
     assert.equal(counts.writes, 0, 'forced drawer close does not save');
+    assert.equal(await page.evaluate(() => history.state?.kbDlg), 'dlgCard', 'a hidden drawer alone does not establish completed navigation');
+    await page.evaluate(() => window.finishAccessBack());
+    await page.waitForFunction(() => history.state?.kbDlg !== 'dlgCard' && !new URL(location.href).searchParams.has('card') && !/^#\d/.test(location.hash));
     boardLost = false;
-    // Start the remaining projection tests on an explicit view route, independent of drawer history.
+    // A pending history.back() can cancel page.goto(); navigate only after the old drawer entry is gone.
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html?board_view=flow#view=flow`);
     await page.locator('.flow-event').first().waitFor();
     await page.selectOption('#fStatus', 'done', { force: true });
