@@ -120,7 +120,7 @@ let primaryReset = 0;
       if (p === '/contents/automation/local-runner.json') {
         counts.runner++;
         if (runnerNetwork) return route.abort('failed');
-        if (runnerSharedLimit) return json({}, runnerSharedLimit === 'primary' ? 403 : 429, { 'retry-after': '120', 'x-ratelimit-remaining': runnerSharedLimit === 'primary' ? '0' : '300', ...(runnerSharedLimit === 'primary' ? { 'x-ratelimit-reset': String(primaryReset) } : {}) });
+        if (runnerSharedLimit) return json({}, runnerSharedLimit === 'primary' ? 403 : 429, { ...(runnerSharedLimit !== 'headerless' ? { 'retry-after': '120' } : {}), 'x-ratelimit-remaining': runnerSharedLimit === 'primary' ? '0' : '300', ...(runnerSharedLimit === 'primary' ? { 'x-ratelimit-reset': String(primaryReset) } : {}) });
         if (runnerGate) { const gate = runnerGate; runnerGate = null; gate.request = req; gate.arrived(); await gate.wait; gate.released?.(); }
         if (u.searchParams.get('ref') === 'dev') return json({}, 403);
         if (req.headers().authorization === 'Bearer denied') return json({}, 403);
@@ -128,7 +128,7 @@ let primaryReset = 0;
         if (req.headers()['if-none-match'] === 'runner' + runnerVersion) { conditional++; return route.fulfill({ status: 304 }); }
         return json({ encoding: 'base64', content: Buffer.from(JSON.stringify(runner)).toString('base64') }, 200, { ETag: 'runner' + runnerVersion });
       }
-      if (p === '/commits') { counts.commits++; if (commitsNetwork) return route.abort('failed'); if (commitsLimited) return json({}, 429, { 'retry-after': '120', 'x-ratelimit-remaining': '300' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
+      if (p === '/commits') { counts.commits++; if (commitsNetwork) return route.abort('failed'); if (commitsLimited) return json({}, 429, { ...(commitsLimited !== 'headerless' ? { 'retry-after': '120' } : {}), 'x-ratelimit-remaining': '300' }); if (commitsLost) return json({}, 404); if (u.searchParams.get('sha') === 'dev' || req.headers().authorization === 'Bearer denied') return json({}, 403); assert.equal(u.searchParams.get('path'), rootBoard ? 'tasks.json' : 'board/tasks.json'); assert.equal(u.searchParams.get('sha'), 'main'); return json(commits, 200, { ETag: 'commits1' }); }
       return json({}, 404);
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/board/index.html`);
@@ -191,7 +191,7 @@ let primaryReset = 0;
     const refreshed = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 304);
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); });
     await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Maintenance'));
-    await refreshed; assert.ok(counts.board > hidden.board); assert.ok(conditional > 0);
+    await refreshed; await page.clock.runFor(100); assert.ok(counts.board > hidden.board); assert.ok(conditional > 0);
     // An unchanged board and metadata refresh keeps the exact same graph DOM.
     assert.ok(await page.evaluate(() => window.flowGraph === document.querySelector('.flow-canvas')));
     assert.notEqual(await page.locator('.flow-event .hint').first().textContent(), oldAge);
@@ -226,7 +226,7 @@ let primaryReset = 0;
     assert.ok(await page.evaluate(() => window.rateCanvas === document.querySelector('.flow-canvas')), 'transient network failures preserve the loaded graph');
     boardNetwork = false;
     const recoveredBoard = page.waitForResponse(r => r.url().includes('/contents/board/tasks.json') && [200, 304].includes(r.status()));
-    await page.clock.fastForward(31000); await (await recoveredBoard).finished(); await page.clock.runFor(100);
+    await page.clock.fastForward(31000); await recoveredBoard; await page.clock.runFor(100);
     await page.waitForFunction(() => document.querySelector('#status')?.textContent.includes('Synced'));
     commitsLimited = true;
     const limitedResponse = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 429);
@@ -241,7 +241,7 @@ let primaryReset = 0;
     assert.equal(counts.commits, limitedCount, 'Retry-After prevents metadata retries for 120 seconds');
     assert.equal(counts.runner, independentRunnerCount, 'secondary rate-limit Retry-After also pauses runner status despite remaining primary quota');
     commitsLimited = false; await page.clock.fastForward(91000);
-    await page.waitForFunction(() => !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-feed').textContent.includes('Could not refresh'));
     // The Done button overrides the existing Hide Done switch.
     await page.getByRole('button', { name: 'Collapse Done', exact: true }).click();
     await page.selectOption('#fStatus', '__open', { force: true });
@@ -417,7 +417,7 @@ let primaryReset = 0;
     assert.equal(await page.locator('.flow-event').count(), 20);
     runnerNetwork = commitsNetwork = false;
     await page.clock.fastForward(181000);
-    await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh') && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-status')?.textContent.includes('Could not refresh') && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
     // Ordinary activity network failures back off without stopping the healthy runner endpoint.
     commitsNetwork = true;
     for (let i = 0; i < 2; i++) {
@@ -431,7 +431,7 @@ let primaryReset = 0;
     assert.ok(counts.runner > activityBackoff.runner, 'healthy runner reads continue during activity network backoff');
     commitsNetwork = false;
     await page.clock.fastForward(181000);
-    await page.waitForFunction(() => !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
     // Persistent runner failures must not inherit the activity endpoint's schedule.
     runnerNetwork = true;
     const runnerBeforeFailures = counts.runner;
@@ -444,15 +444,17 @@ let primaryReset = 0;
     assert.ok(counts.runner - runnerBeforeFailures < 6, 'the failing runner endpoint independently backs off');
     runnerNetwork = false;
     await page.clock.fastForward(301000);
-    await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+    await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     // An exhausted shared quota still pauses both optional endpoints until its retry deadline.
-    for (const limit of ['primary', 'secondary']) {
+    for (const limit of ['primary', 'secondary', 'headerless']) {
       primaryReset = Math.floor((await page.evaluate(() => Date.now()) + 301000) / 1000);
       runnerSharedLimit = limit;
+      const limitedRunner = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === (limit === 'primary' ? 403 : 429));
       await page.clock.fastForward(61000);
+      await (await limitedRunner).finished(); await page.clock.runFor(100);
       await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
       const sharedCounts = { ...counts };
-      await page.clock.fastForward(61000); await page.clock.runFor(100);
+      await page.clock.fastForward(limit === 'headerless' ? 31000 : 61000); await page.clock.runFor(100);
       assert.equal(counts.runner, sharedCounts.runner);
       assert.equal(counts.commits, sharedCounts.commits, limit + ' GitHub rate limit pauses activity too');
       runnerSharedLimit = false;
@@ -463,8 +465,17 @@ let primaryReset = 0;
         assert.equal(counts.commits, sharedCounts.commits);
         await page.clock.fastForward(121000);
       }
-      await page.waitForFunction(() => !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
+      await page.waitForFunction(() => document.querySelector('.flow-status')?.textContent.includes('Keep this last runner copy') && !document.querySelector('.flow-status')?.textContent.includes('Could not refresh'));
     }
+    commitsLimited = 'headerless';
+    const headerlessCommit = page.waitForResponse(r => r.url().includes('/commits?') && r.status() === 429);
+    await page.clock.fastForward(61000); await (await headerlessCommit).finished(); await page.clock.runFor(100);
+    const headerlessCounts = { ...counts };
+    await page.clock.fastForward(31000); await page.clock.runFor(100);
+    assert.equal(counts.runner, headerlessCounts.runner, 'a headerless activity 429 shares its fallback cooldown with runner reads');
+    assert.equal(counts.commits, headerlessCounts.commits);
+    commitsLimited = false; await page.clock.fastForward(61000);
+    await page.waitForFunction(() => document.querySelectorAll('.flow-event').length === 20 && !document.querySelector('.flow-feed')?.textContent.includes('Could not refresh'));
     assert.deepEqual(errors, []);
     console.log('flow: 114-card UI, 12,000-card chain, filtered cycles, credentials, public quota, polling, alerts, runner status and screenshots passed');
   } finally { await browser.close(); server.close(); }
