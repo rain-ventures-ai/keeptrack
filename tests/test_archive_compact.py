@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'board', 'kit'))
 sys.path.insert(0, os.path.dirname(__file__))
 import keeptrack as k
@@ -66,14 +67,24 @@ class CompactCard(unittest.TestCase):
         self.assertEqual(list(cur['history']), ['t_live'])
         self.assertEqual(cur['tasks'][0]['compacted']['history_dropped'], 7)
 
-    def test_a_held_back_card_stays_whole_on_the_board(self):
+    def test_compaction_works_on_the_archive_copy_and_a_held_back_card_stays_whole(self):
         data = {'version': 3, 'tasks': [], 'contacts': [], 'archive': {'files': {}}}
         card = full_card()
         plan = {'2020': {'tasks': [card], 'contacts': [], 'proposals': [], 'history': {}}}
-        held, _, files = k.archive_check_sizes(data, plan, None, keep_comments=3)
+        with mock.patch.object(k, 'read_archive', return_value=(None, None)):
+            held, _, files = k.archive_check_sizes(data, plan, None, keep_comments=3)
         self.assertEqual(held, [])
         self.assertIn('history', card, 'compaction works on the archive copy, never the board card')
         self.assertNotIn('history', files['2020'][0]['tasks'][0])
+        full = {'version': 3, 'archive': True, 'year': '2020', 'tasks': [], 'contacts': [], 'history': {},
+                'pad': 'x' * (k.ARCHIVE_FILE_MAX + 1000)}
+        data = {'version': 3, 'tasks': [], 'contacts': [], 'archive': {'files': {'2020': {}}}}
+        card = full_card()
+        plan = {'2020': {'tasks': [card], 'contacts': [], 'proposals': [], 'history': {}}}
+        with mock.patch.object(k, 'read_archive', side_effect=lambda *a: (k.ArchiveRead(copy.deepcopy(full), None), None)):
+            held, _, files = k.archive_check_sizes(data, plan, None, keep_comments=3)
+        self.assertEqual(len(held), 1)
+        self.assertEqual(data['tasks'], [full_card()], 'the held card is back on the board, whole')
 
     def test_settings_turn_it_off_and_set_n(self):
         self.assertTrue(k.archive_compact_on({}))
