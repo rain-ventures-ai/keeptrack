@@ -219,7 +219,12 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       }
       const page = await openBoard(browser, api, []);
       const drawer = page.locator('#dlgCard'), usage = page.locator('#cRunUsage'), lastRun = page.locator('#cLastRun');
-      await page.evaluate(() => { location.hash = '#2'; }); await usage.waitFor();
+      async function openCard(id) {
+        const { num, title } = api.card(id);
+        await page.goto(`${base}/board/index.html?card=${id}#${num}`);
+        await page.waitForFunction(t => document.getElementById('cTitle').value === t, title);
+      }
+      await openCard('t_two'); await usage.waitFor();
       assert.equal(await page.locator('#cTitle').isDisabled(), true);
       assert.equal(await page.locator('#cClaimWrap').isVisible(), true);
       assert.equal(await lastRun.textContent(), 'Last run usage: Codex · 500 fresh input + 40 output tokens');
@@ -236,19 +241,16 @@ const LIMIT_MSG = /^2 agent runs already going \(#2, #3\); the board's limit is 
       }
       await page.setViewportSize({ width: 390, height: 844 });
       assert.equal(await drawer.locator('#cBody').evaluate(body => body.scrollWidth === body.clientWidth), true);
-      await page.evaluate(() => { location.hash = '#6'; });
-      await page.waitForFunction(() => document.getElementById('cTitle').value === 'Sixth');
+      await openCard('t_six');
       assert.match(await lastRun.textContent(), /Last run: claude/);
       assert.equal(await usage.textContent(), 'Last run usage: Claude · 2K fresh input + 0 output tokens');
       if (SHOTS) await drawer.screenshot({ path: path.join(SHOTS, 'run-usage-finished.png') });
-      await page.evaluate(() => { location.hash = '#1'; });
-      await page.waitForFunction(() => document.getElementById('cTitle').value === 'First');
+      await openCard('t_one');
       assert.equal(await usage.count(), 0);
       assert.equal(await lastRun.isVisible(), false);
       if (SHOTS) await drawer.screenshot({ path: path.join(SHOTS, 'run-usage-empty.png') });
-      for (const [num, title] of [[3, 'Third'], [5, 'Fifth']]) {
-        await page.evaluate(n => { location.hash = '#' + n; }, num);
-        await page.waitForFunction(t => document.getElementById('cTitle').value === t, title);
+      for (const id of ['t_three', 't_five']) {
+        await openCard(id);
         assert.equal(await usage.count(), 0);
       }
       assert.equal(api.writes, 0, 'rendering recorded usage saves nothing');
