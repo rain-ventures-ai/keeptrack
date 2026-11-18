@@ -549,10 +549,14 @@ def admit(kt, work, args):
 def boxed_request(work, spec, answer):
     """The runner's entire request is derived from the exact signed research projection."""
     task = spec["task"]
+    if any(todo.get("done") is not False for todo in task["todos"]):
+        fail("boxed research requires an entirely unfinished signed checklist")
     details = task["details"]
     links = [link["url"] for link in task["links"]]
     if links:
         details = (details + "\n\n" if details else "") + "Sources:\n" + "\n".join(links)
+    if len(details) > 2000:
+        fail("signed research text plus source links exceeds the runner details limit")
     value = {"request_id": "button:" + answer, "title": task["title"], "project": task["project"],
              "details": details, "todos": [todo["text"] for todo in task["todos"]]}
     checked = work.payload(value)
@@ -563,11 +567,8 @@ def boxed_request(work, spec, answer):
 
 def box_handoff(kt, work, args):
     """Signed owner-only creation and approval in one CAS; never reapprove an existing identity."""
-    data, _ = kt.load()
-    source = kt.find(data, args.id)
-    initial = boxed_request(work, scope(data, source), args.answer)
-    def prepare(current, runner):
-        # work.request reruns this on each fresh mutation snapshot, never three-way-merges approval.
+    def derive(current):
+        # work.request derives inside each fresh mutation snapshot, after stable-identity lookup.
         source = kt.find(current, args.id)
         prop, content_hash = approved(kt, current, source, args.approval, args.answer, args.policy_digest)
         p = policy(current, args.policy_digest)
@@ -583,20 +584,28 @@ def box_handoff(kt, work, args):
         if source.get("column") != "backlog" or source.get("claim") or kt.open_waiting(source) or \
                 any(work.unresolved(run) for run in co.get("runs", [])):
             fail("only an unclaimed, unblocked Backlog research request may be handed off")
+        return boxed_request(work, scope(current, source), args.answer)
+    def prepare(current, runner):
+        source = kt.find(current, args.id)
         spec = scope(current, source)
-        if boxed_request(work, spec, args.answer) != initial:
-            fail("signed research request changed during handoff")
         after = spec["task"]["after"]
         if len(after) != len(set(after)) or runner["id"] in after:
             fail("unsupported research dependencies")
         runner["after"] = copy.deepcopy(after)
-        runner["assignees"] = [p["owner"]]
-        work.coordinate(runner)["boxed_approval"] = {"source": source["id"], "answer_id": args.answer,
-            "content_hash": content_hash, "after": copy.deepcopy(after)}
+        runner["assignees"] = [spec["owner"]]
+        work.coordinate(runner)["boxed_approval"] = {"source": source["id"], "approval_id": args.approval, "answer_id": args.answer,
+            "content_hash": digest(spec), "after": copy.deepcopy(after)}
         kt.move_task_to_column(current, runner, "todo")
         kt.hist(runner, "Owner-signed research snapshot handed to the no-network box")
+        prop = kt.find_proposal(current, args.approval)
         prop["decision"]["done"] = {"at": kt.now(), "by": kt.who_am_i(), "acted": True, "boxed_handoff": runner["id"]}
-    return work.request(kt, initial, prepare_new=prepare)
+    def existing(runner):
+        binding = (runner.get("coordination") or {}).get("boxed_approval") or {}
+        if any(binding.get(key) != value for key, value in {"source": args.id, "approval_id": args.approval,
+                "answer_id": args.answer}.items()):
+            fail("existing runner identity belongs to another signed handoff")
+    return work.request(kt, request_key="button:" + args.answer, derive=derive, prepare_new=prepare,
+                        validate_existing=existing)
 
 
 def verify(kt, data, task, private, expected_policy):

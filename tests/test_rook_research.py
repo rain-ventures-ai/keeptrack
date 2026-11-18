@@ -63,10 +63,14 @@ class ResearchTests(unittest.TestCase):
         self.research.issue_owner_action(action, key, expected, kt.now(), 300)
         self.invoke("research-admit", owner_action_receipt=str(action), owner_action_key=str(key))
 
-    def signed_box(self, after=None):
+    def signed_box(self, after=None, todos=None, details=None):
         self.ready()
         data = self.read(); source = data["tasks"][0]
         source["after"] = after or []
+        if todos is not None:
+            source["todos"] = todos
+        if details is not None:
+            source["details"] = details
         # Refresh the exact proposal after adding the signed dependencies.
         proposal = self.research.proposal_input(data, source)
         proposal.update(id=self.prop_id, status="answered", decision={"action": "answer", "id": self.answer_id,
@@ -149,6 +153,36 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(result["column"], "done")
         self.assertEqual(cas["data"]["tasks"][-1]["outcome"], "cancelled")
         self.assertEqual(cas["calls"], 1)
+
+    def test_box_handoff_replay_after_source_edit_returns_bound_cancelled_runner(self):
+        kwargs = self.signed_box()
+        result = self.invoke("research-box-handoff", **kwargs)
+        data = self.read()
+        source = next(t for t in data["tasks"] if t["id"] == self.tid)
+        source.update(title="A different title", details="Changed source", after=["t_other1"])
+        runner = next(t for t in data["tasks"] if t["id"] == result["id"])
+        runner.update(column="done", outcome="cancelled")
+        self.write(data); before = self.read()
+        replay = self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual((replay["id"], replay["column"], replay["created"]), (runner["id"], "done", False))
+        self.assertEqual(self.read(), before)
+        self.tid = "t_other1"
+        with self.assertRaisesRegex(SystemExit, "another signed handoff"):
+            self.invoke("research-box-handoff", **kwargs)
+
+    def test_box_handoff_refuses_precompleted_signed_todos(self):
+        kwargs = self.signed_box(todos=[{"text": "Already complete", "done": True}])
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "unfinished signed checklist"):
+            self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual(self.read(), before)
+
+    def test_box_handoff_explains_combined_details_and_source_link_limit(self):
+        kwargs = self.signed_box(details="x" * 1990)
+        before = self.read()
+        with self.assertRaisesRegex(SystemExit, "text plus source links exceeds"):
+            self.invoke("research-box-handoff", **kwargs)
+        self.assertEqual(self.read(), before)
 
     def test_atomic_start_rechecks_a_lost_github_cas_without_an_orphan_claim(self):
         self.signed_admit()
