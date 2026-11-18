@@ -233,7 +233,7 @@ def view(kt, task, *, data=None, archived=False):
             "next": next_step, "coordination": co, "runner_liveness": "unknown", "authority_granted": False}
 
 
-def request(kt, value):
+def request(kt, value, *, prepare_new=None):
     value = payload(value)
     safe_content(kt, value)
     tid = "t_" + digest(["rook-work", value["request_id"]])[:20]
@@ -293,6 +293,8 @@ def request(kt, value):
         kt.append_priority_rank(data, task)
         kt.hist(task, "Rook request saved; awaiting explicit approval")
         data.setdefault("tasks", []).append(task)
+        if prepare_new is not None:
+            prepare_new(data, task)
         kt.assign_nums(data)
         marks = kt.mark_similar(data, task)
         answer.update(view(kt, task, data=data), created=True, possible_related=marks)
