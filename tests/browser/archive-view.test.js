@@ -109,7 +109,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
     // ---- desktop: the tab, a loading state while the files load, newest archived first, filters, count, open and Put back ----
     { const api = new Github();
       const page = await open(browser, api);
-      assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="tasks"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['board', 'mentions', 'list', 'cal', 'sched', 'activity', 'archive'], 'Archive is the last tab of the Tasks group');
+      assert.deepEqual(await page.locator('#viewSw > .viewgroup[data-grp="tasks"] button').evaluateAll(xs => xs.map(x => x.dataset.view)), ['board', 'mentions', 'flow', 'list', 'cal', 'sched', 'activity', 'archive'], 'Archive is the last tab of the Tasks group');
       assert.equal(await page.locator('#viewSw button[data-view="archive"]').getAttribute('aria-selected'), 'true');
       await page.locator('.archrow').first().waitFor();
       assert.deepEqual(await nums(page), ['#22', '#21', '#20', '#11', '#10'], 'newest archived first: 2026 before 2025, the last archived of a year first');
@@ -243,7 +243,7 @@ async function pick(page, key, label) { await page.locator(`select[data-arch-fil
 
     // ---- phone (760px breakpoint): the dock's Tasks strip has Archive; filters wrap; nothing scrolls sideways ----
     { const api = new Github(), page = await open(browser, api, { viewport: { width: 390, height: 844 }, layout: 'dock' });
-      assert.deepEqual(await page.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', '@Mentions', 'List', 'Calendar', 'Schedule', 'Activity', 'Archive']);
+      assert.deepEqual(await page.locator('#subnav [role="tab"]').allTextContents(), ['Kanban', '@Mentions', 'Flow', 'List', 'Calendar', 'Schedule', 'Activity', 'Archive']);
       await page.locator('.archrow').first().waitFor(); assert.equal(await fits(page), true, 'no sideways scroll'); await shot(page, 'archive-view-390');
       const boxes = await page.locator('.archbar > *').evaluateAll(xs => xs.map(x => { const r = x.getBoundingClientRect(); return [r.left, r.right]; }));
       assert.ok(boxes.every(([l, r]) => l >= 0 && r <= 390), 'every control of the bar is on screen: ' + JSON.stringify(boxes));

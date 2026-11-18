@@ -15,11 +15,23 @@ Ranking is board-wide even when a list is filtered; status and Kanban ranks are 
 
 If you selected **Tasks** when you made your board, you also have these views. They are under **Tasks** in the view bar (the people views are under **People**):
 - **Kanban:** columns (Backlog, To do, In progress, Done). Drag cards between columns. Click or tap a card to open it, or focus it and press Enter or Space. Inline controls still work without opening the card. Each card shows compact **Created** and **Active** ages; activity includes edits, comments, history and agent runs. Hover a relative time for its exact date and time.
+- **Flow:** dependency chains run from left to right: a card waits on the boxes to its left. Running cards show their engine, heartbeat age and stale or blocked state. Cards without dependency links have their own lanes by column. Done is collapsed until you choose **Show Done**. Use the existing project and label filters to focus a large board; dependencies outside those filters stay named on the card. Click a box to open it. Flow refreshes every 30 seconds while visible and catches up when you return to the tab. On GitHub boards, a side feed shows the last 20 commits affecting this board's task files, and the runner strip reads optional status from `automation/local-runner.json`. Without that file it says **No runner status yet**. Hosted and demo boards show the graph without GitHub metadata.
 - **List:** the same tasks grouped by column. The tick box selects the row. With rows selected, a bar offers **Move to…** (a column), **Mark done**, **Copy IDs** (for example `#150 #96`) and **Clear selection**. The description sits under the title, as plain text (markdown marks and line breaks are joined) on two lines. **Activity** is how long since the newest edit, comment or history entry (`3d ago`). A task with nothing for 14 days is marked so it is easy to spot. On a phone that time sits under the description.
 - **Calendar** and **Schedule:** the same tasks by due date and by week. Schedule uses the same square to mark a task done.
 - **Activity:** what was done today, yesterday or on a day that you select, by you and your agents. **📋 Copy** gives it as Markdown.
 - **Archive:** the cards that were archived, by archive year (newest year first), with search and filters. Open one to read it or put it back on the board. See [Search and archive](search-and-archive.md).
 - **@Mentions:** every comment that mentions you (`@your-github-username`), newest first, with the task, its description and the comment. A mention on a project opens that project. A reply says who it is replying to. Your own comments are not shown. **New** means posted since you last opened that task or project. Click a row to open it at that comment. Today shows an **@Mentions** tile when you have mentions. The filters apply to task mentions.
+
+Flow's runner status and commit feed require a GitHub token. Anonymous public boards keep their two-minute refresh
+and do not fetch that metadata. An absent runner file is checked again after five minutes. Existing background
+alerts, if you enabled them, continue to check the board while Flow's metadata polling pauses in hidden tabs.
+Flow draws up to 500 matching cards per page. Use project or label filters, or **Next 500** and **Previous 500**, for larger boards.
+It draws up to 1,500 arrows. Boards with more than 10,000 dependency links show card summaries instead; open a card
+to inspect its complete dependency list.
+Activity reads this board's JSON file and, for split boards, its cards folder. A single-file board at the repository root uses its JSON file only; a split board there also includes `cards/`.
+Activity refreshes once a minute. GitHub commit subjects and links describe the complete commit, including any other files it changed.
+The runner strip is repository-wide, from `automation/local-runner.json`. Boards in the same GitHub repository share repository access;
+the board selector provides a view of that data rather than a separate permission boundary.
 
 Open a task to edit its properties. Status and priority share a compact row, as do its due date and **Waiting for**.
 People, labels and **Client & project** use the full width. The client name opens the company, the project name opens the project, and **Edit** opens the picker. The picker filters projects after you choose a client and keeps long names readable on a phone.

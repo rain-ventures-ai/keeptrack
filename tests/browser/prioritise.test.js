@@ -78,11 +78,18 @@ let base;
     await page.locator('#listPrioritise').waitFor();
     // Client and all selected filter controls are bookmarkable, including an explicit
     // clear snapshot. Reloads/asset upgrades and browser history restore the same scope.
-    await page.locator('.cpill').filter({ hasText: 'Acme' }).click({ position: { x: 25, y: 15 } });
+    await page.locator('#fClient').selectOption('Acme', { force: true });
     await page.waitForFunction(() => new URL(location.href).searchParams.get('client') === 'Acme');
     await page.reload();
     await page.waitForFunction(() => document.getElementById('fClient').selectedOptions[0]?.value === 'Acme');
-    assert.equal(await page.locator('.cpill.on').first().textContent().then(s => s.includes('Acme')), true);
+    // The active client may move into overflow as task views and font metrics take header space.
+    if (await page.locator('.cpill.on').filter({ hasText: 'Acme' }).count()) {
+      assert.equal(await page.locator('.cpill.on').filter({ hasText: 'Acme' }).getAttribute('aria-pressed'), 'true');
+    } else {
+      await page.locator('.cpill.more').click();
+      assert.equal(await page.locator('.cmenu[data-client="Acme"]').getAttribute('aria-pressed'), 'true');
+      await page.keyboard.press('Escape');
+    }
     await page.locator('#listStatus').selectOption('__open');
     await page.waitForFunction(() => new URL(location.href).searchParams.get('status') === '__open');
     await page.goBack();

@@ -906,7 +906,7 @@ if (typeof window !== 'undefined') (() => {
   async function githubApi(method, endpoint, body, opt = {}, over) {
     if (HOSTED) throw new Error('capability_unavailable: GitHub API is disabled in hosted mode');
     const c = over || cfg();
-    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
+    return fetch(`${c.api}/repos/${c.repo}${endpoint}`, { method, cache: 'no-store', signal: opt.signal || ghSignal(method), body: body == null ? undefined : JSON.stringify(body),
       headers: { ...(c.token ? { Authorization: `Bearer ${c.token}` } : {}), Accept: opt.accept || 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28',
         ...(body == null ? {} : { 'Content-Type': 'application/json' }), ...(opt.etag ? { 'If-None-Match': opt.etag } : {}) } });
   }
@@ -928,6 +928,8 @@ if (typeof window !== 'undefined') (() => {
   const storage = () => HOSTED ? hostedStorage : githubStorage;
   async function gh(...args) { return storage().contents(...args); }
   async function ghApi(...args) { return storage().api(...args); }
+  const githubRateLimited = r => r.status === 429 || (r.status === 403 && (r.headers.get('x-ratelimit-remaining') === '0' || r.headers.has('retry-after')));
+  const githubReadError = (r, message) => Object.assign(new Error(message), { status: r.status, limited: githubRateLimited(r) });
   async function splitSnapshot(...args) { return storage().snapshot(...args); }
   async function save(...args) { return HOSTED ? hostedSave(...args) : storage().commit(...args); }
 
@@ -1044,7 +1046,7 @@ if (typeof window !== 'undefined') (() => {
     const key = `kb_blob:${at.repo}:${item.sha}`;
     let text = await idb.get(key);
     if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while reading a blob.');
-    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`, null, {}, at); if (!r.ok) throw new Error(`GitHub error ${r.status} reading ${item.path}`);
+    if (typeof text !== 'string') { const r = await ghApi('GET', `/git/blobs/${item.sha}`, null, {}, at); if (!r.ok) throw githubReadError(r, `GitHub error ${r.status} reading ${item.path}`);
       const d = await r.json(); text = d.encoding === 'base64' ? b64d(d.content || '') : d.content || '';
       if (!sameArchiveBoard(at, gen)) throw new Error('The board changed while reading a blob.');
       await idb.set(key, text); }
@@ -1092,15 +1094,15 @@ if (typeof window !== 'undefined') (() => {
     const c = Object.assign({}, cfg()), gen = archGen, ref = encodeURIComponent(c.branch), sameBoard = splitMeta && splitMeta.key === `${c.repo}:${c.branch}:${c.path}`;
     const rr = await ghApi('GET', `/git/ref/heads/${ref}`, null, !force && sameBoard && splitMeta.headEtag ? { etag: splitMeta.headEtag } : {});
     if (rr.status === 304 && sameBoard) return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta };
-    if (!rr.ok) throw new Error(`GitHub error ${rr.status} reading branch`);
+    if (!rr.ok) throw githubReadError(rr, `GitHub error ${rr.status} reading branch`);
     const rd = await rr.json(), head = rd.object.sha, headEtag = rr.headers.get('ETag');
     if (sameBoard && head === splitMeta.head) { splitMeta.headEtag = headEtag || splitMeta.headEtag; return { unchanged: true, data: model ? modelFromSplit(splitMeta.files) : null, meta: splitMeta }; }
-    const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw new Error(`GitHub error ${cr.status} reading commit`);
+    const cr = await ghApi('GET', `/git/commits/${head}`); if (!cr.ok) throw githubReadError(cr, `GitHub error ${cr.status} reading commit`);
     let tree = (await cr.json()).tree.sha, rootTree = tree;
     const p = c.path, slash = p.lastIndexOf('/'), parts = (slash < 0 ? '' : p.slice(0, slash)).split('/').filter(Boolean);
-    for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board folder`);
+    for (const part of parts) { const tr = await ghApi('GET', `/git/trees/${tree}`); if (!tr.ok) throw githubReadError(tr, `GitHub error ${tr.status} reading board folder`);
       tree = ((await tr.json()).tree || []).find(x => x.type === 'tree' && x.path === part)?.sha; if (!tree) throw new Error(`cannot read ${c.path}`); }
-    const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw new Error(`GitHub error ${tr.status} reading board files`);
+    const tr = await ghApi('GET', `/git/trees/${tree}?recursive=1`); if (!tr.ok) throw githubReadError(tr, `GitHub error ${tr.status} reading board files`);
     const td = await tr.json(); if (td.truncated) throw new Error('The board file list was too large for GitHub.');
     const listed = (td.tree || []).filter(x => x.type === 'blob' && wantedRel(x.path)), byPath = new Map(listed.map(x => [x.path, x]));
     const old = sameBoard ? splitMeta.files : new Map(), files = new Map(), changed = listed.filter(x => !x.path.startsWith('archive/') && (!old.has(x.path) || old.get(x.path).sha !== x.sha));
@@ -1178,7 +1180,7 @@ if (typeof window !== 'undefined') (() => {
   }
   let SETUP = new URLSearchParams(location.search).has('setup');
   // A successful load ends archHold (Settings switched branch or path): the board in state is now the one cfg() names.
-  async function load(quiet, first) { const ok = await loadBoard(quiet, first); if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } return ok; }
+  async function load(quiet, first) { const at = { ...cfg() }, ok = await loadBoard(quiet, first); if (ok && flowKey(at) === flowKey(cfg()) && at.token === cfg().token) { const changed = flowBoardScope !== flowKey(at) || flowBoardToken !== at.token; flowBoardScope = flowKey(at); flowBoardToken = at.token; if (changed && view === 'flow') render(); } if (ok && archHold) { archHold = 0; if (view === 'archive' || (view === 'people' && peopleArchived)) render(); } if (ok && view === 'flow' && !document.hidden) refreshFlow(); return ok; }
   async function loadBoard(quiet, first) {
     if (HOSTED) return hostedLoad(quiet);
     const c = cfg(), gen = ++loadGen, stale = () => gen !== loadGen || busy;   // a save or "Forget token" since this load started wins
@@ -1211,8 +1213,9 @@ if (typeof window !== 'undefined') (() => {
       const res = first || await gh('GET', null, !!quiet);   // background polls are conditional: a 304 is free and does not count against the rate limit
       if (stale()) return false;
       if (res.status === 304) { setStatus('Synced ' + new Date().toLocaleTimeString() + ' (no changes)', 'ok'); const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); return true; }
-      if (res.status === 404) { await diagnose404(); return false; }
-      if (res.status === 401 || res.status === 403) { lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
+      if (githubRateLimited(res)) { setStatus('GitHub rate limit · showing the last loaded board', 'err'); return false; }
+      if (res.status === 404) { resetFlowMeta(true); await diagnose404(); return false; }
+      if (res.status === 401 || res.status === 403) { resetFlowMeta(true); lastProblem = `Loading the board: GitHub said ${res.status} (token rejected or no access)`; setStatus('Token rejected or lacks access', 'err'); return false; }
       if (!res.ok) { lastProblem = `Loading the board: GitHub error ${res.status}`; setStatus(`GitHub error ${res.status}`, 'err'); return false; }
       const { d: data, raw: raw0 } = await fileJson(res); if (stale()) return false; sha = data.sha; boardSize = data.size || 0; etag = res.headers.get('ETag'); let raw = raw0;
       fileDemo = !!raw.demo_base;
@@ -1224,7 +1227,7 @@ if (typeof window !== 'undefined') (() => {
       fromSnap = false; if (c.token && ro !== 'demo') snapSave(c, raw); sizeBar(); if (fileDemo) { await loadWidgets(c, stale); if (stale()) return false; }   // demo files keep their loading order
       setStatus('Synced ' + new Date().toLocaleTimeString(), 'ok'); render(); setTimeout(() => { if (!stale()) restoreBoardContext(); }, 30);
       if (!fileDemo) { const widgetChanged = await loadWidgets(c, stale); if (stale()) return false; if (widgetChanged) render(); } return true;
-    } catch (e) { if (stale()) return false; console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error', 'err'); return false; }
+    } catch (e) { if (stale()) return false; if (e?.limited) { setStatus('GitHub rate limit · showing the last loaded board', 'err'); return false; } if ([401, 403, 404].includes(e?.status)) resetFlowMeta(true); console.error(e); lastProblem = 'Loading the board: ' + (e && e.message || e); setStatus('Network or parse error · showing the last loaded board', 'err'); return false; }
   }
 
   // ---- a public board repo means anyone can read every card: warn loudly on every page load ----------
@@ -2584,12 +2587,16 @@ if (typeof window !== 'undefined') (() => {
     applyModes(); syncInboxButton(); syncPrsButton(); $('btnAutos').classList.toggle('on', view === 'automations'); renderRelayBar(); document.body.dataset.view = view; syncViewSw(); refreshContact(); if ($('dlgSettings').open && !$('colList').contains(document.activeElement)) renderColumnsBox(); if ($('dlgSettings').open && !$('memBox').contains(document.activeElement)) renderMembersBox(); if ($('dlgSettings').open) syncDocsHome(undefined, !!$('secDocsHome')?.contains(document.activeElement));
     if (view !== 'board') {
       const listPos = listPosition();
+      const flowScroll = Object.fromEntries(view === 'flow' ? [...$('board').querySelectorAll('.flow-graph-scroll, .flow-lanes')].map(n => [n.className, [n.scrollLeft, n.scrollTop]]) : []);
+      const flowFocus = view === 'flow' ? document.activeElement?.dataset.card : null;
       const reviewPosition = view === 'today' && $('board').querySelector('.treview') ? todayReviewPosition() : null;
       cinemaCol = ''; document.body.classList.remove('cinema');
       const board = $('board'), st = board.scrollTop; board.className = 'v-' + view; board.textContent = '';
-      ({ list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, archive: renderArchiveView, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
+      ({ flow: renderFlow, list: renderList, cal: renderCal, sched: renderSched, activity: renderActivity, mentions: renderMentions, today: renderToday, people: renderPeopleView, companies: renderCompaniesView, pipeline: renderPipeline, archive: renderArchiveView, inbox: renderInbox, automations: renderAutomationsPage })[view](); board.scrollTop = st; renderLegend(); renderGoalBar(); renderStats();
       if (reviewPosition) restoreTodayReviewPosition(reviewPosition);
       if (listPos) restoreListPosition(listPos);
+      $('board').querySelectorAll('.flow-graph-scroll, .flow-lanes').forEach(n => { const pos = flowScroll[n.className]; if (pos) { n.scrollLeft = pos[0]; n.scrollTop = pos[1]; } });
+      if (flowFocus) [...$('board').querySelectorAll('.flow-card')].find(n => n.dataset.card === flowFocus)?.focus({ preventScroll: true });
       if ($('dlgCard').open) refreshDrawer(); return;
     }
     const board = $('board');
@@ -2625,6 +2632,269 @@ if (typeof window !== 'undefined') (() => {
     });
     if (refocus) { const [inp, d] = refocus; inp.focus({ preventScroll: true }); try { inp.setSelectionRange(d.start, d.end); } catch {} }
     renderLegend(); renderGoalBar(); renderStats(); renderTabs(); if ($('dlgCard').open) refreshDrawer(); layoutCinemaCards(); restoreBoardScroll(scroll);
+  }
+
+  // ---- Flow: a read-only projection of the board. Rendering never starts network requests. ----
+  let flowDone = false, flowMeta = { key: '', checked: 0 }, flowRequest = null, flowAuth = '', flowGraphCache = null, flowCanvasCache = null, flowCardCache = new Map(), flowCardScope = '', flowCardAuth = '', flowPage = 0, flowPageKey = '', flowBoardScope = '', flowBoardToken = '';
+  const flowKey = c => `${c.api}:${c.repo}:${c.branch}:${c.path}`;
+  const flowCurrentMeta = () => { const c = cfg(); return c.token && flowAuth === c.token && flowMeta.key === flowKey(c) ? flowMeta : {}; };
+  function resetFlowMeta(clearBoard = false) {
+    flowMeta = { key: '', checked: 0 }; flowAuth = ''; flowRequest = null;
+    if (clearBoard) { flowBoardScope = ''; flowBoardToken = ''; flowGraphCache = null; flowCanvasCache = null; flowCardCache = new Map(); if (view === 'flow') { $('board').querySelector('.flow-content')?.remove(); discardFlowCard(); } }
+    if (view === 'flow') { $('board').querySelector('.flow-status')?.replaceWith(flowStatus({})); $('board').querySelector('.flow-feed')?.replaceWith(flowFeed({})); }
+  }
+  function discardFlowCard() {
+    if (!$('dlgCard').open) return;
+    // A forced close must not auto-save old edits through the newly selected connection.
+    editing = null; commentsFor = null; editingDesc = false; activeDraft = { title: false, details: false };
+    $('dlgCard').close();
+    fillDrawer({ id: '', num: 0, title: '', details: '', column: '', priority: 'medium', due: '', goal: '', client: '', project: '', assignees: [], labels: [], todos: [], links: [], contacts: [], comments: [], history: [], after: [], related: [], claim: null }, true);
+    $('dlgCard').querySelectorAll('input, textarea').forEach(n => { n.value = ''; });
+    ['cTodos', 'cmStream', 'cmCount', 'dSaved', 'dCreated'].forEach(id => { $(id).textContent = ''; });
+    $('cLastRun').removeAttribute('title');
+  }
+  function syncFlowLive(force = false) {
+    if (view !== 'flow' || (document.hidden && !force) || (!HOSTED && !DEMO && (flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token))) return;
+    const meta = flowCurrentMeta();
+    for (const [selector, fresh] of [['.flow-status', flowStatus(meta)], ['.flow-feed', flowFeed(meta)]]) { const old = $('board').querySelector(selector); if (old && !old.isEqualNode(fresh)) old.replaceWith(fresh); }
+    if (document.hidden) return;
+    const byId = flowBoardGraph().byId;
+    $('board').querySelectorAll('.flow-card').forEach(node => {
+      const t = byId.get(node.dataset.card), label = node.querySelector('.flow-run'); if (!t?.claim || !label) return;
+      const status = claimState(t.claim);
+      ['running', 'stale', 'blocked', 'stuck', 'done'].forEach(s => node.classList.toggle('flow-' + s, s === status));
+      const text = `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`;
+      if (label.textContent !== text) label.textContent = text;
+    });
+  }
+  async function refreshFlow() {
+    syncFlowLive(); // Reconcile hidden-tab responses before applying the network throttle.
+    if (HOSTED || DEMO || ro === 'demo' || !lastSyncOk || document.hidden || !cfg().token || ro === 'public' || flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token) return;
+    const c = { ...cfg() }, key = flowKey(c);
+    if (flowMeta.key !== key || flowAuth !== c.token) { resetFlowMeta(); flowMeta = { key, checked: 0 }; flowAuth = c.token; }
+    if ((flowRequest && flowRequest.key === key) || Date.now() - flowMeta.checked < 25000) return;
+    const ticket = flowRequest = { key, deniedCommits: false, failed: false, attempted: false };
+    flowMeta = { ...flowMeta, checked: Date.now() };
+    const current = () => flowRequest === ticket && flowKey(cfg()) === key && cfg().token === c.token;
+    const publish = patch => { if (current()) { flowMeta = { ...flowMeta, ...patch }; syncFlowLive(); } };
+    const failed = (name, error, path) => {
+      if (!current()) return;
+      ticket.failed = true;
+      const next = { ...flowMeta, [name + 'Error']: 'Could not refresh ' + (name === 'runner' ? 'runner status' : 'activity') };
+      if (name === 'commits') { next.commitErrors = new Map(flowMeta.commitErrors || []); next.commitErrors.set(path, true); }
+      next.rateFailures = (flowMeta.rateFailures || 0) + 1;
+      next.cooldownUntil = Math.max(next.cooldownUntil || 0, error.retryAt || 0, Date.now() + Math.min(300000, 60000 * 2 ** Math.min(4, next.rateFailures - 1)));
+      if ([401, 403, 404].includes(error.status) && !error.limited) {
+        delete next[name]; delete next[name + 'Tag'];
+        if (name === 'commits') { next.commitParts = new Map(); ticket.deniedCommits = true; }
+      }
+      flowMeta = next; syncFlowLive([401, 403, 404].includes(error.status) && !error.limited);
+    };
+    const read = async (endpoint, tag) => {
+      // Each endpoint owns its deadline; a stalled optional resource cannot pin the other panel.
+      const controller = new AbortController(); let timer;
+      const deadline = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('Flow request timed out')); }, 12000); });
+      try {
+        const r = await Promise.race([githubApi('GET', endpoint, null, { etag: tag, signal: controller.signal }, c), deadline]);
+        if (r.status === 304) return { unchanged: true };
+        if (r.status === 404 && endpoint.startsWith('/contents/')) return { data: null, tag: '' };
+        if (!r.ok) { const e = new Error(`GitHub ${r.status}`); e.status = r.status; e.limited = githubRateLimited(r); if (e.limited) { const after = r.headers.get('retry-after'), seconds = Number(after), reset = Number(r.headers.get('x-ratelimit-reset')); const at = after ? (Number.isFinite(seconds) ? Date.now() + Math.max(0, seconds) * 1000 : Date.parse(after)) : reset > 0 ? reset * 1000 : 0; e.retryAt = Math.max(Date.now() + 60000, Number.isFinite(at) ? at : 0); } throw e; }
+        let data = await r.json();
+        if (endpoint.startsWith('/contents/')) { if (data.encoding !== 'base64' || data.size > 65536 || typeof data.content !== 'string' || data.content.length > 90000) throw new Error('Runner status must be a small JSON file'); data = JSON.parse(b64d(data.content)); }
+        return { data, tag: r.headers.get('ETag') };
+      } finally { clearTimeout(timer); }
+    };
+    const runnerRead = async () => {
+      if (flowMeta.runnerMissingUntil > Date.now() || flowMeta.cooldownUntil > Date.now()) return;
+      ticket.attempted = true;
+      try {
+        const r = await read(`/contents/automation/local-runner.json?ref=${encodeURIComponent(c.branch)}`, flowMeta.runnerTag);
+        if (r.unchanged) publish({ runnerError: '' });
+        else publish({ runner: r.data, runnerTag: r.tag, runnerError: '', runnerMissingUntil: r.data === null ? Date.now() + 300000 : 0 });
+      } catch (e) { failed('runner', e); }
+    };
+    const base = c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/') + 1) : '';
+    // A one-file board owns its file. A split board also owns its schema-defined cards/ prefix.
+    // Never query the parent directory: it can contain other boards.
+    const paths = [c.path];
+    if (splitMeta?.key === `${c.repo}:${c.branch}:${c.path}`) paths.push(base + 'cards/');
+    const minute = Math.floor(Date.now() / 60000), commitDue = flowMeta.commitsMinute !== minute && !(flowMeta.cooldownUntil > Date.now());
+    if (commitDue) publish({ commitsMinute: minute, commitsPending: paths.length });
+    const commitReads = !commitDue ? [] : paths.map(async path => {
+      ticket.attempted = true;
+      try {
+        const old = flowMeta.commitParts?.get(path);
+        const r = await read(`/commits?sha=${encodeURIComponent(c.branch)}&path=${encodeURIComponent(path)}&per_page=20`, old?.tag);
+        if (!current() || ticket.deniedCommits) return;
+        const parts = new Map(flowMeta.commitParts || []);
+        if (!r.unchanged) parts.set(path, { tag: r.tag, data: Array.isArray(r.data) ? r.data.slice(0, 20) : [] });
+        const unique = new Map(); parts.forEach(part => part.data.forEach(commit => { if (commit && typeof commit.sha === 'string') unique.set(commit.sha, commit); }));
+        const commits = [...unique.values()].sort((a, b) => Date.parse(b.commit?.committer?.date || b.commit?.author?.date || '') - Date.parse(a.commit?.committer?.date || a.commit?.author?.date || '')).slice(0, 20);
+        const errors = new Map(flowMeta.commitErrors || []); errors.delete(path);
+        publish({ commitParts: parts, commits, commitErrors: errors, commitsError: errors.size ? 'Could not refresh all activity' : '' });
+      } catch (e) { failed('commits', e, path); }
+      finally { if (current()) publish({ commitsPending: Math.max(0, (flowMeta.commitsPending || 0) - 1) }); }
+    });
+    await Promise.allSettled([runnerRead(), ...commitReads]); // UI updates happen inside each independent request.
+    if (current()) { if (ticket.attempted && !ticket.failed) flowMeta = { ...flowMeta, rateFailures: 0 }; flowRequest = null; }
+  }
+  // Collapse strongly connected nodes before ranking. Even malformed cyclic dependencies stay finite and visible.
+  function flowComponents(tasks) {
+    const byId = new Map(tasks.map(t => [t.id, t])), edges = [], next = new Map(tasks.map(t => [t.id, []])), linkedIds = new Set();
+    const reverse = new Map(tasks.map(t => [t.id, []]));
+    // Bound edge allocation independently of the visible-card limit. Dense boards use summaries.
+    let budget = 10000;
+    for (const t of tasks) {
+      const seen = new Set();
+      for (const id of Array.isArray(t.after) ? t.after : []) {
+        if (--budget < 0) return { byId, edges: [], groups: [], groupOf: new Map(), cycles: new Set(), linkedIds, limited: true };
+        if (typeof id !== 'string' || !id || seen.has(id)) continue;
+        seen.add(id); linkedIds.add(t.id); linkedIds.add(id);
+        if (byId.has(id)) { edges.push([id, t.id]); next.get(id).push(t.id); reverse.get(t.id).push(id); }
+      }
+    }
+    const visited = new Set(), order = [], groups = [], groupOf = new Map();
+    // Iterative Kosaraju traversal: deep chains use heap storage rather than the browser call stack.
+    tasks.forEach(t => {
+      if (visited.has(t.id)) return;
+      visited.add(t.id); const stack = [[t.id, 0]];
+      while (stack.length) { const frame = stack[stack.length - 1], children = next.get(frame[0]); if (frame[1] < children.length) { const id = children[frame[1]++]; if (!visited.has(id)) { visited.add(id); stack.push([id, 0]); } } else { order.push(frame[0]); stack.pop(); } }
+    });
+    order.reverse().forEach(id => {
+      if (groupOf.has(id)) return;
+      const group = [], stack = [id]; groupOf.set(id, groups.length);
+      while (stack.length) { const at = stack.pop(); group.push(at); reverse.get(at).forEach(to => { if (!groupOf.has(to)) { groupOf.set(to, groups.length); stack.push(to); } }); }
+      groups.push(group);
+    });
+    const cycles = new Set(); groups.forEach(g => { if (g.length > 1 || next.get(g[0]).includes(g[0])) g.forEach(id => cycles.add(id)); });
+    return { byId, edges, groups, groupOf, cycles, linkedIds };
+  }
+  function flowBoardGraph() {
+    if (!flowGraphCache || flowGraphCache.tasks !== state.tasks) {
+      // Heartbeats replace task records without changing topology. Keep graph traversals cached
+      // independently, while refreshing the record map used for labels and dependency summaries.
+      let budget = 10001;
+      const shape = state.tasks.map(t => { const raw = Array.isArray(t.after) ? t.after : [], count = Math.min(raw.length, Math.max(0, budget)); budget -= count; return [t.id, raw.length, raw.slice(0, count).map(id => typeof id === 'string' ? id : null)]; });
+      const topology = JSON.stringify(shape);
+      if (flowGraphCache?.topology === topology) flowGraphCache = { ...flowGraphCache, tasks: state.tasks, byId: new Map(state.tasks.map(t => [t.id, t])) };
+      else flowGraphCache = { tasks: state.tasks, topology, ...flowComponents(state.tasks) };
+    }
+    return flowGraphCache;
+  }
+  function flowLayout(tasks) {
+    const { edges, groups, groupOf, cycles } = flowComponents(tasks);
+    const incoming = groups.map(() => new Set()), outgoing = groups.map(() => new Set()), ranks = groups.map(() => 0);
+    edges.forEach(([a, b]) => { const x = groupOf.get(a), y = groupOf.get(b); if (x !== y) { incoming[y].add(x); outgoing[x].add(y); } });
+    const degree = incoming.map(s => s.size), queue = degree.flatMap((n, i) => n ? [] : [i]);
+    for (let i = 0; i < queue.length; i++) { const x = queue[i]; outgoing[x].forEach(y => { ranks[y] = Math.max(ranks[y], ranks[x] + 1); if (!--degree[y]) queue.push(y); }); }
+    const rows = new Map(), positions = new Map();
+    tasks.forEach(t => { const rank = ranks[groupOf.get(t.id)], row = rows.get(rank) || 0; rows.set(rank, row + 1); positions.set(t.id, { x: 24 + rank * 312, y: 24 + row * 194, cycle: cycles.has(t.id), component: groupOf.get(t.id) }); });
+    return { edges, positions, width: Math.max(1, rows.size) * 312, height: Math.max(1, ...rows.values()) * 194 + 24 };
+  }
+  function flowCard(t, position) {
+    const status = claimState(t.claim), col = state.columns.find(c => c.id === t.column);
+    const raw = Array.isArray(t.after) ? t.after : [], ids = [];
+    for (let i = 0; i < Math.min(raw.length, 10000) && ids.length < 20; i++) if (typeof raw[i] === 'string' && raw[i] && !ids.includes(raw[i])) ids.push(raw[i]);
+    const deps = afterLinks({ ...t, after: ids }, flowBoardGraph().byId);
+    const depText = deps.map(d => `${afterRef(d)} · ${d.state}`).join(', ') + (raw.length > deps.length ? ' · more (open card)' : '');
+    const flags = [position?.cycle && 'Dependency cycle', waitingOf(t) && 'Waiting'].filter(Boolean);
+    const key = JSON.stringify([t.num, t.title, col?.name, t.column, !!(t.claim && status !== 'done'), t.last_run?.agent, t.last_run?.status, depText, flags, position?.x, position?.y]);
+    const cached = flowCardCache.get(t.id); if (cached?.key === key) return cached.node;
+    const node = el('button', 'flow-card' + (status ? ' flow-' + status : ''));
+    node.type = 'button'; node.dataset.card = t.id; node.title = t.title;
+    if (position) { node.style.left = position.x + 'px'; node.style.top = position.y + 'px'; }
+    node.append(el('span', 'flow-card-meta', `#${t.num} · ${col ? col.name : t.column}`), el('strong', 'flow-card-title', t.title));
+    if (t.claim && status !== 'done') node.append(el('span', 'flow-run', `${t.claim.agent || 'Agent'} · ${status.toUpperCase()} · heartbeat ${ago(t.claim.heartbeat_at || t.claim.claimed_at) || 'unknown'}`));
+    else if (t.last_run) node.append(el('span', 'flow-card-meta', `Last run: ${t.last_run.agent || 'agent'} · ${t.last_run.status || 'finished'}`));
+    if (deps.length) { node.title = t.title + '\n' + depText; node.append(el('span', 'flow-card-meta flow-deps', `After: ${depText}`)); }
+    if (flags.length) node.append(el('span', 'flow-cycle', flags.join(' · ')));
+    node.onclick = () => openCard(t.id); flowCardCache.set(t.id, { key, node }); return node;
+  }
+  function flowStatus(meta) {
+    const strip = el('div', 'flow-status');
+    strip.setAttribute('role', 'status');
+    if (HOSTED || DEMO || ro === 'demo') strip.textContent = 'Runner status and commit activity are available on connected GitHub boards.';
+    else if (!cfg().token || ro === 'public') strip.textContent = 'Sign in to see runner status and commit activity. Public boards refresh every two minutes.';
+    else if (!meta.runner) strip.textContent = meta.runnerError || 'No runner status yet';
+    else {
+      const r = meta.runner, paused = r.paused === true || r.status === 'paused';
+      strip.append(el('strong', '', paused ? 'Repository runner paused' : r.status === 'active' || r.paused === false ? 'Repository runner active' : 'Repository runner status unknown'));
+      // Contract for automation/local-runner.json: status, paused_by, pause_reason, last_tick,
+      // engines_out [{engine, until}], sign_in {engine: boolean}. Unknown fields are never printed.
+      [r.paused_by && `by ${shortText(r.paused_by)}`, r.pause_reason && shortText(r.pause_reason), r.last_tick && `Last tick ${ago(r.last_tick) || 'unknown'}`].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
+      if (Array.isArray(r.engines_out)) r.engines_out.slice(0, 8).forEach(e => { if (e && typeof e === 'object') strip.append(el('span', '', `${shortText(e.engine, 'Engine')} out of usage${e.until ? ' until ' + shortText(e.until) : ''}`)); });
+      if (r.sign_in && typeof r.sign_in === 'object') Object.entries(r.sign_in).slice(0, 8).forEach(([engine, ok]) => strip.append(el('span', '', `${shortText(engine)} sign-in: ${ok === true ? 'passes' : ok === false ? 'fails' : 'unknown'}`)));
+      if (meta.runnerError) strip.append(el('span', '', meta.runnerError + ' · showing last copy'));
+    }
+    return strip;
+  }
+  function renderFlow() {
+    const board = $('board'), shell = el('section', 'flow-shell'), top = el('div', 'flow-heading'), meta = flowCurrentMeta();
+    if (!HOSTED && !DEMO && (flowBoardScope !== flowKey(cfg()) || flowBoardToken !== cfg().token)) { shell.append(el('h2', '', 'Live flow'), el('p', 'hint', 'Waiting for this board to load.')); board.append(shell); return; }
+    if (flowPageKey !== flowKey(cfg())) { flowPageKey = flowKey(cfg()); flowPage = 0; }
+    top.append(el('h2', '', 'Live flow'), el('span', 'hint', 'Waits on → next · refreshes every 30 seconds while visible'));
+    const explicitDone = $('fStatus').value === doneColId();
+    const toggle = ui.button({ label: explicitDone ? 'Done selected' : flowDone ? 'Collapse Done' : 'Show Done', variant: 'ghost', size: 'sm', onClick: () => { flowDone = !flowDone; render(); } }); toggle.disabled = explicitDone; if (explicitDone) toggle.title = 'Clear the status filter to collapse Done'; top.append(toggle); shell.append(top, flowStatus(meta));
+    const content = el('div', 'flow-content'), main = el('div', 'flow-main'), status = $('fStatus').value;
+    let matching;
+    try { if (flowDone && status === '__open') $('fStatus').value = ''; matching = state.tasks.filter(t => filtered(t) && (flowDone || explicitDone || !isDoneTask(t))); } finally { $('fStatus').value = status; }
+    flowPage = Math.min(flowPage, Math.max(0, Math.ceil(matching.length / 500) - 1));
+    const all = matching.slice(flowPage * 500, (flowPage + 1) * 500);
+    if (flowCardScope !== flowKey(cfg()) || flowCardAuth !== cfg().token) { flowCardCache = new Map(); flowCardScope = flowKey(cfg()); flowCardAuth = cfg().token; }
+    const visibleIds = new Set(all.map(t => t.id));
+    flowCardCache.forEach((_, id) => { if (!visibleIds.has(id)) flowCardCache.delete(id); }); // Keep at most one page of nodes.
+
+    if (matching.length > 500) {
+      const limit = el('div', 'flow-limit', `Showing ${all.length} of ${matching.length} matching cards · page ${flowPage + 1}. Filter by project or label, or choose a page.`);
+      const prev = ui.button({ label: 'Previous 500', size: 'sm', onClick: () => { flowPage--; render(); } }), next = ui.button({ label: 'Next 500', size: 'sm', onClick: () => { flowPage++; render(); } }); prev.disabled = flowPage === 0; next.disabled = (flowPage + 1) * 500 >= matching.length; limit.append(prev, next); main.append(limit);
+    }
+    const graph = flowBoardGraph(), linkedIds = graph.linkedIds;
+    const linked = graph.limited ? [] : all.filter(t => linkedIds.has(t.id)), free = graph.limited ? all : all.filter(t => !linkedIds.has(t.id));
+    if (graph.limited) main.append(el('p', 'hint', 'More than 10,000 dependency links: showing card summaries to keep this view responsive. Open a card to inspect all its dependencies.'));
+    main.append(el('h3', '', graph.limited ? 'Dependency summaries' : `Dependency chains · ${linked.length}`));
+    if (linked.length) {
+      const graphScroll = el('div', 'flow-graph-scroll');
+      graphScroll.tabIndex = 0; graphScroll.setAttribute('aria-label', 'Dependency graph, scroll to explore');
+      const canvasKey = JSON.stringify([flowKey(cfg()), graph.topology, state.columns, state.tasks.map(t => [t.id, t.num, t.column, t.outcome]), linked.map(t => [t.id, t.num, t.title, t.column, !!(t.claim && claimState(t.claim) !== 'done'), t.last_run?.agent, t.last_run?.status, !!waitingOf(t)])]);
+      if (flowCanvasCache?.key === canvasKey && flowCanvasCache.auth === cfg().token && flowCanvasCache.archived === archived && flowCanvasCache.archFresh === archFresh()) {
+        graphScroll.append(flowCanvasCache.canvas); main.append(graphScroll);
+        main.append(el('p', 'hint', flowCanvasCache.caption));
+      } else {
+      const canvas = el('div', 'flow-canvas'), layout = flowLayout(linked);
+      const arrows = layout.edges.slice(0, 1500), skips = arrows.filter(([a, b]) => layout.positions.get(b).x - layout.positions.get(a).x > 312).length, height = layout.height + skips * 12 + 24;
+      canvas.style.width = layout.width + 'px'; canvas.style.height = height + 'px';
+      const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'); svg.setAttribute('width', layout.width); svg.setAttribute('height', height); svg.setAttribute('aria-hidden', 'true');
+      const defs = document.createElementNS(ns, 'defs'), marker = document.createElementNS(ns, 'marker'); marker.id = 'flow-arrow'; marker.setAttribute('viewBox', '0 0 10 10'); marker.setAttribute('refX', '9'); marker.setAttribute('refY', '5'); marker.setAttribute('markerWidth', '7'); marker.setAttribute('markerHeight', '7'); marker.setAttribute('orient', 'auto');
+      const arrow = document.createElementNS(ns, 'path'); arrow.setAttribute('d', 'M 0 0 L 10 5 L 0 10 z'); marker.append(arrow); defs.append(marker); svg.append(defs);
+      let skip = 0;
+      arrows.forEach(([a, b]) => {
+        const x = layout.positions.get(a), y = layout.positions.get(b), path = document.createElementNS(ns, 'path'), sx = x.x + 264, sy = x.y + (a === b ? 40 : 72), tx = x.x === y.x ? y.x + 264 : y.x, ty = y.y + (a === b ? 104 : 72), bend = Math.max(24, (tx - sx) / 2);
+        // Same-rank cycles and self-links enter from the right-hand gutter, outside the boxes.
+        const routeY = layout.height + (tx - sx > 312 ? ++skip : 0) * 12;
+        path.setAttribute('d', tx - sx > 312 ? `M${sx},${sy} H${sx + 12} V${routeY} H${tx - 12} V${ty} H${tx}` : x.x === y.x ? `M${sx},${sy} C${sx + 24},${sy} ${tx + 24},${ty} ${tx},${ty}` : `M${sx},${sy} C${sx + bend},${sy} ${tx - bend},${ty} ${tx},${ty}`);
+        path.setAttribute('marker-end', 'url(#flow-arrow)'); path.classList.add('flow-edge'); if (graph.cycles.has(a) && graph.groupOf.get(a) === graph.groupOf.get(b)) path.classList.add('flow-edge-cycle'); svg.append(path);
+      });
+      const full = flowBoardGraph(); // Cached cycle membership survives project/label/Done filters.
+      canvas.append(svg); linked.forEach(t => canvas.append(flowCard(t, { ...layout.positions.get(t.id), cycle: full.cycles.has(t.id) }))); graphScroll.append(canvas); main.append(graphScroll);
+      const caption = 'Dependencies outside this view remain listed on each card. Cycles are marked; they cannot become ready.' + (layout.edges.length > arrows.length ? ` Showing ${arrows.length} of ${layout.edges.length} arrows. Open a card for its complete dependency list.` : '');
+      main.append(el('p', 'hint', caption)); flowCanvasCache = { key: canvasKey, auth: cfg().token, canvas, caption, archived, archFresh: archFresh() };
+      }
+    } else if (!graph.limited) main.append(el('p', 'hint', 'No dependency chains match these filters.'));
+    main.append(el('h3', '', `${graph.limited ? 'Cards by column' : 'No dependency links'} · ${free.length}`), el('p', 'hint', 'Ready to consider by column. Column, waits and approval still decide whether work can start.'));
+    const lanes = el('div', 'flow-lanes');
+    state.columns.forEach(col => { const cards = free.filter(t => t.column === col.id); if (!cards.length) return; const lane = el('section', 'flow-lane'); lane.append(el('h4', '', `${col.name} · ${cards.length}`)); cards.forEach(t => lane.append(flowCard(t))); lanes.append(lane); }); main.append(lanes);
+    if (!all.length) main.append(el('p', 'empty', 'No cards match these filters.'));
+    content.append(main, flowFeed(meta)); shell.append(content); board.append(shell); syncFlowLive();
+  }
+  function flowFeed(meta) {
+    const feed = el('aside', 'flow-feed'); feed.append(el('h3', '', 'Recent board activity'));
+    if (HOSTED || DEMO || ro === 'demo' || !cfg().token || ro === 'public') { feed.append(el('p', 'hint', 'Commit activity requires a signed-in GitHub board.')); return feed; }
+    if (meta.commitsError) feed.append(el('p', 'hint', meta.commitsError));
+    if (meta.commitsPending) feed.append(el('p', 'hint', 'Refreshing activity…'));
+    const commits = Array.isArray(meta.commits) ? meta.commits.slice(0, 20) : [];
+    if (!commits.length && !meta.commitsError && !meta.commitsPending) feed.append(el('p', 'hint', Array.isArray(meta.commits) ? 'No board commits found.' : 'Waiting for activity…'));
+    commits.forEach(c => { const item = el('div', 'flow-event'), a = el('a', '', shortText(c.commit?.message?.split('\n')[0], 'Board update', 240)); if (/^[a-f0-9]{40}$/.test(c.sha)) { a.href = `https://github.com/${cfg().repo}/commit/${c.sha}`; a.target = '_blank'; a.rel = 'noopener noreferrer'; } item.append(a, el('span', 'hint', ago(c.commit?.author?.date) || '')); feed.append(item); });
+    return feed;
   }
 
   // ---- mobile: one column at a time, chosen from a tab strip (or by swiping) ---------------
@@ -3281,7 +3551,7 @@ if (typeof window !== 'undefined') (() => {
   // ---- views: board (columns), list (grouped rows) and calendar (month by due date) -------------------
   // Each board remembers its last view in this browser. sessionStorage still wins while Back/Forward is active in one tab.
   const SS = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
-  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'list', 'cal', 'sched', 'activity', 'mentions', 'archive', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
+  const ALL_VIEWS = ['today', 'people', 'companies', 'pipeline', 'board', 'flow', 'list', 'cal', 'sched', 'activity', 'mentions', 'archive', 'inbox', 'automations'], PAGE_VIEWS = ['inbox', 'automations'];   // pages outside the view groups
   let view = SS.get('kb_view') || boardContext().view || 'today'; if (!ALL_VIEWS.includes(view)) view = 'today';
   // Every view, once: the header switcher (#viewSw, one ui.tabs per group), the dock's section strip (#subnav) and search's
   // "Go to" list are all built from this. A primary view keeps its label on narrow headers; the others show only an icon.
@@ -3289,6 +3559,7 @@ if (typeof window !== 'undefined') (() => {
     { grp: 'today', label: 'Today', views: [{ value: 'today', icon: 'alarm-clock', label: 'Today', title: 'Today: people to contact and tasks due' }] },
     { grp: 'crm', label: 'People views', views: [{ value: 'people', icon: 'user', label: 'People', title: 'People', primary: true }, { value: 'companies', icon: 'building-2', label: 'Companies', title: 'Companies: each with its stage, people and next step' }, { value: 'pipeline', icon: 'trending-up', label: 'Pipeline', title: 'Pipeline: people or companies by stage' }] },
     { grp: 'tasks', label: 'Task views', views: [{ value: 'board', icon: 'square-kanban', label: 'Kanban', title: 'Kanban: tasks in columns', primary: true }, { value: 'mentions', icon: 'at-sign', label: '@Mentions', title: '@Mentions: comments that mention you' },
+      { value: 'flow', icon: 'workflow', label: 'Flow', title: 'Flow: dependencies and live runs' },
       { value: 'list', icon: 'list', label: 'List', title: 'List' },
       { value: 'cal', icon: 'calendar', label: 'Calendar', title: 'Calendar' }, { value: 'sched', icon: 'calendar-days', label: 'Schedule', title: 'Schedule' }, { value: 'activity', icon: 'history', label: 'Activity', title: 'Activity: what was done today, yesterday or on a day you pick' },
       { value: 'archive', icon: 'archive', label: 'Archive', title: 'Archive: archived cards, by archive year (newest year first)' }] }
@@ -3312,6 +3583,7 @@ if (typeof window !== 'undefined') (() => {
     if (was === 'list' && v !== 'list') listSel.clear();
     if (v !== was) { try { inboxPress.done.clear(); inboxPress.err.clear(); } catch { /* the Inbox code is not set up yet */ } }   // a press result shows for this visit only
     render();
+    if (v === 'flow' && !document.hidden) refreshFlow();
     if (fromHistory || v === was) return;
     const push = () => { try { history.pushState({ kbView: v }, '', location.pathname + location.search + '#view=' + v); } catch {} };
     if (backPending) backPending.then(push); else push();   // a dialog that just closed is still taking its own step off
@@ -3475,12 +3747,12 @@ if (typeof window !== 'undefined') (() => {
   // loaded it is unknown, and once loaded it is cancelled, archived without Done or missing.
   const afterIds = t => Array.isArray(t && t.after) ? [...new Set(t.after.filter(x => typeof x === 'string' && x))] : [];
   const finishedDone = x => !!x && x.column === doneColId() && x.outcome !== 'cancelled';
-  function afterLinks(t) {
+  function afterLinks(t, byId) {
     const ids = afterIds(t); if (!ids.length) return [];   // most cards: nothing to look up
     let loaded = null; try { loaded = archFresh() ? archived : null; } catch { loaded = null; }   // declared further down this file; a stale copy counts as not loaded
     let arch = null; try { arch = loaded ? archIdMap() : null; } catch { arch = null; } arch = arch || new Map();
     return ids.map(id => {
-      const live = state.tasks.find(x => x.id === id);
+      const live = byId ? byId.get(id) : state.tasks.find(x => x.id === id);
       if (live) return { id, num: live.num, title: live.title || '', live: true, state: finishedDone(live) ? 'done' : live.column === doneColId() ? 'cancelled' : (colName(live.column) || live.column || '?') };
       const old = arch.get(id);   // the archive not loaded yet (and the board has one): unknown, not missing
       let years = 0; try { years = archYears().length; } catch { years = 0; }   // also declared further down
@@ -6467,7 +6739,7 @@ if (typeof window !== 'undefined') (() => {
     const archSwitch = !moved && (branch !== cfg().branch || path !== cfg().path); if (archSwitch) { resetArchUi(); archHold = 1; }   // until a load succeeds (load() ends it)
     LS.set('kb_branch', branch); LS.set('kb_path', path); LS.set('kb_me', me);
     if (window.kbTheme && window.kbTheme.useBoard) window.kbTheme.useBoard(cfg());
-    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
+    if (newTok) { LS.set('kb_token', newTok); LS.del(roKey()); } if (newTok || moved || archSwitch) resetFlowMeta(true); if (moved) markLeaving(); stashBoard(); $('dlgSettings').close();
     if (moved) { location.replace(boardUrl()); return; }
     const ok = await load();
     if (ok && newTok && (state.settings.modes || []).includes('crm') && cfg().me && !memberPerson()) setTimeout(() => offerSelfPerson(), 400);
@@ -6686,8 +6958,8 @@ if (typeof window !== 'undefined') (() => {
   ['fClient', 'fWho', 'fStatus', 'fDoneBy', 'fLabel', 'fProject', 'fGoal', 'fPrio', 'fAttn', 'fWaiting', 'fHideDone'].forEach(i => $(i).addEventListener('change', () => { deferredFilterRoute.delete(i === 'fClient' ? 'client' : Object.keys(FILTER_SELECTS).find(k => FILTER_SELECTS[k] === i)); if (i === 'fStatus' && $('fStatus').value && $('fStatus').value !== '__open') $('fHideDone').checked = false; if (i === 'fHideDone' && $('fHideDone').checked && $('fStatus').value === doneColId()) $('fStatus').value = ''; render(); }));
   const canPoll = () => !busy && (!document.hidden || alertCfg().on) && !document.querySelector('dialog[open]:not(#dlgCard)') && !document.querySelector('.card.dragging') && lastSyncOk;
   let pollTick = 0; setInterval(() => { pollTick++; if (canPoll() && ro !== 'demo' && (ro !== 'public' || pollTick % 4 === 0)) load(true); }, 30000);   // conditional (ETag) so unchanged polls are 304s
-  document.addEventListener('visibilitychange', () => { if (canPoll()) load(true); });  // catch up as soon as the tab is shown again
-  setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) render(); }, 60000); // refresh "ago" and stale flags
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && view === 'flow') syncFlowLive(); if (canPoll()) load(true); });  // reconcile cached data before the board request
+  setInterval(() => { if (!document.hidden && !document.querySelector('dialog[open]')) { if (view === 'flow') syncFlowLive(); else render(); } }, 60000); // refresh "ago" and stale flags
 
 
   const projectsOf = () => state.projects || [];

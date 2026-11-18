@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Web board: **Flow** beside Kanban shows dependency arrows, unlinked cards by column, and live claim states.
+Done is collapsed initially; existing project and label filters apply. GitHub boards also show the last 20 board
+commits and optional `automation/local-runner.json` status. Flow uses the board's 30-second refresh, pauses when
+hidden and catches up on return. No kit version or data schema change.
+
 Kit v136: `wait --until` stores a checkable condition (`pr:<owner>/<repo>#<n>:merged`, `date:<YYYY-MM-DD>` or
 `release:<owner>/<repo>@<tag>`). A condition is not an owner-authority wait. `reconcile --dry-run` adds an audit line
 when that condition is met or still unresolved, and an expiry line when a wait has no condition and its start date is
