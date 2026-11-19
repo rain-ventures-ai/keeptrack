@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v141: explicit `reconcile --release-quiet` can release this member's unchanged unattended claims after at least
+24 hours without a heartbeat. It requires the board kit owner's `settings-set --reconcile-quiet-claims on` opt-in;
+`--dry-run` previews without enabling or changing anything. Normal reconcile remains read-only. Missing generations,
+attended claims, malformed metadata and every coordinated attempt stay for manual or runner recovery. A whole-board
+CAS retry checks the original claim identity and current opt-in again. The audit preserves the generation and heartbeat;
+columns, waits, questions, approval state and retained run receipts are untouched. Proposal-only and hosted callers
+cannot apply the sweep. No live board is opted in by this release; first run the dry-run period and review its results.
+UTC offsets are range-checked before parsing, and unrelated malformed coordination metadata cannot interrupt the sweep
+or suppress revocation checks for valid research admissions. Owner enablement/disablement is rechecked after conflicts.
+
 Archive compaction (card #557): `archive` now stores compact cards. A card keeps its core fields, details, to-dos,
 links, related cards, dates and last 3 comments (`settings.archive.keep_comments`, or `archive --keep-comments N`). Its
 `history` and `last_run` go, and so do its older comments and the archive file's separate history lines for it. The new
