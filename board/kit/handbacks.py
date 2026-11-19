@@ -11,6 +11,7 @@ import unicodedata
 import urllib.parse
 
 KIT = 144
+GUARDED_NOTE = 8192
 TASK = re.compile(r"t_[a-z0-9]{4,20}\Z")
 TODO = re.compile(r"d_[a-z0-9]{4,20}\Z")
 DIGEST = re.compile(r"[a-f0-9]{64}\Z")
@@ -28,21 +29,21 @@ def question_settled(kt,proposal,owner):
         if not isinstance(owner,str) or not owner or not isinstance(decision,dict) or not isinstance(change,dict) \
                 or decision.get("action")!="answer" or not isinstance(decision.get("id"),str) or not re.fullmatch(r"a_[a-f0-9]{10}",decision["id"]):return False
         decider=proposal.get("decider") or owner
-        if not isinstance(decider,str) or decider.casefold()!=owner.casefold():return False
+        if not isinstance(decider,str) or not re.fullmatch(r"[A-Za-z0-9-]{1,39}",decider):return False
         creator=proposal.get("createdBy");answered_by=decision.get("by");done=decision.get("done")
         if not isinstance(creator,str) or not isinstance(answered_by,str) or not answered_by or not isinstance(done,dict) \
                 or not {"at","by"}<=set(done) or set(done)-{"at","by","acted","note"} \
                 or "acted" in done and done["acted"] is not False or not isinstance(done.get("by"),str):return False
         agent_creator="@" in creator and creator.rsplit("@",1)[1].casefold()==owner.casefold()
-        if answered_by.casefold()==owner.casefold():
+        if answered_by.casefold()==decider.casefold():
             if "relayed" in decision:return False
         else:
             relayed=decision.get("relayed")
-            if not agent_creator or answered_by!=creator or not isinstance(relayed,dict) or set(relayed)!={"for","via"} \
+            if decider.casefold()!=owner.casefold() or not agent_creator or answered_by!=creator or not isinstance(relayed,dict) or set(relayed)!={"for","via"} \
                     or not isinstance(relayed.get("for"),str) or relayed["for"].casefold()!=owner.casefold() \
                     or not isinstance(relayed.get("via"),str) or not relayed["via"] or len(relayed["via"])>kt.RELAY_VIA_LIMIT \
                     or not kt.RELAY_VIA_RE.fullmatch(relayed["via"]) or proposal["kind"]=="ask.approve":return False
-        if done["by"].casefold()!=owner.casefold() and not (agent_creator and done["by"]==creator):return False
+        if done["by"].casefold()!=decider.casefold() and not (agent_creator and done["by"]==creator):return False
         def stamp(value):
             if not isinstance(value,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)",value):raise ValueError()
             return dt.datetime.fromisoformat(value.replace("Z","+00:00"))
@@ -61,6 +62,7 @@ def question_settled(kt,proposal,owner):
         return True
     except (SystemExit,TypeError,ValueError,KeyError,AttributeError,OverflowError,RecursionError):
         return False
+
 
 
 
@@ -106,14 +108,44 @@ def screen(kt, value):
             strings.append(unicodedata.normalize("NFKC", item))
             if "://" in item:strings.append(unicodedata.normalize("NFKC",urllib.parse.unquote(item)))
     policy = kt.owner_question_module()
-    # A URL's scheme punctuation is not an assignment to an unrelated preceding field (e.g. "Token handling").
-    # Keep per-field checks and explicit/split assignment checks; hard URL boundaries prevent only that false join.
-    bounded=lambda value:"\n"+value+"\n" if re.match(r"https?://",value,re.I) else value
-    joined=[" ".join(bounded(value) for value in order) for order in (strings,reversed(strings))]
+    # Separate fields cannot supply incidental assignment punctuation inside a URL/repo/column. Other privacy
+    # patterns still see cross-field context; secret assignments require explicit key/operator/value boundaries.
+    joined=[" ".join(order) for order in (strings,reversed(strings))]
+    secret=r"(?:password|passphrase|api[_ -]?key|secret|token|credential)"
+    operator=r"(?:(?:is|was|are)\b|[:=,\-–—])"
+    label=re.compile(r"("+secret+r")(?:\s*("+operator+r"))?\s*",re.I)
+    prefix=re.compile(r"^\s*("+operator+r")\s*(.*)$",re.I|re.S)
+    labels=[]
+    for index,string in enumerate(strings):
+        match=label.fullmatch(string.strip())
+        if match:labels.append((match[1],match[2],{index}))
+    api=[i for i,value in enumerate(strings) if value.strip().casefold()=="api"]
+    for i in api:
+        for j,value in enumerate(strings):
+            if i==j:continue
+            if value.strip().casefold()=="key":labels.append(("API key",None,{i,j}))
+            elif value.strip().casefold().startswith("key"):
+                tail=prefix.match(value.strip()[3:])
+                if tail:
+                    if tail[2].strip():refuse("copied content failed the board privacy screen")
+                    labels.append(("API key",tail[1],{i,j}))
+    split_secret=False
+    for key,op,used in labels:
+        for index,string in enumerate(strings):
+            if index in used or not string.strip():continue
+            if op and policy.BOARD_PRIVATE.search(key+" "+op+" "+string):split_secret=True
+            tail=prefix.match(string)
+            if not op and tail:
+                if tail[2].strip() and policy.BOARD_PRIVATE.search(key+" "+string):split_secret=True
+                elif not tail[2].strip() and any(j not in used|{index} and value.strip() for j,value in enumerate(strings)):
+                    split_secret=True
+    cross_other=any(not re.match(secret+r"\b",match.group(),re.I) for value in joined for match in policy.BOARD_PRIVATE.finditer(value))
     blob=any(any(c.isdigit() for c in match.group()) and not (re.fullmatch(r"[0-9a-f]{40}",match.group()) and re.search(r"\b(?:commit|sha|sha-?1)[:\s]\s{0,2}$",line[max(0,match.start()-12):match.start()],re.I))
              for line in strings for match in re.finditer(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{40,}",line))
-    if kt.work_module().private_text(strings) or any(policy.BOARD_PRIVATE.search(value) or policy.PRIVATE_NEIGHBOURS.search(value) for value in strings+joined) or blob:
+    if kt.work_module().private_text(strings) or any(policy.BOARD_PRIVATE.search(value) or policy.PRIVATE_NEIGHBOURS.search(value) for value in strings) \
+            or any(policy.PRIVATE_NEIGHBOURS.search(value) for value in joined) or cross_other or split_secret or blob:
         refuse("copied content failed the board privacy screen")
+
 
 
 
@@ -183,6 +215,7 @@ def questions(kt, data, tid):
     if not bound_ids<=found_ids:refuse("a recorded owner question is missing")
     result.sort(key=lambda p: str(p.get("id")))
     return result
+
 
 
 
