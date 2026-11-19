@@ -475,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 143  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 144  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2108,6 +2108,8 @@ _HOSTED_STORAGE = None
 
 def hosted_dispatch(a):
     """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
+    if a.cmd in ("todo-move", "done") and (getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None):
+        sys.exit("capability_unavailable: safe handbacks are unavailable in hosted phase 0")
     if a.cmd == "comment" and getattr(a, "owner_question", None) is not None:
         sys.exit("capability_unavailable: structured owner questions are unavailable in hosted phase 0")
     allowed = {"list", "show", "watch", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
@@ -2793,8 +2795,10 @@ def min_kit_needed(data):
     """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
     needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
     what = "Cards carry `waiting`"
+    if any(isinstance(t, dict) and ("guarded_completion" in t or any(isinstance(d, dict) and "handback" in d for d in t.get("todos", []) or [])) for t in data.get("tasks", []) or []):
+        needed, what = 144, "Cards carry snapshot-bound follow-up receipts"
     if any(isinstance(t, dict) and "owner_questions" in t for t in data.get("tasks", []) or []):
-        needed, what = 143, "Cards carry owner-question receipt bindings"
+        needed, what = max(needed, 143), "Cards carry owner-question receipt bindings"
     if any(isinstance(t, dict) and ((waiting_of(t) or {}).get("instance_id") or t.get("wait_reasks")) for t in data.get("tasks", []) or []):
         needed, what = max(needed, WAIT_INSTANCE_KIT), "Cards carry wait-instance identities or expiry re-ask receipts"
     if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
@@ -4465,7 +4469,51 @@ def check_moved_todos(data, t, cancel=False):
     return added
 
 
+def apply_completed_model(data, t, a, note, guarded=False):
+    """Existing finish model after caller guards; never performs a nested save."""
+    cancel = bool(getattr(a, "cancel", False))
+    outcome = "cancelled" if cancel else "completed"
+    close_waiting(t, a, "cancel" if cancel else "done", data)
+    c = t.get("claim")
+    if c:  # the claim banner goes away; the card keeps a one-line record of the run, with its link
+        t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
+                         "session_url": c.get("session_url", ""), "started_at": c.get("claimed_at", ""), "finished_at": now(),
+                         "note": note, "outcome": outcome}
+        t["claim"] = None
+    t["outcome"] = outcome
+    if t.get("last_run"):
+        t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
+    link = (c or {}).get("session_url", "")
+    hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
+    was_done = t.get("column") == "done"
+    move_task_to_column(data, t, "done")
+    if not was_done:
+        note_finished(t, cancel)
+    # kit v128: a second done on a Done card is not a new finish: `finished` stays exactly as the first finish wrote it
+    # (relay pushes once per finish, and its event id carries the outcome kind, so a flipped `cancelled` would push twice)
+    t["updated"] = now(); tid = t["id"]
+    if guarded:
+        old_session = (c or {}).get("session_id")
+        def forget_same_record(_):
+            if FILE or not old_session:
+                return
+            def change(cards):
+                if (cards.get(tid) or {}).get("session") != old_session:
+                    return False
+                cards.pop(tid, None)
+            try:
+                rewrite_claim_record(change)
+            except OSError:
+                pass
+        _MUT["after"].append(forget_same_record)
+    else:
+        _MUT["after"].append(lambda d: drop_claim_file(tid))
+
+
 def cmd_done(a):
+    if getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None:
+        from types import SimpleNamespace
+        return handback_module().done(SimpleNamespace(**globals()), a)
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
     def fn(data):
         t = find(data, a.id)
@@ -4484,27 +4532,7 @@ def cmd_done(a):
         if linked:
             _MUT["rerun"] = True   # the links change the follow-up cards too
             print("linked follow-up card" + ("s " if len(linked) > 1 else " ") + ", ".join(f"#{n}" for n in linked))
-        outcome = "cancelled" if cancel else "completed"
-        close_waiting(t, a, "cancel" if cancel else "done", data)
-        c = t.get("claim")
-        if c:  # the claim banner goes away; the card keeps a one-line record of the run, with its link
-            t["last_run"] = {"agent": c.get("agent", ""), "on_behalf_of": c.get("on_behalf_of", ""), "session_id": c.get("session_id", ""),
-                             "session_url": c.get("session_url", ""), "started_at": c.get("claimed_at", ""), "finished_at": now(),
-                             "note": note, "outcome": outcome}
-            t["claim"] = None
-        t["outcome"] = outcome
-        if t.get("last_run"):
-            t["last_run"]["outcome"] = outcome   # the run record never disagrees with the card
-        link = (c or {}).get("session_url", "")
-        hist(t, ("cancelled: " if cancel else "done: ") + note + (f" (session {link})" if link else ""))
-        was_done = t.get("column") == "done"
-        move_task_to_column(data, t, "done")
-        if not was_done:
-            note_finished(t, cancel)
-        # kit v128: a second done on a Done card is not a new finish: `finished` stays exactly as the first finish wrote it
-        # (relay pushes once per finish, and its event id carries the outcome kind, so a flipped `cancelled` would push twice)
-        t["updated"] = now(); tid = t["id"]
-        _MUT["after"].append(lambda d: drop_claim_file(tid))   # only once the save worked: a failed one leaves the claim provably ours
+        apply_completed_model(data, t, a, note)
         print(f"{'cancelled' if cancel else 'done'} {t['id']}: {t['title']}")
     mutate(fn, f"Agent done: {a.id}")
 
@@ -5124,7 +5152,43 @@ def cmd_todo_edit(a):
     mutate(fn, f"Edit to-do: {a.id}")
 
 
+def apply_todo_move(data, t, n, d, title, details):
+    """Apply the existing atomic follow-up model; callers supply their own same-CAS guards."""
+    text = str(d.get("text") or "").strip()
+    cols = {c.get("id") for c in data.get("columns", []) if isinstance(c, dict)}
+    column = "backlog" if "backlog" in cols or not cols else "todo"
+    ranks = [x.get("rank") for x in data.get("tasks", []) if x.get("column") == column and valid_rank(x.get("rank"))]
+    num = t.get("num")
+    o = {"id": new_board_id(data, "t_", "cards"), "title": title or clean(text, 160), "column": column,
+         "client": t.get("client", ""), "project": t.get("project", ""),
+         "priority": t.get("priority") if t.get("priority") in ("high", "medium", "low") else "medium", "due": "",
+         "labels": list(t.get("labels") or []), "assignees": list(t.get("assignees") or []),
+         "details": (f"Split from #{num} ({t['id']}) {t.get('title', '')}." + (f"\n\n{details}" if details else "")),
+         "links": [], "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": text, "done": False}],
+         "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
+    if data.get("layout") == "split":
+        o["rank"] = append_rank(ranks)
+    append_priority_rank(data, o)
+    hist(o, f"created: split from {t['id']}, its to-do {n}")
+    if o["labels"]:
+        hist_labels(o)
+    data["tasks"].append(o); assign_nums(data); new = o.get("num")
+    link_follow_up(t, o)
+    d["text"] = f"Moved to #{new} ({o['id']}): {text}"
+    d["done"] = True; d["doneBy"] = who_am_i(t); d["doneAt"] = now()
+    hist(t, f"moved to-do to #{new} ({o['id']}): {text}")
+    url_new, url_old = card_url(new, o["id"]), card_url(num, t["id"])
+    for x, msg in ((t, f"To-do {n} moved to follow-up card #{new} ({o['id']})" + (f": {url_new}" if url_new else "")),
+                   (o, f"Split from #{num} ({t['id']}), its to-do {n}" + (f": {url_old}" if url_old else ""))):
+        x.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": msg})
+    t["updated"] = now()
+    return o
+
+
 def cmd_todo_move(a):
+    if getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None:
+        from types import SimpleNamespace
+        return handback_module().move(SimpleNamespace(**globals()), a)
     """Move open to-do N to a new follow-up card (kit v54), in one save: the new card (Backlog, the same client,
     project, labels, priority and assignees, the to-do as its checklist), a follow-up relation and a link on each card
     to the other, the to-do reworded "Moved to #N (t_id): ..." and ticked, and a comment on both cards."""
@@ -5137,33 +5201,8 @@ def cmd_todo_move(a):
         text = str(d.get("text") or "").strip()
         if d.get("done") or MOVED_TODO.match(text):
             sys.exit(f"refused: to-do #{n} of {t['id']} is already done or moved; nothing changed")
-        cols = {c.get("id") for c in data.get("columns", []) if isinstance(c, dict)}
-        column = "backlog" if "backlog" in cols or not cols else "todo"
-        ranks = [x.get("rank") for x in data.get("tasks", []) if x.get("column") == column and valid_rank(x.get("rank"))]
-        num = t.get("num")
-        o = {"id": new_board_id(data, "t_", "cards"), "title": title or clean(text, 160), "column": column,
-             "client": t.get("client", ""), "project": t.get("project", ""),
-             "priority": t.get("priority") if t.get("priority") in ("high", "medium", "low") else "medium", "due": "",
-             "labels": list(t.get("labels") or []), "assignees": list(t.get("assignees") or []),
-             "details": (f"Split from #{num} ({t['id']}) {t.get('title', '')}." + (f"\n\n{details}" if details else "")),
-             "links": [], "contacts": [], "todos": [{"id": "d_" + uuid.uuid4().hex[:6], "text": text, "done": False}],
-             "history": [], "comments": [], "claim": None, "created": now(), "updated": now()}
-        if data.get("layout") == "split":
-            o["rank"] = append_rank(ranks)
-        append_priority_rank(data, o)
-        hist(o, f"created: split from {t['id']}, its to-do {n}")
-        if o["labels"]:
-            hist_labels(o)
-        data["tasks"].append(o); assign_nums(data); new = o.get("num")
-        link_follow_up(t, o)
-        d["text"] = f"Moved to #{new} ({o['id']}): {text}"
-        d["done"] = True; d["doneBy"] = who_am_i(t); d["doneAt"] = now()
-        hist(t, f"moved to-do to #{new} ({o['id']}): {text}")
-        url_new, url_old = card_url(new, o["id"]), card_url(num, t["id"])
-        for x, msg in ((t, f"To-do {n} moved to follow-up card #{new} ({o['id']})" + (f": {url_new}" if url_new else "")),
-                       (o, f"Split from #{num} ({t['id']}), its to-do {n}" + (f": {url_old}" if url_old else ""))):
-            x.setdefault("comments", []).append({"id": "c_" + uuid.uuid4().hex[:6], "at": now(), "by": who_am_i(t), "text": msg})
-        t["updated"] = now(); oid = o["id"]
+        o = apply_todo_move(data, t, n, d, title, details)
+        num, oid = t.get("num"), o["id"]
         _MUT["after"].append(lambda dd: print(f"added #{num_of(dd, oid)} ({oid}): follow-up of #{num}; to-do {n} moved and ticked, "
                                               "both cards linked and commented" + link_note(num_of(dd, oid), oid)))
     mutate(fn, f"Move to-do: {a.id} {a.n}")
@@ -16019,6 +16058,19 @@ def _proposals_only(a):
 
 _WORK_MODULE = None
 _OWNER_QUESTION_MODULE = None
+_HANDBACK_MODULE = None
+
+
+def handback_module():
+    global _HANDBACK_MODULE
+    if _HANDBACK_MODULE is None:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "handbacks.py")
+        spec = importlib.util.spec_from_file_location("keeptrack_handbacks", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _HANDBACK_MODULE = module
+    return _HANDBACK_MODULE
 
 
 def owner_question_module():
@@ -16172,7 +16224,9 @@ def main():
     s.set_defaults(f=cmd_release)
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--note", help="the result: what was delivered, where it is (required)"); s.add_argument("--session")
     s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
-    s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.set_defaults(f=cmd_done)
+    s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.add_argument("--snapshot", action="store_true", help="read a guarded completion projection without writing")
+    s.add_argument("--expected-snapshot", help="digest of the native completion snapshot")
+    s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("review", help="work done, a person decides: end the claim, move the card to Pending review and comment the note (@who)")
     s.add_argument("id"); s.add_argument("--note", help="the result and the decision it waits on, with options and a recommendation ('-' = stdin)")
     s.add_argument("--who", help="the GitHub login who decides (default: the first assignee, else you)"); s.add_argument("--session")
@@ -16202,7 +16256,11 @@ def main():
     s = sub.add_parser("todo-rm"); s.add_argument("id"); s.add_argument("n"); s.set_defaults(f=cmd_todo_rm)
     s = sub.add_parser("todo-move", help="move open to-do N to a new follow-up card (Backlog), linked both ways")
     s.add_argument("id"); s.add_argument("n"); s.add_argument("--title", help="the new card's title (default: the to-do's text)")
-    s.add_argument("--details", help="what must happen, and who or what it waits on"); s.set_defaults(f=cmd_todo_move)
+    s.add_argument("--details", help="what must happen, and who or what it waits on")
+    s.add_argument("--snapshot", action="store_true", help="read a safe stable-ID move projection without writing")
+    s.add_argument("--expected-snapshot", help="digest of the screened native move snapshot")
+    s.add_argument("--handback-kind", choices=("rollout", "device", "owner-decision"))
+    s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_todo_move)
     s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column"); s.add_argument("--session")
     s.add_argument("--force", action="store_true", help="move a card another session holds to done (a person told you to)")
