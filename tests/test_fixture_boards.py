@@ -88,6 +88,17 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_v144_handback_receipt_and_every_entity_survive_upgrade(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit144", "fixture.json"))
+        self.use_fixture("v4_kit144", meta)
+        before = kt.load_board()
+        source = next(t for t in before["tasks"] if t["id"] == "t_safemove")
+        self.assertIn("handback", source["todos"][0])
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v143_owner_question_binding_survives_upgrade_without_new_question(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit143", "fixture.json"))
         self.use_fixture("v4_kit143", meta)

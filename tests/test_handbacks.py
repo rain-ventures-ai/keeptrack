@@ -185,11 +185,40 @@ class Handbacks(unittest.TestCase):
         self.assertEqual(0,read.returncode,read.stderr);token=json.loads(read.stdout)['snapshot']
         move=subprocess.run(command+['--expected-snapshot',token],capture_output=True,text=True,env=env,timeout=20)
         self.assertEqual(0,move.returncode,move.stderr);self.assertTrue(json.loads(move.stdout)['created'])
-        old=Path('/home/osouthgate/dev/_wt/keeptrack-457-owner-questions/board/kit/keeptrack.py')
-        if not old.is_file():self.fail('frozen143 fixture path is required for this explicit compatibility test')
+        old=self.root/'keeptrack-v143.py'
+        old.write_bytes(subprocess.check_output(['git','show','d6d51414d3a1931ae72fd1a946aa57663ea5eaf0:board/kit/keeptrack.py'],cwd=Path(__file__).resolve().parents[1]))
         before=self.snapshot();oldcommand=[sys.executable,str(old),'--file',str(self.root/'tasks.json'),'todo-move','t_task1','d_first1','--expected-snapshot',token,'--json']
         result=subprocess.run(oldcommand,capture_output=True,text=True,env=env,timeout=20)
         self.assertNotEqual(0,result.returncode);self.assertEqual(before,self.snapshot())
+        oldwrite=subprocess.run([sys.executable,str(old),'--file',str(self.root/'tasks.json'),'comment','t_task1','Legacy comment'],capture_output=True,text=True,env=env,timeout=20)
+        self.assertNotEqual(0,oldwrite.returncode);self.assertIn('needs kit v144',oldwrite.stderr);self.assertEqual(before,self.snapshot())
+
+    def test_malformed_receipts_fail_closed_without_tracebacks_or_new_cards(self):
+        for key,value in (('version',True),('projection',[]),('destination',None),('comments',[None,None]),('snapshot',[]),('copied_digest',{})):
+            self.setUp_reset();token=self.read_move()['snapshot'];self.move(token)
+            source=self.current();source['todos'][0]['handback'][key]=value
+            (self.root/'cards/t_task1.json').write_text(json.dumps(source));before=self.snapshot()
+            with self.assertRaises(SystemExit):self.move(token)
+            self.assertEqual(before,self.snapshot());self.assertEqual(2,len(self.cards()))
+
+    def test_pending_review_and_missing_bound_question_never_become_authority(self):
+        self.task['todos'][0]['done']=True;self.task['column']='pending-review';self.write()
+        token=self.read_done()['snapshot'];before=self.snapshot()
+        with self.assertRaises(SystemExit):self.done(token)
+        self.assertEqual(before,self.snapshot())
+        self.task['column']='in-progress';self.task['owner_questions']={'record':{'proposal_id':'r_1234567890'}};self.write()
+        with self.assertRaises(SystemExit):self.read_done()
+
+    def test_copied_encoded_secret_and_hostile_unicode_refuse_without_echo(self):
+        secret='ghp_'+'a'*35
+        self.task['links']=[{'url':'https://example.invalid/'+''.join('%%%02x'%ord(c) for c in secret),'title':'Evidence'}]
+        self.write();before=self.snapshot()
+        with self.assertRaises(SystemExit) as failure:self.read_move()
+        self.assertNotIn(secret,str(failure.exception));self.assertEqual(before,self.snapshot())
+        for value in ('hidden\u202evalue','hidden\ue000value','x'*301,'\ud800'):
+            self.task['links']=[];self.task['todos'][0]['text']=value;self.write();before=self.snapshot()
+            with self.assertRaises(SystemExit):self.read_move()
+            self.assertEqual(before,self.snapshot())
 
     def test_actual_concurrent_cli_calls_create_one_pair(self):
         token=self.read_move()['snapshot']
@@ -228,6 +257,25 @@ class Handbacks(unittest.TestCase):
         with patch.object(kt,'save',side_effect=close_race),patch.object(kt.time,'sleep'):
             with self.assertRaises(SystemExit):self.done(token)
         self.assertEqual('in-progress',self.current()['column']);self.assertIsNotNone(self.current()['waiting'])
+
+    def test_guarded_local_cleanup_removes_only_the_same_recorded_session(self):
+        for session,generation,removed in (('handback-test','a'*24,True),('a-new-session','a'*24,False),('handback-test','b'*24,False),('handback-test',None,False)):
+            data,_=kt.load();source=next(t for t in data['tasks'] if t['id']=='t_task1')
+            source['claim']={'agent':'codex','on_behalf_of':'osouthgate','session_id':'handback-test','generation':'a'*24,'status':'running','claimed_at':'2026-11-19T00:00:00Z'}
+            cards={'t_task1':{'session':session,'generation':generation},'t_other1':{'session':'another'}}
+            def rewrite(change):change(cards)
+            with patch.object(kt,'FILE',None),patch.object(kt,'rewrite_claim_record',side_effect=rewrite),patch.dict(kt._MUT,{'after':[]}):
+                kt.apply_completed_model(data,source,self.args(),'Synthetic completion',guarded=True)
+                for callback in kt._MUT['after']:callback(data)
+            self.assertEqual(removed,'t_task1' not in cards);self.assertIn('t_other1',cards)
+
+    def test_local_claim_writer_preserves_existing_generation_without_new_authority(self):
+        cards={}
+        def rewrite(change,*args):change(cards)
+        pending={'rec':{'id':'t_task1','agent':'codex','user':'osouthgate','session':'handback-test','attended':True,'generation':'a'*24}}
+        with patch.object(kt,'FILE',None),patch.dict(kt._PENDING_CLAIM,pending,clear=True),patch.object(kt,'rewrite_claim_record',side_effect=rewrite),patch.object(kt,'ensure_local_dir'),patch.object(kt,'claimant_key',return_value=''):
+            kt.write_claim_record()
+        self.assertEqual('a'*24,cards['t_task1']['generation']);self.assertEqual('handback-test',cards['t_task1']['session'])
 
 
 if __name__=='__main__':unittest.main()

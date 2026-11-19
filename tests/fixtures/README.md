@@ -27,6 +27,7 @@ Small, hand-checked boards used by `tests/test_fixture_boards.py` and browser te
 | `v4_kit48/` | v4 split with questions and an appended rank; unchanged data shape | kit v48 | Frozen checkpoint-release board preservation fixture |
 | `v4_kit72/` | v4 split, unchanged data shape (a copy of `v4_kit71`) | kit v72 | Frozen board before automation runners (`requires`, `due`, `tick --only`); kit-update 72 to 73 keeps every record |
 | `v4_kit143/` | v4 split with one canonical owner question, Inbox item and durable receipt | kit v143 | Frozen atomic-question preservation fixture |
+| `v4_kit144/` | v4 split with one snapshot-bound handback pair beside prior entities/questions | kit v144 | Frozen safe-handback receipt preservation fixture |
 | `v4_kit142/` | v4 split with a durable owner-authority wait instance | kit v142 | Frozen wait-identity preservation fixture |
 | `v4_kit141/` | v4 split with quiet-claim release explicitly off and all prior waits/entities | kit v141 | Frozen disabled opt-in preservation fixture |
 | `v4_kit140/` | v4 split with an agent-set wait for another card to complete | kit v140 | Frozen structured-wait fixture |

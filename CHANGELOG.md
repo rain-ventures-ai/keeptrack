@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v144: explicit stable-ID handbacks use a read-only native snapshot followed by a snapshot-bound atomic
+`todo-move`. Concurrent identical requests and lost-response retries verify and reuse one linked Backlog pair.
+Changed scope, content, claim or inconsistent receipts refuse before creating another card. Optional guarded
+`done` checks the same fresh snapshot inside CAS and refuses unresolved waits, owner questions, needs-human,
+Pending review and coordinated tasks. Ordinary move/done calls retain their behaviour; new receipt adoption raises
+minimum kit144. These are front-door building blocks, not an automatic classifier, permission or live activation.
+
 Kit v143: `comment CARD --owner-question FILE_OR_- --json` writes one structured choice comment, linked owner Inbox
 item and durable request receipt in one CAS transaction. Stable retries return the same identities; changed content,
 owner or inconsistent recorded data is refused. Inputs are byte/structure bounded before JSON decoding and screened

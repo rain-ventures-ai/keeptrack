@@ -35,12 +35,12 @@ def digest(value):
     return hashlib.sha256(b"keeptrack-handback-v1\0" + encoded(value)).hexdigest()
 
 
-def text(value, cap, optional=False):
+def text(value, cap, optional=False, multiline=False):
     if not isinstance(value, str) or len(value) > cap or (not optional and not value.strip()):
         refuse("text is missing or exceeds its limit")
     try:value.encode("utf-8", "strict")
     except UnicodeError:refuse("text is not UTF-8")
-    if any(unicodedata.category(c).startswith("C") or c in "\u2028\u2029" for c in value):
+    if any((unicodedata.category(c).startswith("C") and not (multiline and c in "\n\t")) or c in "\u2028\u2029" for c in value):
         refuse("text contains unsupported characters")
     return value
 
@@ -99,12 +99,22 @@ def questions(kt, data, tid):
     try:proposals = kt._all_proposals(data)
     except (ValueError, TypeError, AttributeError):refuse("Inbox identity needs repair")
     if not isinstance(proposals, list) or len(proposals) > 4096:refuse("Inbox exceeds the guarded lookup budget")
+    source=next(t for t in data["tasks"] if t.get("id")==tid)
+    records=source.get("owner_questions",{})
+    if not isinstance(records,dict) or len(records)>256 or any(not isinstance(record,dict) or not isinstance(record.get("proposal_id"),str) for record in records.values()):
+        refuse("owner-question bindings need repair")
+    bound_ids={record["proposal_id"] for record in records.values()}
+    found_ids=set()
     result = []
     for proposal in proposals:
         if not isinstance(proposal, dict):refuse("Inbox identity needs repair")
         change = proposal.get("change")
-        if isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in ("ask.choose", "ask.question"):
+        if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in ("ask.choose", "ask.question"):
+            if proposal.get("id") in found_ids:refuse("owner-question identity is ambiguous")
+            found_ids.add(proposal.get("id"))
+            if proposal.get("kind") not in ("ask.choose","ask.question"):refuse("owner-question kind changed")
             result.append({**{k: proposal.get(k) for k in ("id", "kind", "status", "decider")},"change_digest":digest(change)})
+    if not bound_ids<=found_ids:refuse("a recorded owner question is missing")
     result.sort(key=lambda p: str(p.get("id")))
     return result
 
@@ -141,7 +151,7 @@ def request(a):
     kind=getattr(a,"handback_kind",None) or "rollout"
     if kind not in KINDS:refuse("unknown handback kind")
     return {"title":text(getattr(a,"title",None) or "",160,True),
-            "details":text(getattr(a,"details",None) or "",1500,True),"kind":kind}
+            "details":text(getattr(a,"details",None) or "",1500,True,multiline=True),"kind":kind}
 
 
 def move_projection(kt,data,t,d,a):
@@ -280,7 +290,7 @@ def guard_completion(kt,data,t,expected,a):
     """Reusable same-CAS precondition. No mutation, claim cleanup or nested save occurs here."""
     if task(kt,data,t.get("id")) is not t:refuse("completion task is not the current source")
     if not isinstance(expected,str) or not DIGEST.fullmatch(expected):refuse("expected completion snapshot must be a digest")
-    projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",1000))
+    projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",1000,multiline=True))
     if digest(projection)!=expected:refuse("completion snapshot changed; nothing closed")
     kt.claim_owner_check(data,t,a,"done")
     if t.get("column")=="pending-review":refuse("Pending review still requires the owner's decision")
@@ -319,7 +329,7 @@ def done(kt,a):
     if not getattr(a,"json",False):refuse("guarded completion requires --json")
     expected=getattr(a,"expected_snapshot",None)
     if bool(getattr(a,"snapshot",False))==bool(expected):refuse("choose exactly one completion snapshot read or expected-snapshot write")
-    note=text(getattr(a,"note",None) or "",1000)
+    note=text(getattr(a,"note",None) or "",1000,multiline=True)
     screen(kt,[note])
     if a.snapshot:
         data,_=kt.load();t=task(kt,data,a.id,allow_done=True)

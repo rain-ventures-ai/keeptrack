@@ -4073,6 +4073,8 @@ def write_claim_record():
         return
     entry = {"session": rec["session"], "agent": rec["agent"], "user": rec["user"], "by_person": bool(rec["attended"]),
              "beat_at": int(time.time())}   # the claim was this card's beat
+    if isinstance(rec.get("generation"), str) and re.fullmatch(r"[a-f0-9]{24}", rec["generation"]):
+        entry["generation"] = rec["generation"]
     if claimant_key():
         entry["claimant"] = claimant_key()   # the hook of this Claude session beats this card; other sessions' hooks leave it
     def change(cards):
@@ -4193,7 +4195,7 @@ def do_claim(a, tid, data):
     hist(t, "claimed" + (f": {a.note}" if a.note else ""), f"{agent}@{user}")
     print(f"claimed {t['id']}: {t['title']}  (session {sid})")
     # a save that loses a race re-runs this on the newer board and may refuse: write the local record after the save
-    _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a)}
+    _PENDING_CLAIM["rec"] = {"id": t["id"], "agent": agent, "user": user, "session": sid, "attended": attended(a), "generation": t["claim"]["generation"]}
     _PENDING_CLAIM["response"] = {"id": t["id"], "generation": t["claim"]["generation"]}
     if FILE and not (a.session or os.environ.get("BOARD_SESSION") or os.environ.get("CLAUDE_SESSION_ID") or os.environ.get("CODEX_SESSION_ID")):
         print(f"note: a --file board keeps no local claim record; pass --session {sid} (or export BOARD_SESSION) to heartbeat, done or release it")
@@ -4494,11 +4496,12 @@ def apply_completed_model(data, t, a, note, guarded=False):
     t["updated"] = now(); tid = t["id"]
     if guarded:
         old_session = (c or {}).get("session_id")
+        old_generation = (c or {}).get("generation")
         def forget_same_record(_):
-            if FILE or not old_session:
+            if FILE or not old_session or not isinstance(old_generation, str) or not re.fullmatch(r"[a-f0-9]{24}", old_generation):
                 return
             def change(cards):
-                if (cards.get(tid) or {}).get("session") != old_session:
+                if (cards.get(tid) or {}).get("session") != old_session or (cards.get(tid) or {}).get("generation") != old_generation:
                     return False
                 cards.pop(tid, None)
             try:
@@ -16259,7 +16262,7 @@ def main():
     s.add_argument("--details", help="what must happen, and who or what it waits on")
     s.add_argument("--snapshot", action="store_true", help="read a safe stable-ID move projection without writing")
     s.add_argument("--expected-snapshot", help="digest of the screened native move snapshot")
-    s.add_argument("--handback-kind", choices=("rollout", "device", "owner-decision"))
+    s.add_argument("--handback-kind", help="rollout, device or owner-decision; descriptive data only")
     s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_todo_move)
     s = sub.add_parser("todo-edit", help="change the text of checklist item N in place"); s.add_argument("id"); s.add_argument("n"); s.add_argument("text"); s.set_defaults(f=cmd_todo_edit)
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column_pos", nargs="?"); s.add_argument("--column"); s.add_argument("--session")
