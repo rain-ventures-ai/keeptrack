@@ -25,6 +25,53 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v144 (schema 4)
+
+- Copies only: install `board/handbacks.py` through the kit manifest. No migration or live activation.
+- `todo-move t_SOURCE d_ITEM --snapshot --json` is read-only and returns a bounded screened projection and digest.
+  Pass the same title/details/kind and `--expected-snapshot DIGEST --json` to move the screened item. A real Backlog
+  column, unique stable IDs, schema4 split storage and unchanged source/claim metadata are required. Heartbeat-only
+  changes do not change the snapshot. Optional `--handback-kind` is rollout, device or owner-decision: data, not authority.
+- Native move saves the existing follow-up model and a durable receipt atomically. Identical retries verify both
+  cards, copied contents, comments and the confirmed two-way relation; they do not create or rewrite a second pair.
+  Missing/archived/changed targets or forged markers fail closed. Source metadata and links are bound; no numeric
+  or multiwrite fallback exists in the safe mode. Receipts are capped at64 per source and64KiB combined; each
+  projection/receipt is at most16KiB UTF8. Local fixtures return null remote URLs. Plain legacy calls are unchanged.
+- Read-only existing-pair recovery can report verified historical facts after the original claim is released or
+  replaced, with no save or claim change. Its projection/token is historical data, never new permission. A stale
+  write token still refuses. Any later completion needs a separate fresh current-state snapshot and actual claim
+  ownership; a new claimant, wait, question or changed scope cannot be bypassed by the old receipt.
+- `done t_SOURCE --note NOTE --snapshot --json` then `--expected-snapshot DIGEST --json` is optional guarded
+  completion. It binds the note, source metadata, exact links, current checklist/receipts, claim identity and opaque
+  wait/question state. Same-CAS checks reject open criteria, pending/unknown owner-question states, any wait,
+  needs-human, Pending review and coordination metadata before applying the usual finish model. A completed retry
+  verifies its stored outcome without adding history. Raw claim proofs are never exported. Local cleanup removes
+  only the matching recorded session and claim generation, preserving a newer claim record. Newly written local
+  records include that existing generation; legacy records without it are retained conservatively.
+- Guarded notes allow8192characters so ten linked follow-ups and the original note can fit; the complete UTF8 JSON
+  snapshot still has a16KiB budget and refuses over-budget input without truncation. Legacy ordinary `done` input
+  is unchanged. Read-only moved-pair verification on a Done source is permitted only with an actual matching
+  handback receipt; it never reopens the source or enables a mutation.
+- Add `--pr-open` to both guarded `done` calls for the separate release-only phase. Its projection explicitly says
+  `phase: pr-open-release`; its token cannot be used for Done. A new release requires the exact current explicit
+  session and claim generation inside CAS, schema4, no coordination and an In progress source. Existing waits,
+  questions, needs-human and other metadata are preserved. Nothing is marked Done/finished and no wait is cleared.
+  The JSON result is `{card_id, released: true, column: in-progress, created: boolean}`. Versioned `guarded_releases`
+  receipts are bounded to64records/64KiB combined. Exact retries/historical recovery verify the event digest and
+  source snapshot with zero saves; a replacement claim is never released or treated as fresh permission.
+- Related choose/question/approve Inbox items bind both current change and decision digests. A well-typed real
+  `proposal-answer` followed by native `proposal-done` (including explicit not-acted) can count as settled workflow
+  bookkeeping. Pending, answered-unacted, malformed/mismatched/future records and bare status strings remain
+  blocking. Current claim/wait/gates and actual PR proofs remain independent; no answer/done grants authority.
+  Privacy screening preserves individual fields and explicit split-secret assignments without treating incidental
+  URL/repository/column punctuation as an assignment across unrelated fields.
+- These native guards do not query GitHub or turn Inbox preferences into permission. A front-door caller must
+  still establish actual merged/no-PR status and its own authority before guarded completion; unread/unverified or
+  closed-unmerged PRs must remain open. Workers report candidate existing todo IDs to the front door, never create
+  follow-ups themselves. New receipts adopt minimum kit144, so frozen143 writers refuse rather than erase them.
+- Hosted phase0 and proposal-only safe handbacks refuse explicitly before transport. No wait is cleared, card
+  approved, dispatcher started or runtime policy changed by installing this version.
+
 ### v143 (schema 4)
 
 - Copies only; install the new `board/owner_questions.py` module from the manifest. No migration, timer or live
