@@ -27,7 +27,7 @@
       "id": "c_ada4333588ba",
       "at": "2026-11-18T23:57:16.000Z",
       "by": "codex@alex",
-      "text": "@alex Implementation waits on a choice\\.\n\n**Question:** Which approach?\n\n**Who it affects:** User wants Predictability; Maintainer wants Simple support\n\n**Options**\n1. **Focused change** (9/10): Small reversible change (judgement)\n2. **Wait** (5/10): Delays the improvement (judgement)\n\n**Recommendation:** Focused change. Support cost decides it\\.\n\n**Next step:** Prepare the chosen change for review\\.\n\nThis question records a preference. It grants no approval or permission and starts no work.\n\nLocal fixture: the linked Inbox item is stored locally; no remote link is available.",
+      "text": "@alex Implementation waits on a choice\\.\n\n## Now\n\n**Question:** Which approach?\n\n## Why\n\n**Who it affects:** User wants Predictability; Maintainer wants Simple support\n\n**Options**\n1. **Focused change** (9/10): Small reversible change (judgement)\n2. **Wait** (5/10): Delays the improvement (judgement)\n\n**Recommendation:** Focused change. Support cost decides it\\.\n\n## Plan\n\n**Next step:** Prepare the chosen change for review\\.\n\n## Done when\n\nThe owner records a preference in the linked Inbox item. That preference grants no approval or permission and starts no work.\n\nLocal fixture: the linked Inbox item is stored locally; no remote link is available.",
       "owner_question": {
         "version": 1,
         "proposal_id": "r_ca57169365",

@@ -216,12 +216,12 @@ def md(value):
 
 
 def render(value, owner, inbox_url):
-    lines = ["@" + owner + " " + md(value["waiting"]), "", "**Question:** " + md(value["question"]), "", "**Who it affects:** " + "; ".join(md(v["who"]) + " wants " + md(v["wants"]) for v in value["viewpoints"]), "", "**Options**"]
+    lines = ["@" + owner + " " + md(value["waiting"]), "", "## Now", "", "**Question:** " + md(value["question"]), "", "## Why", "", "**Who it affects:** " + "; ".join(md(v["who"]) + " wants " + md(v["wants"]) for v in value["viewpoints"]), "", "**Options**"]
     for index, option in enumerate(value["options"], 1):
         basis = "judgement" if option["basis"] == "judgement" else "[" + md(option["basis"]["title"]) + "](" + option["basis"]["url"].replace("(", "%28").replace(")", "%29") + ")"
         lines.append(str(index) + ". **" + md(option["label"]) + "** (" + str(option["score"]) + "/10): " + md(option["reason"]) + " (" + basis + ")")
     recommended = next(o for o in value["options"] if o["key"] == value["recommended"])
-    lines.extend(["", "**Recommendation:** " + md(recommended["label"]) + ". " + md(value["recommendation_reason"]), "", "**Next step:** " + md(value["next_step"]), "", "This question records a preference. It grants no approval or permission and starts no work."])
+    lines.extend(["", "**Recommendation:** " + md(recommended["label"]) + ". " + md(value["recommendation_reason"]), "", "## Plan", "", "**Next step:** " + md(value["next_step"]), "", "## Done when", "", "The owner records a preference in the linked Inbox item. That preference grants no approval or permission and starts no work."])
     if inbox_url:
         lines.extend(["", "[Answer this question in the Review Inbox](" + inbox_url + ")"])
     else:
