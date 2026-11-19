@@ -20,14 +20,15 @@
       "doneAt": "2026-11-19T00:35:47.000Z",
       "handback": {
         "version": 1,
-        "snapshot": "bc79265894df17994c90a976ff52223662ef9861e668c31004a073606392e20a",
+        "snapshot": "7992305258b05fe2a5682f9d2d87f6445bcb897ae83e0ff4c62451ba5a5873d3",
         "projection": {
           "version": 1,
           "board": {
             "repo": "example/board",
             "branch": "main",
             "path": "board/tasks.json",
-            "local": true
+            "local": true,
+            "file_digest": "4c30affcc95a7aba7488af5ce478eb7f11ce5e7d34ac757f45707a317231cb3f"
           },
           "owner": "alex",
           "source": {

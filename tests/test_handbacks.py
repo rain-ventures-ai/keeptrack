@@ -277,5 +277,22 @@ class Handbacks(unittest.TestCase):
             kt.write_claim_record()
         self.assertEqual('a'*24,cards['t_task1']['generation']);self.assertEqual('handback-test',cards['t_task1']['session'])
 
+    def test_snapshot_is_bound_to_the_selected_local_board_file(self):
+        token=self.read_move()['snapshot']
+        other=self.root/'another-board';other.mkdir();(other/'cards').mkdir();(other/'proposals').mkdir()
+        (other/'tasks.json').write_text(json.dumps(self.header));(other/'cards/t_task1.json').write_text(json.dumps(self.task))
+        before=self.snapshot()
+        with patch.object(kt,'FILE',str(other/'tasks.json')):
+            with self.assertRaises(SystemExit):self.move(token)
+        self.assertEqual(before,self.snapshot())
+
+    def test_malformed_model_containers_refuse_before_any_pair_or_finish(self):
+        for field in ('comments','history','related'):
+            for value in (None,{},[None]):
+                self.setUp_reset();self.task[field]=value;self.write();before=self.snapshot()
+                with self.assertRaises(SystemExit):self.read_move()
+                self.assertEqual(before,self.snapshot())
+                self.task[field]=[]
+
 
 if __name__=='__main__':unittest.main()

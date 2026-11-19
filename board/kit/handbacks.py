@@ -75,11 +75,20 @@ def task(kt, data, tid, allow_done=False):
     matches = [t for t in data.get("tasks", []) if isinstance(t, dict) and t.get("id") == tid]
     if len(matches) != 1:refuse("source is missing, archived or ambiguous")
     t = matches[0]
+    model_fields(t)
     if "coordination" in t:refuse("coordinated tasks require their existing completion protocol")
     if data.get("version") != 4 or data.get("layout") != "split":refuse("safe handbacks require schema4 split storage")
     if (t.get("column") == "done" and not allow_done) or t.get("archived") or t.get("outcome") == "cancelled":
         refuse("source must be an open card")
     return t
+
+
+def model_fields(t):
+    for field,cap in (("comments",1024),("history",4096),("related",256)):
+        values=t.get(field,[])
+        if not isinstance(values,list) or len(values)>cap or any(not isinstance(value,dict) for value in values):
+            refuse("card history, comment or relation shape needs repair")
+    if type(t.get("num")) is not int or t["num"]<=0:refuse("card display identity needs repair")
 
 
 def item(t, did):
@@ -99,7 +108,7 @@ def questions(kt, data, tid):
     try:proposals = kt._all_proposals(data)
     except (ValueError, TypeError, AttributeError):refuse("Inbox identity needs repair")
     if not isinstance(proposals, list) or len(proposals) > 4096:refuse("Inbox exceeds the guarded lookup budget")
-    source=next(t for t in data["tasks"] if t.get("id")==tid)
+    source=next(t for t in data["tasks"] if isinstance(t,dict) and t.get("id")==tid)
     records=source.get("owner_questions",{})
     if not isinstance(records,dict) or len(records)>256 or any(not isinstance(record,dict) or not isinstance(record.get("proposal_id"),str) for record in records.values()):
         refuse("owner-question bindings need repair")
@@ -143,6 +152,7 @@ def source_projection(kt, data, t):
            "owner":kt.quiet_claim_setting_owner(data),"source":metadata,"claim":public_claim,
            "waiting":digest(t["waiting"]) if t.get("waiting") is not None else None,"questions":questions(kt,data,t["id"]),"links":link_values}
     screen(kt,{"source":metadata,"claim":public_claim,"links":link_values,"board":value["board"],"owner":value["owner"]})
+    if kt.FILE:value["board"]["file_digest"]=hashlib.sha256(os.fsencode(os.path.realpath(kt.FILE))).hexdigest()
     encoded(value)
     return value
 
@@ -203,6 +213,9 @@ def verify_pair(kt,data,t,d,record,a,check_source=True):
     matches=[x for x in data.get("tasks",[]) if isinstance(x,dict) and x.get("id")==record["destination"]]
     if len(matches)!=1 or matches[0].get("archived"):refuse("recorded follow-up is missing or archived; never recreate it")
     o=matches[0]
+    model_fields(o)
+    if not isinstance(o.get("links",[]),list) or any(not isinstance(link,dict) for link in o.get("links",[])):
+        refuse("follow-up links need repair")
     if "coordination" in o:refuse("recorded follow-up changed completion protocol")
     copied={key:o.get(key) for key in ("title","client","project","priority","labels","assignees","details","todos")}
     if digest(copied)!=record["copied_digest"]:refuse("recorded follow-up content changed; never recreate it")
