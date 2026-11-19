@@ -18,6 +18,7 @@ KINDS = ("rollout", "device", "owner-decision")
 MAX_BYTES = 16384
 MAX_RECEIPTS = 64
 MAX_RECEIPT_BYTES = 65536
+GUARDED_NOTE = 8192
 
 
 def question_settled(kt,proposal,owner):
@@ -28,21 +29,21 @@ def question_settled(kt,proposal,owner):
         if not isinstance(owner,str) or not owner or not isinstance(decision,dict) or not isinstance(change,dict) \
                 or decision.get("action")!="answer" or not isinstance(decision.get("id"),str) or not re.fullmatch(r"a_[a-f0-9]{10}",decision["id"]):return False
         decider=proposal.get("decider") or owner
-        if not isinstance(decider,str) or decider.casefold()!=owner.casefold():return False
+        if not isinstance(decider,str) or not re.fullmatch(r"[A-Za-z0-9-]{1,39}",decider):return False
         creator=proposal.get("createdBy");answered_by=decision.get("by");done=decision.get("done")
         if not isinstance(creator,str) or not isinstance(answered_by,str) or not answered_by or not isinstance(done,dict) \
                 or not {"at","by"}<=set(done) or set(done)-{"at","by","acted","note"} \
                 or "acted" in done and done["acted"] is not False or not isinstance(done.get("by"),str):return False
         agent_creator="@" in creator and creator.rsplit("@",1)[1].casefold()==owner.casefold()
-        if answered_by.casefold()==owner.casefold():
+        if answered_by.casefold()==decider.casefold():
             if "relayed" in decision:return False
         else:
             relayed=decision.get("relayed")
-            if not agent_creator or answered_by!=creator or not isinstance(relayed,dict) or set(relayed)!={"for","via"} \
+            if decider.casefold()!=owner.casefold() or not agent_creator or answered_by!=creator or not isinstance(relayed,dict) or set(relayed)!={"for","via"} \
                     or not isinstance(relayed.get("for"),str) or relayed["for"].casefold()!=owner.casefold() \
                     or not isinstance(relayed.get("via"),str) or not relayed["via"] or len(relayed["via"])>kt.RELAY_VIA_LIMIT \
                     or not kt.RELAY_VIA_RE.fullmatch(relayed["via"]) or proposal["kind"]=="ask.approve":return False
-        if done["by"].casefold()!=owner.casefold() and not (agent_creator and done["by"]==creator):return False
+        if done["by"].casefold()!=decider.casefold() and not (agent_creator and done["by"]==creator):return False
         def stamp(value):
             if not isinstance(value,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)",value):raise ValueError()
             return dt.datetime.fromisoformat(value.replace("Z","+00:00"))
@@ -105,13 +106,42 @@ def screen(kt, value):
             strings.append(unicodedata.normalize("NFKC", item))
             if "://" in item:strings.append(unicodedata.normalize("NFKC",urllib.parse.unquote(item)))
     policy = kt.owner_question_module()
-    # A URL's scheme punctuation is not an assignment to an unrelated preceding field (e.g. "Token handling").
-    # Keep per-field checks and explicit/split assignment checks; hard URL boundaries prevent only that false join.
-    bounded=lambda value:"\n"+value+"\n" if re.match(r"https?://",value,re.I) else value
-    joined=[" ".join(bounded(value) for value in order) for order in (strings,reversed(strings))]
+    # Separate fields cannot supply incidental assignment punctuation inside a URL/repo/column. Other privacy
+    # patterns still see cross-field context; secret assignments require explicit key/operator/value boundaries.
+    joined=[" ".join(order) for order in (strings,reversed(strings))]
+    secret=r"(?:password|passphrase|api[_ -]?key|secret|token|credential)"
+    operator=r"(?:(?:is|was|are)\b|[:=,\-–—])"
+    label=re.compile(r"("+secret+r")(?:\s*("+operator+r"))?\s*",re.I)
+    prefix=re.compile(r"^\s*("+operator+r")\s*(.*)$",re.I|re.S)
+    labels=[]
+    for index,string in enumerate(strings):
+        match=label.fullmatch(string.strip())
+        if match:labels.append((match[1],match[2],{index}))
+    api=[i for i,value in enumerate(strings) if value.strip().casefold()=="api"]
+    for i in api:
+        for j,value in enumerate(strings):
+            if i==j:continue
+            if value.strip().casefold()=="key":labels.append(("API key",None,{i,j}))
+            elif value.strip().casefold().startswith("key"):
+                tail=prefix.match(value.strip()[3:])
+                if tail:
+                    if tail[2].strip():refuse("copied content failed the board privacy screen")
+                    labels.append(("API key",tail[1],{i,j}))
+    split_secret=False
+    for key,op,used in labels:
+        for index,string in enumerate(strings):
+            if index in used or not string.strip():continue
+            if op and policy.BOARD_PRIVATE.search(key+" "+op+" "+string):split_secret=True
+            tail=prefix.match(string)
+            if not op and tail:
+                if tail[2].strip() and policy.BOARD_PRIVATE.search(key+" "+string):split_secret=True
+                elif not tail[2].strip() and any(j not in used|{index} and value.strip() for j,value in enumerate(strings)):
+                    split_secret=True
+    cross_other=any(not re.match(secret+r"\b",match.group(),re.I) for value in joined for match in policy.BOARD_PRIVATE.finditer(value))
     blob=any(any(c.isdigit() for c in match.group()) and not (re.fullmatch(r"[0-9a-f]{40}",match.group()) and re.search(r"\b(?:commit|sha|sha-?1)[:\s]\s{0,2}$",line[max(0,match.start()-12):match.start()],re.I))
              for line in strings for match in re.finditer(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{40,}",line))
-    if kt.work_module().private_text(strings) or any(policy.BOARD_PRIVATE.search(value) or policy.PRIVATE_NEIGHBOURS.search(value) for value in strings+joined) or blob:
+    if kt.work_module().private_text(strings) or any(policy.BOARD_PRIVATE.search(value) or policy.PRIVATE_NEIGHBOURS.search(value) for value in strings) \
+            or any(policy.PRIVATE_NEIGHBOURS.search(value) for value in joined) or cross_other or split_secret or blob:
         refuse("copied content failed the board privacy screen")
 
 
@@ -306,7 +336,8 @@ def move(kt,a):
     if expected is not None and (not isinstance(expected,str) or not DIGEST.fullmatch(expected)):refuse("expected snapshot must be a digest")
     if bool(getattr(a,"snapshot",False))==bool(expected):refuse("choose exactly one snapshot read or expected-snapshot write")
     def locate(data):
-        t=task(kt,data,a.id);n,d=item(t,a.n)
+        t=task(kt,data,a.id,allow_done=bool(getattr(a,"snapshot",False)));n,d=item(t,a.n)
+        if t.get("column")=="done" and "handback" not in d:refuse("completed source has no historical handback receipt")
         return t,n,d
     if a.snapshot:
         data,_=kt.load();t,n,d=locate(data)
@@ -361,7 +392,7 @@ def guard_completion(kt,data,t,expected,a):
     if getattr(a,"force",False):refuse("guarded completion never overrides claim ownership")
     if task(kt,data,t.get("id")) is not t:refuse("completion task is not the current source")
     if not isinstance(expected,str) or not DIGEST.fullmatch(expected):refuse("expected completion snapshot must be a digest")
-    projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",1000,multiline=True))
+    projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",GUARDED_NOTE,multiline=True))
     if digest(projection)!=expected:refuse("completion snapshot changed; nothing closed")
     kt.claim_owner_check(data,t,a,"done")
     if t.get("column")=="pending-review":refuse("Pending review still requires the owner's decision")
@@ -403,7 +434,7 @@ def done(kt,a):
     if not getattr(a,"json",False):refuse("guarded completion requires --json")
     expected=getattr(a,"expected_snapshot",None)
     if bool(getattr(a,"snapshot",False))==bool(expected):refuse("choose exactly one completion snapshot read or expected-snapshot write")
-    note=text(getattr(a,"note",None) or "",1000,multiline=True)
+    note=text(getattr(a,"note",None) or "",GUARDED_NOTE,multiline=True)
     screen(kt,[note])
     if a.snapshot:
         data,_=kt.load();t=task(kt,data,a.id,allow_done=True)
@@ -454,10 +485,12 @@ def release_records(t):
                 or set(record["projection"])!={"version","board","owner","source","claim","waiting","questions","links","todos","note","phase"} \
                 or not isinstance(record["projection"].get("source"),dict) or not isinstance(record["projection"]["source"].get("id"),str) \
                 or not TASK.fullmatch(record["projection"]["source"]["id"]) or not isinstance(record["projection"].get("note"),str) \
-                or not record["projection"]["note"] or len(record["projection"]["note"])>1000 \
+                or not record["projection"]["note"] or len(record["projection"]["note"])>GUARDED_NOTE \
                 or digest(record["projection"])!=key or record.get("note_digest")!=digest(record["projection"].get("note")) \
                 or not isinstance(record.get("post_digest"),str) or not DIGEST.fullmatch(record["post_digest"]) \
-                or not isinstance(record.get("event"),dict):
+                or not isinstance(record.get("event"),dict) or set(record["event"])!={"at","by","digest"} \
+                or not isinstance(record["event"].get("at"),str) or not isinstance(record["event"].get("by"),str) \
+                or not isinstance(record["event"].get("digest"),str) or not DIGEST.fullmatch(record["event"]["digest"]):
             refuse("release receipt needs repair; never repeat an uncertain release")
         total+=len(encoded(record))
     if total>MAX_RECEIPT_BYTES:refuse("release receipt byte capacity needs repair")
@@ -473,7 +506,8 @@ def release_fact(kt,data,t,record,note):
     current=release_projection(kt,data,t,note)
     current["claim"]=None  # Historical facts never imply that a newer/current claim was released.
     if t.get("column")!="in-progress" or digest(current)!=record["post_digest"]:return None
-    if sum(event==record["event"] for event in t.get("history",[]))!=1:
+    if sum(isinstance(event,dict) and event.get("at")==record["event"].get("at") and event.get("by")==record["event"].get("by") \
+           and digest(event)==record["event"].get("digest") for event in t.get("history",[]))!=1:
         refuse("recorded release history cannot be verified")
     return release_result(t,False)
 
@@ -498,7 +532,7 @@ def release_open(kt,a):
     expected=getattr(a,"expected_snapshot",None);reading=getattr(a,"snapshot",False)
     if bool(reading)==bool(expected) or expected is not None and (not isinstance(expected,str) or not DIGEST.fullmatch(expected)):
         refuse("choose exactly one PR-open snapshot read or expected-snapshot write")
-    note=text(getattr(a,"note",None) or "",1000,multiline=True);screen(kt,[note])
+    note=text(getattr(a,"note",None) or "",GUARDED_NOTE,multiline=True);screen(kt,[note])
     data,_=kt.load();t=task(kt,data,a.id);records=release_records(t)
     if reading:
         found=[]
@@ -530,7 +564,8 @@ def release_open(kt,a):
         kt.hist(task_,"released for PR open: "+note)
         task_["updated"]=kt.now()
         record={"version":1,"snapshot":expected,"projection":projection,"note_digest":digest(note),
-                "post_digest":digest(release_projection(kt,current,task_,note)),"event":copy.deepcopy(task_["history"][-1])}
+                "post_digest":digest(release_projection(kt,current,task_,note)),"event":{key:task_["history"][-1][key] for key in ("at","by")}}
+        record["event"]["digest"]=digest(task_["history"][-1])
         values=dict(values);values[expected]=record
         if sum(len(encoded(value)) for value in values.values())>MAX_RECEIPT_BYTES:refuse("release receipt byte budget reached; nothing released")
         task_["guarded_releases"]=values

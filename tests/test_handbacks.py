@@ -68,11 +68,11 @@ class Handbacks(unittest.TestCase):
         self.task['claim']={'agent':'codex','on_behalf_of':'osouthgate','session_id':'handback-test','generation':'a'*24,
                             'status':'running','claimed_at':'2026-11-19T00:00:00Z','heartbeat_at':'2026-11-19T00:00:00Z'}
         self.write()
-    def add_question(self,kind='ask.choose'):
+    def add_question(self,kind='ask.choose',decider='osouthgate'):
         change={'task':'t_task1','question':'Which follow-up?'}
         if kind=='ask.choose':change['options']=[{'key':'yes','label':'Proceed'},{'key':'no','label':'Wait'}]
         if kind=='ask.approve':change.update(subject={'type':'pr','url':'https://github.com/example/widget/pull/2'},content_hash='sha256:'+'a'*64)
-        raw={'kind':kind,'title':'Synthetic question','decider':'osouthgate','reason':'Fixture lifecycle',
+        raw={'kind':kind,'title':'Synthetic question','decider':decider,'reason':'Fixture lifecycle',
              'source':{'kind':'other','id':'synthetic:'+kind,'revision':'fixture-v1'},'action_key':'fixture:'+kind,'work_key':'fixture-work:'+kind,'change':change}
         result={}
         def create(data):
@@ -485,10 +485,42 @@ class Handbacks(unittest.TestCase):
     def test_url_field_boundaries_avoid_false_secret_joins_but_keep_split_controls(self):
         module=kt.handback_module();safe=['https://github.com/acme/widget/pull/1','Token handling']
         for values in (safe,list(reversed(safe))):module.screen(kt,values)
+        module.screen(kt,{'title':'Token handling:','url':'https://github.com/acme/widget/pull/1'})
+        module.screen(kt,{'title':'Improve token handling','client':'Example','project':'demo','priority':'low','column':'in-progress'})
         for values in ('API key is fixture-value',['is fixture-value','API key'],['API key','is fixture-value'],
                        ['API','key',':','fixture-value'],['fixture-value',':','key','API'],
                        ['password:','https://example.invalid/canary'],['https://example.invalid/canary','password:']):
             with self.assertRaises(SystemExit):module.screen(kt,values)
+
+    def test_completed_source_readonly_pair_facts_do_not_reopen_mutation(self):
+        token=self.read_move()['snapshot'];self.move(token);self.done(self.read_done()['snapshot']);before=self.snapshot()
+        with patch.object(kt,'save') as save:
+            self.assertFalse(self.read_move()['existing']['created']);save.assert_not_called()
+        self.assertEqual(before,self.snapshot())
+        with self.assertRaises(SystemExit):self.move(token)
+        self.assertEqual(before,self.snapshot())
+
+    def test_guarded_note_fits_ten_followup_links_and_enforces_only_its_new_cap(self):
+        note='Build complete. '+('n'*900)+'\n'+'\n'.join('[Follow-up %d](https://rain-ventures-ai.github.io/keeptrack/board/?repo=example%%2Fboard&branch=main&path=board%%2Ftasks.json&card=t_followup%d#%d)'%(n,n,n) for n in range(1,11))
+        self.assertGreater(len(note),1000);self.task['todos'][0]['done']=True;self.write()
+        self.assertTrue(self.done(self.read_done(note=note)['snapshot'],note=note)['closed'])
+        self.setUp_reset();self.owned();self.assertTrue(self.release_open(self.read_release(note=note)['snapshot'],note=note)['released'])
+        self.setUp_reset();self.owned();cap='x'*8192
+        self.assertTrue(self.release_open(self.read_release(note=cap)['snapshot'],note=cap)['released'])
+        self.setUp_reset();self.owned()
+        for reader in (self.read_done,self.read_release):
+            with patch.object(kt,'load') as load:
+                with self.assertRaises(SystemExit):reader(note='x'*8193)
+                load.assert_not_called()
+        with contextlib.redirect_stdout(io.StringIO()):kt.cmd_done(self.args(note='x'*8193))
+        self.assertEqual('done',self.current()['column'])
+
+    def test_other_named_person_real_answer_done_is_resolved_without_external_authority(self):
+        self.header['people'].append({'github':'sam'});self.task['todos'][0]['done']=True;self.write()
+        pid=self.add_question(decider='sam')
+        with patch.dict(os.environ,BOARD_USER='sam'):self.answer_question(pid)
+        self.complete_question(pid)
+        self.assertTrue(kt.handback_module().question_settled(kt,self.proposal(pid),'osouthgate'))
         self.setUp_reset();self.owned();token=self.read_release()['snapshot'];before=self.snapshot()
         with patch.object(kt.handback_module(),'MAX_RECEIPT_BYTES',1):
             with self.assertRaises(SystemExit):self.release_open(token)
