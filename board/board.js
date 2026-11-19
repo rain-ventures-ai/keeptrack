@@ -2848,6 +2848,41 @@ if (typeof window !== 'undefined') (() => {
     if (flags.length) node.append(el('span', 'flow-cycle', flags.join(' · ')));
     node.onclick = () => openCard(t.id); flowCardCache.set(t.id, { key, node }); return node;
   }
+  function flowRunnerStatus(r) {
+    const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+    const keys = (x, names) => object(x) && Object.keys(x).sort().join(',') === names.slice().sort().join(',');
+    const stamp = x => typeof x === 'string' && !x.startsWith('0000-') && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(x) && Number.isFinite(Date.parse(x)) && new Date(x).toISOString() === x.replace(/Z$/, '.000Z');
+    const legacyStamp = x => stamp(x) || (typeof x === 'string' && !x.startsWith('0000-') && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(x) && Number.isFinite(Date.parse(x)) && new Date(x).toISOString() === x);
+    const integer = (x, min, max) => Number.isInteger(x) && x >= min && x <= max;
+    const engines = ['claude', 'codex'];
+    if (!object(r)) return null;
+    if (Object.hasOwn(r, 'schema')) {
+      // Published by relay/scripts/local_status.py. A malformed/future schema must not fall back to legacy guesses.
+      if (r.schema !== 'keeptrack-local-runner/1' || !keys(r, ['schema', 'host', 'state', 'paused', 'last_tick', 'last_run', 'engines']) ||
+          typeof r.host !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(r.host) || !['active', 'paused'].includes(r.state) || !stamp(r.last_tick)) return null;
+      if (r.state === 'active' ? r.paused !== null : !keys(r.paused, ['by', 'why']) || !['guard', 'owner'].includes(r.paused.by) ||
+          !['the board guard: the board changed outside its data', 'paused by hand'].includes(r.paused.why)) return null;
+      if (!keys(r.engines, engines) || engines.some(name => { const e = r.engines[name]; return !keys(e, ['out_of_usage', 'until', 'sign_in']) ||
+        typeof e.out_of_usage !== 'boolean' || typeof e.sign_in !== 'boolean' || !(e.until === null || stamp(e.until)); })) return null;
+      if (r.last_run !== null && (!keys(r.last_run, ['card', 'engine', 'exit', 'minutes', 'at']) || typeof r.last_run.card !== 'string' ||
+          !/^#[0-9]{1,9}$/.test(r.last_run.card) || !engines.includes(r.last_run.engine) || !integer(r.last_run.exit, 0, 255) ||
+          !integer(r.last_run.minutes, 0, 100000) || !stamp(r.last_run.at))) return null;
+      return { state: r.state, by: r.paused?.by, why: r.paused?.why, tick: r.last_tick, engines: r.engines };
+    }
+    // Older Flow documents used status/paused and separate engine facts. Accept only explicit, consistent states.
+    const status = ['active', 'paused'].includes(r.status) ? r.status : null;
+    const paused = typeof r.paused === 'boolean' ? (r.paused ? 'paused' : 'active') : null;
+    if ((!status && !paused) || (status && paused && status !== paused) || (r.status != null && !status) || (r.paused != null && !paused)) return null;
+    const facts = {};
+    for (const name of engines) {
+      const out = Array.isArray(r.engines_out) ? r.engines_out.slice(0, 8).find(e => object(e) && e.engine === name) : null;
+      const signed = object(r.sign_in) ? r.sign_in[name] : undefined;
+      if (out || typeof signed === 'boolean') facts[name] = { out_of_usage: !!out, until: legacyStamp(out?.until) ? out.until : null, sign_in: signed };
+    }
+    const state = status || paused;
+    return { state, by: state === 'paused' && typeof r.paused_by === 'string' ? shortText(r.paused_by) : '',
+      why: state === 'paused' && typeof r.pause_reason === 'string' ? shortText(r.pause_reason) : '', tick: legacyStamp(r.last_tick) ? r.last_tick : null, engines: facts };
+  }
   function flowStatus(meta) {
     const strip = el('div', 'flow-status');
     strip.setAttribute('role', 'status');
@@ -2855,13 +2890,19 @@ if (typeof window !== 'undefined') (() => {
     else if (!cfg().token || ro === 'public') strip.textContent = 'Sign in to see runner status and commit activity. Public boards refresh every two minutes.';
     else if (!meta.runner) strip.textContent = meta.runnerError || 'No runner status yet';
     else {
-      const r = meta.runner, paused = r.paused === true || r.status === 'paused';
-      strip.append(el('strong', '', paused ? 'Repository runner paused' : r.status === 'active' || r.paused === false ? 'Repository runner active' : 'Repository runner status unknown'));
-      // Contract for automation/local-runner.json: status, paused_by, pause_reason, last_tick,
-      // engines_out [{engine, until}], sign_in {engine: boolean}. Unknown fields are never printed.
-      [r.paused_by && `by ${shortText(r.paused_by)}`, r.pause_reason && shortText(r.pause_reason), r.last_tick && `Last tick ${ago(r.last_tick) || 'unknown'}`].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
-      if (Array.isArray(r.engines_out)) r.engines_out.slice(0, 8).forEach(e => { if (e && typeof e === 'object') strip.append(el('span', '', `${shortText(e.engine, 'Engine')} out of usage${e.until ? ' until ' + shortText(e.until) : ''}`)); });
-      if (r.sign_in && typeof r.sign_in === 'object') Object.entries(r.sign_in).slice(0, 8).forEach(([engine, ok]) => strip.append(el('span', '', `${shortText(engine)} sign-in: ${ok === true ? 'passes' : ok === false ? 'fails' : 'unknown'}`)));
+      const r = flowRunnerStatus(meta.runner), age = r?.tick ? Date.now() - Date.parse(r.tick) : null;
+      const stale = age !== null && age > 6 * 3600000, future = age !== null && age < -300000;
+      strip.append(el('strong', '', !r ? 'Repository runner status unknown · invalid report' : stale ? 'Repository runner status unknown · stale report' :
+        future ? 'Repository runner status unknown · report time is ahead' : `Repository runner reported ${r.state}`));
+      if (r) {
+        if (stale || future) strip.append(el('span', '', `Last reported state: ${r.state}`));
+        [r.by && `Reported pause by ${r.by}`, r.why, r.tick ? `Last reported tick ${future ? 'unknown (clock ahead)' : ago(r.tick) || 'unknown'}` : 'Last reported tick unknown'].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
+        for (const [name, e] of Object.entries(r.engines)) {
+          if (e.out_of_usage) strip.append(el('span', '', `${name} reported out of usage${e.until ? ' until ' + e.until : ''}`));
+          if (typeof e.sign_in === 'boolean') strip.append(el('span', '', `${name} sign-in: ${e.sign_in ? 'passes' : 'fails'} (reported local file check)`));
+        }
+        strip.append(el('span', '', 'Reports update on changes or every six hours; this is not a live heartbeat.'));
+      }
       if (meta.runnerError) strip.append(el('span', '', meta.runnerError + ' · showing last copy'));
     }
     return strip;

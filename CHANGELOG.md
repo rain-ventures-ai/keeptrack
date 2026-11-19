@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Flow reads the runner publisher's `keeptrack-local-runner/1` status format, including pause reasons and engine
+facts. It labels the last reported tick honestly, marks stale/malformed reports unknown and retains explicit legacy
+status support. Status publication cadence and runner services are unchanged. No board-data schema change.
+
 Archive compaction (card #557): `archive` now stores compact cards. A card keeps its core fields, details, to-dos,
 links, related cards, dates and last 3 comments (`settings.archive.keep_comments`, or `archive --keep-comments N`). Its
 `history` and `last_run` go, and so do its older comments and the archive file's separate history lines for it. The new
