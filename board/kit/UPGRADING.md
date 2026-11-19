@@ -34,6 +34,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
   choice payload, writes its canonical comment/Inbox item/receipt atomically, and returns stable IDs and links.
   Retry uncertain outcomes with the same request ID and payload. Changed payload/owner/recorded content refuses;
   retired archived payloads retain identity and refuse recreation. Never fall back to separate comment/proposal calls.
+- Connector intake adds `--require-owner-question-migration`, requiring an existing well-typed floor143 in every
+  CAS attempt. First the owner upgrades all writers, then explicitly runs `settings-set --min-kit 143`.
+  The connector cannot initiate migration by posting a routine question. Previous v143 CLI copies without this
+  constraint refuse the new option before writing. Direct native CLI use without the constraint remains unchanged.
 - Inputs are at most16KiB UTF8, depth8,96 containers and512 structural tokens before JSON decoding. Blank paths,
   directories, FIFOs and leaf symlinks refuse. File input uses pinned Linux descriptors; use stdin if safe file
   input is unavailable. Errors do not echo input or filenames. Hosted phase0 and proposal-only structured mode refuse.

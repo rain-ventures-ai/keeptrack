@@ -259,6 +259,10 @@ def submit(kt, a):
     def change(data):
         nonlocal initial_owner, initial_scope
         kt._MUT["recheck"] = True
+        if getattr(a, "require_owner_question_migration", False):
+            floor = data.get("settings", {}).get("min_kit") if isinstance(data.get("settings"), dict) else None
+            if type(floor) is not int or floor < KIT:
+                refuse("owner-managed migration to kit143 is required; nothing posted")
         kt.require_review_storage(data)
         owner = kt.quiet_claim_setting_owner(data)
         if initial_owner is None:

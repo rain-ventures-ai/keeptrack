@@ -5244,6 +5244,8 @@ def print_comments(comments):
 
 
 def cmd_comment(a):
+    if getattr(a, "require_owner_question_migration", False) and getattr(a, "owner_question", None) is None:
+        sys.exit("--require-owner-question-migration needs --owner-question")
     if getattr(a, "owner_question", None) is not None:
         from types import SimpleNamespace
         return owner_question_module().submit(SimpleNamespace(**globals()), a)
@@ -16215,6 +16217,7 @@ def main():
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
     s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", nargs="?", help="the comment (Markdown); - reads it from stdin")
     s.add_argument("--owner-question", metavar="FILE_OR_-", help="atomically post one structured owner question comment and linked Inbox item")
+    s.add_argument("--require-owner-question-migration", action="store_true", help="refuse structured intake unless this board already requires kit143 (checked on every save attempt)")
     s.add_argument("--json", action="store_true", help="structured question: return stable comment/proposal IDs and links")
     s.add_argument("--reply-to", dest="reply_to", help="reply one level under this comment id (not under a reply or an activity line)"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)

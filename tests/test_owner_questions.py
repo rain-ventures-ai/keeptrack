@@ -28,12 +28,13 @@ class OwnerQuestions(unittest.TestCase):
     setUp, tearDown, write, card, snapshot, proposals = (ew.ExpiredWaitReasks.setUp, ew.ExpiredWaitReasks.tearDown,
         ew.ExpiredWaitReasks.write, ew.ExpiredWaitReasks.card, ew.ExpiredWaitReasks.snapshot, ew.ExpiredWaitReasks.proposals)
 
-    def submit(self, value=None):
+    def submit(self, value=None, migrated=False):
         path = self.root / "question.json"
         path.write_text(json.dumps(question() if value is None else value))
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            kt.cmd_comment(SimpleNamespace(id="t_task1", text=None, reply_to=None, owner_question=str(path), json=True))
+            kt.cmd_comment(SimpleNamespace(id="t_task1", text=None, reply_to=None, owner_question=str(path), json=True,
+                                           require_owner_question_migration=migrated))
         return json.loads(output.getvalue())
 
     def test_atomic_question_comment_receipt_and_local_links(self):
@@ -52,6 +53,51 @@ class OwnerQuestions(unittest.TestCase):
         for key in ("waiting", "claim", "asked", "labels", "column", "todos"):
             self.assertEqual(before[key], task[key])
         self.assertNotIn("original-message-1", json.dumps(task))
+
+    def test_connector_constraint_requires_existing_typed_floor_without_writes(self):
+        (self.root / "question.json").write_text(json.dumps(question()))
+        for floor in (None, 142, True, "143", [], {}):
+            root = json.loads((self.root / "tasks.json").read_text())
+            if floor is None: root["settings"].pop("min_kit", None)
+            else: root["settings"]["min_kit"] = floor
+            (self.root / "tasks.json").write_text(json.dumps(root)); before = self.snapshot()
+            with self.subTest(floor=floor), self.assertRaisesRegex(SystemExit, "owner-managed migration"):
+                self.submit(migrated=True)
+            self.assertEqual(before, self.snapshot())
+        root["settings"]["min_kit"] = 143
+        (self.root / "tasks.json").write_text(json.dumps(root))
+        self.assertTrue(self.submit(migrated=True)["created"])
+        self.assertFalse(self.submit(migrated=True)["created"])
+
+    def test_connector_floor_is_rechecked_after_real_cas_conflict(self):
+        root = json.loads((self.root / "tasks.json").read_text()); root["settings"]["min_kit"] = 143
+        (self.root / "tasks.json").write_text(json.dumps(root))
+        def race(data, sha, message):
+            changed = json.loads((self.root / "tasks.json").read_text()); changed["settings"]["min_kit"] = 142
+            (self.root / "tasks.json").write_text(json.dumps(changed)); return False
+        before = self.card()
+        with patch.object(kt, "save", side_effect=race), patch.object(kt.time, "sleep"):
+            with self.assertRaisesRegex(SystemExit, "owner-managed migration"):
+                self.submit(migrated=True)
+        self.assertEqual(before, self.card()); self.assertEqual([], self.proposals())
+
+    def test_actual_person_migration_then_constraint_and_plain_flag_refusal(self):
+        kit = str(Path(ew.tr.HERE).parent / "board/kit/keeptrack.py")
+        env = dict(os.environ); env.pop("BOARD_AGENT", None); env.pop("BOARD_SESSION", None)
+        p = subprocess.run([sys.executable, kit, "--file", kt.FILE, "settings-set", "--min-kit", "143"], env=env, capture_output=True, text=True)
+        self.assertEqual(0, p.returncode, p.stderr)
+        self.assertTrue(self.submit(migrated=True)["created"])
+        before = self.snapshot()
+        p = subprocess.run([sys.executable, kit, "--file", kt.FILE, "comment", "t_task1", "Plain", "--require-owner-question-migration"], capture_output=True, text=True)
+        self.assertNotEqual(0, p.returncode); self.assertEqual(before, self.snapshot())
+
+    def test_actual_previous143_parser_refuses_constraint_without_any_write(self):
+        source = subprocess.check_output(["git", "show", "5083c9bd49ae9f192888f18b44f29bebb6492919:board/kit/keeptrack.py"], cwd=Path(ew.tr.HERE).parent)
+        old = self.root / "previous143.py"; old.write_bytes(source)
+        before = self.snapshot()
+        p = subprocess.run([sys.executable, str(old), "--file", kt.FILE, "comment", "t_task1", "--owner-question", "-", "--require-owner-question-migration", "--json"], input=json.dumps(question()), capture_output=True, text=True)
+        self.assertEqual(2, p.returncode); self.assertIn("unrecognized arguments", p.stderr)
+        self.assertEqual(before, self.snapshot())
 
     def test_replay_returns_same_ids_without_duplicate_and_changed_payload_refuses(self):
         first = self.submit(); before = self.snapshot()

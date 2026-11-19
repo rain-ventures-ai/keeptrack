@@ -14,6 +14,10 @@ The web route `#proposal=r_id` opens that exact item without answering it; missi
 card. First explicit structured use adopts minimum kit143; ordinary comments are unchanged. No answer, permission,
 wait clear, dispatcher wake, signed owner action or live activation is implied.
 
+Connector callers may add `--require-owner-question-migration`: every CAS attempt refuses unless the board already
+has a well-typed minimum kit143. The owner can establish that floor with `settings-set --min-kit 143` after upgrading
+all writers. This constraint never migrates an unmigrated board and does not change ordinary direct CLI behaviour.
+
 Kit v142: manual `reconcile --reask-expired` records one owner Inbox question and a durable receipt for each due
 no-condition wait. Seven UTC calendar days mark a wait stale for review; an explicit later nudge delays the question.
 Every wait stays blocking, including named-person and owner-authority gates. After a board adopts expiry receipts,
