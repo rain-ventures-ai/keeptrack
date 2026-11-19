@@ -61,6 +61,33 @@ class Handbacks(unittest.TestCase):
     def move(self,token,**changes):return self.output(kt.cmd_todo_move,self.args(expected_snapshot=token,**changes))
     def read_done(self,**changes):return self.output(kt.cmd_done,self.args(snapshot=True,**changes))
     def done(self,token,**changes):return self.output(kt.cmd_done,self.args(expected_snapshot=token,**changes))
+    def read_release(self,**changes):return self.output(kt.cmd_done,self.args(snapshot=True,pr_open=True,**changes))
+    def release_open(self,token,**changes):return self.output(kt.cmd_done,self.args(expected_snapshot=token,pr_open=True,**changes))
+    def owned(self):
+        self.task['todos'][0]['done']=True
+        self.task['claim']={'agent':'codex','on_behalf_of':'osouthgate','session_id':'handback-test','generation':'a'*24,
+                            'status':'running','claimed_at':'2026-11-19T00:00:00Z','heartbeat_at':'2026-11-19T00:00:00Z'}
+        self.write()
+    def add_question(self,kind='ask.choose'):
+        change={'task':'t_task1','question':'Which follow-up?'}
+        if kind=='ask.choose':change['options']=[{'key':'yes','label':'Proceed'},{'key':'no','label':'Wait'}]
+        if kind=='ask.approve':change.update(subject={'type':'pr','url':'https://github.com/example/widget/pull/2'},content_hash='sha256:'+'a'*64)
+        raw={'kind':kind,'title':'Synthetic question','decider':'osouthgate','reason':'Fixture lifecycle',
+             'source':{'kind':'other','id':'synthetic:'+kind,'revision':'fixture-v1'},'action_key':'fixture:'+kind,'work_key':'fixture-work:'+kind,'change':change}
+        result={}
+        def create(data):
+            added,_=kt._prepare_proposals(data,[raw]);result['id']=added[0]['id']
+        with contextlib.redirect_stdout(io.StringIO()):kt.mutate(create,'Synthetic lifecycle fixture')
+        return result['id']
+    def proposal(self,pid):return json.loads((self.root/'proposals'/(pid+'.json')).read_text())
+    def answer_question(self,pid,kind='ask.choose',reject=False):
+        args=SimpleNamespace(id=pid,choose='yes' if kind=='ask.choose' else None,other=None,approve=kind=='ask.approve' and not reject,
+                             reject=reject,text='Recorded response' if kind=='ask.question' else None,note=None,recommended=False,via=None)
+        with patch.dict(os.environ,BOARD_AGENT=''),contextlib.redirect_stdout(io.StringIO()):kt.cmd_proposal_answer(args)
+    def complete_question(self,pid,not_acted=False):
+        p=self.proposal(pid)
+        args=SimpleNamespace(id=pid,answer_id=p['decision']['id'],not_acted=not_acted,note=None,content_hash=p['change'].get('content_hash'))
+        with contextlib.redirect_stdout(io.StringIO()):kt.cmd_proposal_done(args)
 
     def test_snapshot_is_readonly_and_exports_no_session_proof(self):
         self.task['claim']={'agent':'codex','on_behalf_of':'osouthgate','session_id':'handback-test','generation':'g1',
@@ -332,6 +359,140 @@ class Handbacks(unittest.TestCase):
             proposal.write_text(json.dumps({'id':value,'kind':'task.create','status':'pending','change':{}}));before=self.snapshot()
             with self.assertRaises(SystemExit):self.read_move()
             self.assertEqual(before,self.snapshot());proposal.unlink()
+
+    def test_pr_open_release_preserves_all_owner_blockers_without_done(self):
+        self.owned();self.task['waiting']={'on':'Owner choice','who':'osouthgate','since':'2026-11-19'}
+        self.task['labels']=['held','needs-human'];self.task['claim']['status']='blocked';self.write()
+        path=self.root/'proposals/r_1234567890.json'
+        path.write_text(json.dumps({'id':'r_1234567890','kind':'ask.choose','status':'pending','decider':'osouthgate','change':{'task':'t_task1'}}))
+        before=self.current();proposal=path.read_bytes();read=self.read_release()
+        self.assertEqual('pr-open-release',read['projection']['phase'])
+        result=self.release_open(read['snapshot']);source=self.current()
+        self.assertEqual({'card_id':'t_task1','released':True,'column':'in-progress','created':True},result)
+        self.assertIsNone(source['claim']);self.assertEqual('in-progress',source['column'])
+        for field in ('waiting','labels','todos','links'):self.assertEqual(before[field],source[field])
+        self.assertEqual(proposal,path.read_bytes());self.assertNotIn('finished',source);self.assertNotIn('outcome',source)
+        self.assertEqual(1,len(source['guarded_releases']))
+
+    def test_pr_open_release_retry_and_historical_recovery_never_touch_new_claim(self):
+        self.owned();token=self.read_release()['snapshot'];self.release_open(token);before=self.snapshot()
+        with patch.object(kt,'save') as save:
+            self.assertFalse(self.read_release()['existing']['created']);self.assertFalse(self.release_open(token)['created']);save.assert_not_called()
+        self.assertEqual(before,self.snapshot())
+        source=self.current();replacement={'agent':'another','session_id':'new-session','generation':'b'*24,'status':'blocked','claimed_at':'2026-11-19T00:01:00Z'}
+        source['claim']=replacement;(self.root/'cards/t_task1.json').write_text(json.dumps(source));before=self.snapshot()
+        with patch.object(kt,'save') as save:
+            self.assertFalse(self.read_release()['existing']['created']);self.assertFalse(self.release_open(token)['created']);save.assert_not_called()
+        self.assertEqual(before,self.snapshot());self.assertEqual(replacement,self.current()['claim'])
+
+    def test_pr_open_release_same_CAS_replacement_or_input_change_refuses(self):
+        for field in ('claim','links','waiting'):
+            self.setUp_reset();self.owned();token=self.read_release()['snapshot'];real_save=kt.save;calls=[]
+            def race(data,state,message):
+                calls.append(True)
+                if len(calls)>1:return real_save(data,state,message)
+                source=self.current()
+                if field=='claim':source['claim']={'agent':'another','session_id':'new-session','generation':'b'*24,'status':'blocked','claimed_at':'2026-11-19T00:01:00Z'}
+                elif field=='links':source['links'].append({'url':'https://github.com/example/other/pull/2','title':'PR'})
+                else:source['waiting']={'on':'New owner choice','who':'osouthgate','since':'2026-11-19'}
+                (self.root/'cards/t_task1.json').write_text(json.dumps(source));return False
+            with patch.object(kt,'save',side_effect=race),patch.object(kt.time,'sleep'):
+                with self.assertRaises(SystemExit):self.release_open(token)
+            self.assertEqual('in-progress',self.current()['column']);self.assertIsNotNone(self.current()['claim'])
+            self.assertNotIn('guarded_releases',self.current())
+            self.task['waiting']=None;self.task['links']=[]
+
+    def test_pr_open_snapshot_cannot_authorise_done_or_another_session(self):
+        self.owned();token=self.read_release()['snapshot'];before=self.snapshot()
+        with self.assertRaises(SystemExit):self.done(token)
+        with patch.dict(os.environ,BOARD_SESSION='another-session'):
+            with self.assertRaises(SystemExit):self.release_open(token)
+        self.assertEqual(before,self.snapshot())
+
+    def test_guarded_phases_never_force_another_claim_or_route_hosted_done(self):
+        self.owned();done_token=self.read_done()['snapshot'];release_token=self.read_release()['snapshot'];before=self.snapshot()
+        with patch.dict(os.environ,BOARD_SESSION='another-session'):
+            with self.assertRaises(SystemExit):self.done(done_token,force=True)
+            with self.assertRaises(SystemExit):self.release_open(release_token,force=True)
+        self.assertEqual(before,self.snapshot())
+        with patch.object(kt,'_HOSTED_STORAGE') as transport:
+            with self.assertRaisesRegex(SystemExit,'capability_unavailable'):
+                kt.hosted_dispatch(self.args(cmd='done',pr_open=True))
+            transport.assert_not_called()
+
+    def test_real_cli_concurrent_pr_open_release_is_one_record_and_no_done(self):
+        self.owned();read=self.read_release();token=read['snapshot']
+        command=[sys.executable,str(SOURCE),'--file',str(self.root/'tasks.json'),'done','t_task1','--pr-open','--json','--expected-snapshot',token,'--note',self.args().note]
+        def run():return subprocess.run(command,capture_output=True,text=True,env=dict(os.environ),timeout=20)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(lambda _:run(),range(2)))
+        self.assertTrue(all(p.returncode==0 for p in results),[(p.returncode,p.stderr) for p in results])
+        self.assertEqual(1,sum(json.loads(p.stdout)['created'] for p in results))
+        self.assertEqual(1,len(self.current()['guarded_releases']));self.assertIsNone(self.current()['claim'])
+        self.assertEqual('in-progress',self.current()['column']);self.assertNotIn('finished',self.current())
+
+    def test_release_receipt_malformed_missing_event_or_budget_refuses_cleanly(self):
+        self.owned();token=self.read_release()['snapshot'];self.release_open(token)
+        original=self.current()
+        for key,value in (('version',True),('projection',[]),('post_digest',None),('event',[])):
+            source=copy.deepcopy(original);source['guarded_releases'][token][key]=value
+            (self.root/'cards/t_task1.json').write_text(json.dumps(source));before=self.snapshot()
+            with self.assertRaises(SystemExit):self.read_release()
+            self.assertEqual(before,self.snapshot())
+        source=copy.deepcopy(original);source['history']=[];(self.root/'cards/t_task1.json').write_text(json.dumps(source));before=self.snapshot()
+        with self.assertRaises(SystemExit):self.release_open(token)
+        self.assertEqual(before,self.snapshot())
+
+    def test_actual_answer_then_native_done_is_terminal_bookkeeping_not_authority(self):
+        self.task['todos'][0]['done']=True;self.write();pid=self.add_question()
+        pending=self.read_done();self.assertFalse(pending['projection']['questions'][0]['settled'])
+        self.answer_question(pid);answered=self.read_done()
+        self.assertFalse(answered['projection']['questions'][0]['settled'])
+        with self.assertRaises(SystemExit):self.done(answered['snapshot'])
+        self.complete_question(pid);settled=self.read_done()
+        self.assertEqual('answered',settled['projection']['questions'][0]['status']);self.assertTrue(settled['projection']['questions'][0]['settled'])
+        self.assertNotEqual(answered['snapshot'],settled['snapshot'])
+        self.assertNotEqual(answered['projection']['questions'][0]['decision_digest'],settled['projection']['questions'][0]['decision_digest'])
+        with self.assertRaises(SystemExit):self.done(answered['snapshot'])
+        self.assertTrue(self.done(settled['snapshot'])['closed'])
+
+    def test_native_not_acted_and_approve_questions_never_bypass_other_gates(self):
+        self.task['todos'][0]['done']=True;self.write();pid=self.add_question('ask.approve')
+        self.assertEqual('ask.approve',self.read_done()['projection']['questions'][0]['kind'])
+        self.answer_question(pid,'ask.approve',reject=True);self.complete_question(pid,not_acted=True)
+        settled=self.read_done();self.assertTrue(settled['projection']['questions'][0]['settled'])
+        self.task=self.current();self.task['waiting']={'on':'Separate owner gate','who':'osouthgate','since':'2026-11-19'};self.write()
+        current=self.read_done();self.assertTrue(current['projection']['questions'][0]['settled']);before=self.snapshot()
+        with self.assertRaises(SystemExit):self.done(current['snapshot'])
+        self.assertEqual(before,self.snapshot())
+
+    def test_question_resolution_malformed_mismatched_or_missing_done_stays_blocked(self):
+        self.task['todos'][0]['done']=True;self.write();pid=self.add_question();self.answer_question(pid);self.complete_question(pid)
+        original=self.proposal(pid);module=kt.handback_module()
+        self.assertTrue(module.question_settled(kt,original,'osouthgate'))
+        changes=[('status','pending'),('status','accepted'),('status','ignored'),('done',None),('done',{}),('done',{'at':'2026-11-19junk','by':'codex@osouthgate'}),
+                 ('done',{'at':original['decision']['done']['at'],'by':'another'}),('answer',{'choice':'missing'}),('answer',[]),('id','wrong-answer-id')]
+        for key,value in changes:
+            item=copy.deepcopy(original)
+            if key=='status':item[key]=value
+            else:item['decision'][key]=value
+            self.assertFalse(module.question_settled(kt,item,'osouthgate'),(key,value))
+        for offset in ('+00:99','-00:99','+24:00'):
+            item=copy.deepcopy(original);item['decision']['at']='2020-01-01T00:00:00'+offset;item['decision']['done']['at']='2020-01-01T00:01:00'+offset
+            self.assertFalse(module.question_settled(kt,item,'osouthgate'))
+        item=copy.deepcopy(original);item['decision']['done']['at']='9999-01-01T00:00:00Z'
+        self.assertFalse(module.question_settled(kt,item,'osouthgate'))
+
+    def test_url_field_boundaries_avoid_false_secret_joins_but_keep_split_controls(self):
+        module=kt.handback_module();safe=['https://github.com/acme/widget/pull/1','Token handling']
+        for values in (safe,list(reversed(safe))):module.screen(kt,values)
+        for values in ('API key is fixture-value',['is fixture-value','API key'],['API key','is fixture-value'],
+                       ['API','key',':','fixture-value'],['fixture-value',':','key','API'],
+                       ['password:','https://example.invalid/canary'],['https://example.invalid/canary','password:']):
+            with self.assertRaises(SystemExit):module.screen(kt,values)
+        self.setUp_reset();self.owned();token=self.read_release()['snapshot'];before=self.snapshot()
+        with patch.object(kt.handback_module(),'MAX_RECEIPT_BYTES',1):
+            with self.assertRaises(SystemExit):self.release_open(token)
+        self.assertEqual(before,self.snapshot())
 
 
 if __name__=='__main__':unittest.main()

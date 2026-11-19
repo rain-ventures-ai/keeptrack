@@ -1,6 +1,9 @@
 """Snapshot-bound follow-up moves and guarded completion. Receipts are data, never authority."""
 import copy
+import contextlib
+import datetime as dt
 import hashlib
+import io
 import json
 import os
 import re
@@ -15,6 +18,49 @@ KINDS = ("rollout", "device", "owner-decision")
 MAX_BYTES = 16384
 MAX_RECEIPTS = 64
 MAX_RECEIPT_BYTES = 65536
+
+
+def question_settled(kt,proposal,owner):
+    """Factual native question lifecycle only. This never authorises the answer's external effects."""
+    try:
+        if not isinstance(proposal,dict) or proposal.get("kind") not in kt.ASK_KINDS or proposal.get("status")!="answered":return False
+        decision=proposal.get("decision");change=proposal.get("change")
+        if not isinstance(owner,str) or not owner or not isinstance(decision,dict) or not isinstance(change,dict) \
+                or decision.get("action")!="answer" or not isinstance(decision.get("id"),str) or not re.fullmatch(r"a_[a-f0-9]{10}",decision["id"]):return False
+        decider=proposal.get("decider") or owner
+        if not isinstance(decider,str) or decider.casefold()!=owner.casefold():return False
+        creator=proposal.get("createdBy");answered_by=decision.get("by");done=decision.get("done")
+        if not isinstance(creator,str) or not isinstance(answered_by,str) or not answered_by or not isinstance(done,dict) \
+                or not {"at","by"}<=set(done) or set(done)-{"at","by","acted","note"} \
+                or "acted" in done and done["acted"] is not False or not isinstance(done.get("by"),str):return False
+        agent_creator="@" in creator and creator.rsplit("@",1)[1].casefold()==owner.casefold()
+        if answered_by.casefold()==owner.casefold():
+            if "relayed" in decision:return False
+        else:
+            relayed=decision.get("relayed")
+            if not agent_creator or answered_by!=creator or not isinstance(relayed,dict) or set(relayed)!={"for","via"} \
+                    or not isinstance(relayed.get("for"),str) or relayed["for"].casefold()!=owner.casefold() \
+                    or not isinstance(relayed.get("via"),str) or not relayed["via"] or len(relayed["via"])>kt.RELAY_VIA_LIMIT \
+                    or not kt.RELAY_VIA_RE.fullmatch(relayed["via"]) or proposal["kind"]=="ask.approve":return False
+        if done["by"].casefold()!=owner.casefold() and not (agent_creator and done["by"]==creator):return False
+        def stamp(value):
+            if not isinstance(value,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)",value):raise ValueError()
+            return dt.datetime.fromisoformat(value.replace("Z","+00:00"))
+        if not stamp(decision.get("at"))<=stamp(done["at"])<=stamp(kt.now()):return False
+        if "note" in done:text(done["note"],300)
+        with contextlib.redirect_stderr(io.StringIO()),contextlib.redirect_stdout(io.StringIO()):kt.check_stored_change(proposal)
+        answer=decision.get("answer")
+        if not isinstance(answer,dict) or not answer or set(answer)-{"choice","other","approved","text","note"}:return False
+        if "approved" in answer and type(answer["approved"]) is not bool:return False
+        for key in ("choice","other","text","note"):
+            if key in answer:text(answer[key],300)
+        with contextlib.redirect_stderr(io.StringIO()),contextlib.redirect_stdout(io.StringIO()):
+            canonical=kt.ask_answer(proposal,choose=answer.get("choice"),other=answer.get("other"),approve=answer.get("approved"),text=answer.get("text"),note=answer.get("note"))
+        if canonical!=answer:return False
+        if proposal["kind"]=="ask.approve" and answer.get("approved") is not True and done.get("acted") is not False:return False
+        return True
+    except (SystemExit,TypeError,ValueError,KeyError,AttributeError,OverflowError,RecursionError):
+        return False
 
 
 def refuse(message):
@@ -59,10 +105,13 @@ def screen(kt, value):
             strings.append(unicodedata.normalize("NFKC", item))
             if "://" in item:strings.append(unicodedata.normalize("NFKC",urllib.parse.unquote(item)))
     policy = kt.owner_question_module()
-    whole = " ".join(strings)
+    # A URL's scheme punctuation is not an assignment to an unrelated preceding field (e.g. "Token handling").
+    # Keep per-field checks and explicit/split assignment checks; hard URL boundaries prevent only that false join.
+    bounded=lambda value:"\n"+value+"\n" if re.match(r"https?://",value,re.I) else value
+    joined=[" ".join(bounded(value) for value in order) for order in (strings,reversed(strings))]
     blob=any(any(c.isdigit() for c in match.group()) and not (re.fullmatch(r"[0-9a-f]{40}",match.group()) and re.search(r"\b(?:commit|sha|sha-?1)[:\s]\s{0,2}$",line[max(0,match.start()-12):match.start()],re.I))
              for line in strings for match in re.finditer(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{40,}",line))
-    if kt.work_module().private_text(strings) or policy.BOARD_PRIVATE.search(whole) or policy.PRIVATE_NEIGHBOURS.search(whole) or blob:
+    if kt.work_module().private_text(strings) or any(policy.BOARD_PRIVATE.search(value) or policy.PRIVATE_NEIGHBOURS.search(value) for value in strings+joined) or blob:
         refuse("copied content failed the board privacy screen")
 
 
@@ -123,11 +172,12 @@ def questions(kt, data, tid):
         if not isinstance(proposal, dict):refuse("Inbox identity needs repair")
         if proposal.get("id") is not None and not isinstance(proposal.get("id"),str):refuse("Inbox identity needs repair")
         change = proposal.get("change")
-        if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in ("ask.choose", "ask.question"):
+        if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in kt.ASK_KINDS:
             if proposal.get("id") in found_ids:refuse("owner-question identity is ambiguous")
             found_ids.add(proposal.get("id"))
-            if proposal.get("kind") not in ("ask.choose","ask.question"):refuse("owner-question kind changed")
-            result.append({**{k: proposal.get(k) for k in ("id", "kind", "status", "decider")},"change_digest":digest(change)})
+            if proposal.get("kind") not in kt.ASK_KINDS:refuse("owner-question kind changed")
+            result.append({**{k: proposal.get(k) for k in ("id", "kind", "status", "decider")},"change_digest":digest(change),
+                           "decision_digest":digest(proposal.get("decision")),"settled":question_settled(kt,proposal,kt.quiet_claim_setting_owner(data))})
     if not bound_ids<=found_ids:refuse("a recorded owner question is missing")
     result.sort(key=lambda p: str(p.get("id")))
     return result
@@ -142,7 +192,7 @@ def source_projection(kt, data, t):
         if not isinstance(values,list) or len(values)>count:refuse("source copied metadata needs repair")
         metadata[field]=[text(x,cap) for x in values]
     claim=t.get("claim")
-    if claim is not None and not isinstance(claim,dict):refuse("claim metadata needs repair")
+    if claim is not None and (not isinstance(claim,dict) or not claim):refuse("claim metadata needs repair")
     # Heartbeat movement is not a semantic change; the actual session proof remains local and authoritative.
     public_claim = {k:claim.get(k) for k in ("generation","agent","on_behalf_of","status","claimed_at")} if claim else None
     if public_claim:
@@ -308,6 +358,7 @@ def completion_projection(kt,data,t,note):
 
 def guard_completion(kt,data,t,expected,a):
     """Reusable same-CAS precondition. No mutation, claim cleanup or nested save occurs here."""
+    if getattr(a,"force",False):refuse("guarded completion never overrides claim ownership")
     if task(kt,data,t.get("id")) is not t:refuse("completion task is not the current source")
     if not isinstance(expected,str) or not DIGEST.fullmatch(expected):refuse("expected completion snapshot must be a digest")
     projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",1000,multiline=True))
@@ -316,7 +367,7 @@ def guard_completion(kt,data,t,expected,a):
     if t.get("column")=="pending-review":refuse("Pending review still requires the owner's decision")
     if t.get("waiting") is not None:refuse("a wait is still open; nothing closed")
     if "needs-human" in t.get("labels",[]):refuse("needs-human remains open; nothing closed")
-    if any(p.get("status") not in ("accepted","ignored") for p in projection["questions"]):refuse("an owner question remains open; nothing closed")
+    if any(p.get("settled") is not True for p in projection["questions"]):refuse("an owner question remains open; nothing closed")
     for d in t["todos"]:
         if not isinstance(d,dict) or d.get("done") is not True:refuse("completion has an unfinished acceptance criterion")
         if "handback" in d:
@@ -347,7 +398,8 @@ def completed_retry(kt,data,t,expected,note):
 
 def done(kt,a):
     preflight(kt)
-    if getattr(a,"cancel",False):refuse("guarded completion cannot cancel")
+    if getattr(a,"pr_open",False):return release_open(kt,a)
+    if getattr(a,"cancel",False) or getattr(a,"force",False):refuse("guarded completion cannot cancel or override ownership")
     if not getattr(a,"json",False):refuse("guarded completion requires --json")
     expected=getattr(a,"expected_snapshot",None)
     if bool(getattr(a,"snapshot",False))==bool(expected):refuse("choose exactly one completion snapshot read or expected-snapshot write")
@@ -376,4 +428,115 @@ def done(kt,a):
         data.setdefault("settings",{})["min_kit"]=max(kt.board_min_kit(data),KIT)
         answer.clear();answer.update(card_id=t["id"],closed=True)
     kt.mutate(change,"Complete a snapshot-guarded card")
+    emit(answer)
+
+
+class ReleaseAlreadyVerified(Exception):
+    def __init__(self,value):self.value=value
+
+
+def release_projection(kt,data,t,note):
+    value=completion_projection(kt,data,t,note)
+    value["phase"]="pr-open-release"
+    encoded(value)
+    return value
+
+
+def release_records(t):
+    values=t.get("guarded_releases",{})
+    if not isinstance(values,dict) or len(values)>MAX_RECEIPTS:refuse("release receipt capacity or shape needs repair")
+    total=0
+    for key,record in values.items():
+        if not isinstance(key,str) or not DIGEST.fullmatch(key) or not isinstance(record,dict) \
+                or set(record)!={"version","snapshot","projection","note_digest","post_digest","event"} \
+                or type(record.get("version")) is not int or record["version"]!=1 or record.get("snapshot")!=key \
+                or not isinstance(record.get("projection"),dict) or record["projection"].get("phase")!="pr-open-release" \
+                or set(record["projection"])!={"version","board","owner","source","claim","waiting","questions","links","todos","note","phase"} \
+                or not isinstance(record["projection"].get("source"),dict) or not isinstance(record["projection"]["source"].get("id"),str) \
+                or not TASK.fullmatch(record["projection"]["source"]["id"]) or not isinstance(record["projection"].get("note"),str) \
+                or not record["projection"]["note"] or len(record["projection"]["note"])>1000 \
+                or digest(record["projection"])!=key or record.get("note_digest")!=digest(record["projection"].get("note")) \
+                or not isinstance(record.get("post_digest"),str) or not DIGEST.fullmatch(record["post_digest"]) \
+                or not isinstance(record.get("event"),dict):
+            refuse("release receipt needs repair; never repeat an uncertain release")
+        total+=len(encoded(record))
+    if total>MAX_RECEIPT_BYTES:refuse("release receipt byte capacity needs repair")
+    return values
+
+
+def release_result(t,created):
+    return {"card_id":t["id"],"released":True,"column":"in-progress","created":created}
+
+
+def release_fact(kt,data,t,record,note):
+    if record["projection"].get("source",{}).get("id")!=t["id"] or record["note_digest"]!=digest(note):return None
+    current=release_projection(kt,data,t,note)
+    current["claim"]=None  # Historical facts never imply that a newer/current claim was released.
+    if t.get("column")!="in-progress" or digest(current)!=record["post_digest"]:return None
+    if sum(event==record["event"] for event in t.get("history",[]))!=1:
+        refuse("recorded release history cannot be verified")
+    return release_result(t,False)
+
+
+def guard_release(kt,data,t,expected,note,a):
+    if task(kt,data,t.get("id")) is not t:refuse("release source is not current")
+    if t.get("column")!="in-progress":refuse("PR-open release preserves only an In progress source")
+    projection=release_projection(kt,data,t,note)
+    if digest(projection)!=expected:refuse("PR-open release snapshot changed; nothing released")
+    claim=t.get("claim")
+    explicit=kt.explicit_session(a)
+    if not isinstance(claim,dict) or not explicit or claim.get("session_id")!=explicit or claim.get("status")=="done" \
+            or not isinstance(claim.get("generation"),str) or not re.fullmatch(r"[a-f0-9]{24}",claim["generation"]):
+        refuse("PR-open release requires this exact current session and claim generation")
+    kt.claim_owner_check(data,t,a,"done")  # Never use release's stale/blocked-other-claim recovery permission.
+    return projection
+
+
+def release_open(kt,a):
+    preflight(kt)
+    if getattr(a,"cancel",False) or getattr(a,"force",False) or not getattr(a,"json",False):refuse("PR-open release needs --json and cannot cancel or override ownership")
+    expected=getattr(a,"expected_snapshot",None);reading=getattr(a,"snapshot",False)
+    if bool(reading)==bool(expected) or expected is not None and (not isinstance(expected,str) or not DIGEST.fullmatch(expected)):
+        refuse("choose exactly one PR-open snapshot read or expected-snapshot write")
+    note=text(getattr(a,"note",None) or "",1000,multiline=True);screen(kt,[note])
+    data,_=kt.load();t=task(kt,data,a.id);records=release_records(t)
+    if reading:
+        found=[]
+        for record in records.values():
+            value=release_fact(kt,data,t,record,note)
+            if value is not None:found.append((record,value))
+        if len(found)>1:refuse("historical release identity is ambiguous")
+        if found:
+            record,value=found[0]
+            emit({"version":1,"snapshot":record["snapshot"],"projection":record["projection"],"existing":value});return
+        projection=release_projection(kt,data,t,note)
+        emit({"version":1,"snapshot":digest(projection),"projection":projection,"existing":None});return
+    if expected in records:
+        value=release_fact(kt,data,t,records[expected],note)
+        if value is None:refuse("historical release no longer matches; current claim untouched")
+        emit(value);return  # A verified replay never even enters mutate/save.
+    kt._claim_sure();answer={}
+    def change(current):
+        kt._MUT["recheck"]=True
+        task_=task(kt,current,a.id);values=release_records(task_)
+        if expected in values:
+            value=release_fact(kt,current,task_,values[expected],note)
+            if value is None:refuse("historical release changed; current claim untouched")
+            raise ReleaseAlreadyVerified(value)  # A CAS loser also performs no second save.
+        projection=guard_release(kt,current,task_,expected,note,a)
+        if len(values)>=MAX_RECEIPTS:refuse("release receipt capacity is reached; nothing released")
+        claim=task_["claim"]
+        task_["claim"]=None
+        kt.hist(task_,"released for PR open: "+note)
+        task_["updated"]=kt.now()
+        record={"version":1,"snapshot":expected,"projection":projection,"note_digest":digest(note),
+                "post_digest":digest(release_projection(kt,current,task_,note)),"event":copy.deepcopy(task_["history"][-1])}
+        values=dict(values);values[expected]=record
+        if sum(len(encoded(value)) for value in values.values())>MAX_RECEIPT_BYTES:refuse("release receipt byte budget reached; nothing released")
+        task_["guarded_releases"]=values
+        current.setdefault("settings",{})["min_kit"]=max(kt.board_min_kit(current),KIT)
+        kt.schedule_guarded_claim_cleanup(task_["id"],claim)
+        answer.clear();answer.update(release_result(task_,True))
+    try:kt.mutate(change,"Release an unchanged PR-open work claim")
+    except ReleaseAlreadyVerified as verified:answer=verified.value
     emit(answer)

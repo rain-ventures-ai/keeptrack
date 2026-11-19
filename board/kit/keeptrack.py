@@ -2108,7 +2108,7 @@ _HOSTED_STORAGE = None
 
 def hosted_dispatch(a):
     """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
-    if a.cmd in ("todo-move", "done") and (getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None):
+    if a.cmd in ("todo-move", "done") and (getattr(a, "pr_open", False) or getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None):
         sys.exit("capability_unavailable: safe handbacks are unavailable in hosted phase 0")
     if a.cmd == "comment" and getattr(a, "owner_question", None) is not None:
         sys.exit("capability_unavailable: structured owner questions are unavailable in hosted phase 0")
@@ -2795,7 +2795,7 @@ def min_kit_needed(data):
     """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
     needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
     what = "Cards carry `waiting`"
-    if any(isinstance(t, dict) and ("guarded_completion" in t or any(isinstance(d, dict) and "handback" in d for d in t.get("todos", []) or [])) for t in data.get("tasks", []) or []):
+    if any(isinstance(t, dict) and ("guarded_completion" in t or "guarded_releases" in t or any(isinstance(d, dict) and "handback" in d for d in t.get("todos", []) or [])) for t in data.get("tasks", []) or []):
         needed, what = 144, "Cards carry snapshot-bound follow-up receipts"
     if any(isinstance(t, dict) and "owner_questions" in t for t in data.get("tasks", []) or []):
         needed, what = max(needed, 143), "Cards carry owner-question receipt bindings"
@@ -4471,6 +4471,24 @@ def check_moved_todos(data, t, cancel=False):
     return added
 
 
+def schedule_guarded_claim_cleanup(tid, claim):
+    """After a guarded save, forget only this exact session/generation under the local record lock."""
+    old_session = (claim or {}).get("session_id")
+    old_generation = (claim or {}).get("generation")
+    def forget_same_record(_):
+        if FILE or not old_session or not isinstance(old_generation, str) or not re.fullmatch(r"[a-f0-9]{24}", old_generation):
+            return
+        def change(cards):
+            if (cards.get(tid) or {}).get("session") != old_session or (cards.get(tid) or {}).get("generation") != old_generation:
+                return False
+            cards.pop(tid, None)
+        try:
+            rewrite_claim_record(change)
+        except OSError:
+            pass
+    _MUT["after"].append(forget_same_record)
+
+
 def apply_completed_model(data, t, a, note, guarded=False):
     """Existing finish model after caller guards; never performs a nested save."""
     cancel = bool(getattr(a, "cancel", False))
@@ -4495,26 +4513,13 @@ def apply_completed_model(data, t, a, note, guarded=False):
     # (relay pushes once per finish, and its event id carries the outcome kind, so a flipped `cancelled` would push twice)
     t["updated"] = now(); tid = t["id"]
     if guarded:
-        old_session = (c or {}).get("session_id")
-        old_generation = (c or {}).get("generation")
-        def forget_same_record(_):
-            if FILE or not old_session or not isinstance(old_generation, str) or not re.fullmatch(r"[a-f0-9]{24}", old_generation):
-                return
-            def change(cards):
-                if (cards.get(tid) or {}).get("session") != old_session or (cards.get(tid) or {}).get("generation") != old_generation:
-                    return False
-                cards.pop(tid, None)
-            try:
-                rewrite_claim_record(change)
-            except OSError:
-                pass
-        _MUT["after"].append(forget_same_record)
+        schedule_guarded_claim_cleanup(tid, c)
     else:
         _MUT["after"].append(lambda d: drop_claim_file(tid))
 
 
 def cmd_done(a):
-    if getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None:
+    if getattr(a, "pr_open", False) or getattr(a, "snapshot", False) or getattr(a, "expected_snapshot", None) is not None:
         from types import SimpleNamespace
         return handback_module().done(SimpleNamespace(**globals()), a)
     _claim_sure()   # a slow git left the claim record's place unknown: stop before the save, not after it
@@ -16229,6 +16234,7 @@ def main():
     s.add_argument("--cancel", action="store_true", help="close the card without finishing it (needs --note; open to-dos are dropped)")
     s.add_argument("--force", action="store_true", help="finish a claim that is not this session's (a person told you to)"); s.add_argument("--snapshot", action="store_true", help="read a guarded completion projection without writing")
     s.add_argument("--expected-snapshot", help="digest of the native completion snapshot")
+    s.add_argument("--pr-open", action="store_true", help="guarded release only: keep In progress and preserve owner blockers; never Done")
     s.add_argument("--json", action="store_true"); s.set_defaults(f=cmd_done)
     s = sub.add_parser("review", help="work done, a person decides: end the claim, move the card to Pending review and comment the note (@who)")
     s.add_argument("id"); s.add_argument("--note", help="the result and the decision it waits on, with options and a recommendation ('-' = stdin)")
