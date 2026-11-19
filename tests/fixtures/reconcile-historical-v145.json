@@ -1,0 +1,152 @@
+{
+  "snapshot_commit": "c759a4314663dff1d8728955b78213da567cb6f8",
+  "scope": "Historical stable IDs and original todo IDs/boolean states; verified public Keeptrack/Relay PR proofs only. Private prose and the waiting card private PR links/proof are omitted. Tests supply synthetic legacy prose and person review. This is not a live review or whole-board audit.",
+  "cards": [
+    {
+      "num": 96,
+      "id": "t_2nbss5nll5",
+      "todos": [
+        {
+          "id": "d_cb022b",
+          "done": true
+        },
+        {
+          "id": "d_871a2b",
+          "done": true
+        },
+        {
+          "id": "d_e3ceda",
+          "done": true
+        },
+        {
+          "id": "d_a0a11c",
+          "done": true
+        }
+      ],
+      "pr_urls": [
+        "https://github.com/rain-ventures-ai/keeptrack-relay/pull/132"
+      ],
+      "has_wait": false
+    },
+    {
+      "num": 97,
+      "id": "t_l3tqx9jqku",
+      "todos": [
+        {
+          "id": "d_936e03",
+          "done": true
+        },
+        {
+          "id": "d_d106ed",
+          "done": true
+        },
+        {
+          "id": "d_43b7d1",
+          "done": true
+        },
+        {
+          "id": "d_811eda",
+          "done": true
+        }
+      ],
+      "pr_urls": [
+        "https://github.com/rain-ventures-ai/keeptrack-relay/pull/132"
+      ],
+      "has_wait": false
+    },
+    {
+      "num": 98,
+      "id": "t_9xlueag65m",
+      "todos": [
+        {
+          "id": "d_ac775f",
+          "done": true
+        },
+        {
+          "id": "d_233fe3",
+          "done": true
+        },
+        {
+          "id": "d_ad2958",
+          "done": true
+        },
+        {
+          "id": "d_c456d1",
+          "done": true
+        }
+      ],
+      "pr_urls": [
+        "https://github.com/rain-ventures-ai/keeptrack-relay/pull/132"
+      ],
+      "has_wait": false
+    },
+    {
+      "num": 298,
+      "id": "t_54s2xeizl4",
+      "todos": [],
+      "pr_urls": [
+        "https://github.com/rain-ventures-ai/keeptrack/pull/168",
+        "https://github.com/rain-ventures-ai/keeptrack/pull/174",
+        "https://github.com/rain-ventures-ai/keeptrack/pull/176"
+      ],
+      "has_wait": false
+    },
+    {
+      "num": 305,
+      "id": "t_sh4ypf9u09",
+      "todos": [],
+      "pr_urls": [
+        "https://github.com/rain-ventures-ai/keeptrack/pull/176",
+        "https://github.com/rain-ventures-ai/keeptrack/pull/176#issuecomment-6346109600"
+      ],
+      "has_wait": false
+    },
+    {
+      "num": 405,
+      "id": "t_1al2rij5nz",
+      "todos": [
+        {
+          "id": "d_68fc98",
+          "done": true
+        },
+        {
+          "id": "d_2b1de8",
+          "done": true
+        },
+        {
+          "id": "d_86ebe3",
+          "done": true
+        },
+        {
+          "id": "d_eec485",
+          "done": false
+        }
+      ],
+      "pr_urls": [],
+      "has_wait": true,
+      "private_prs_omitted": true
+    }
+  ],
+  "proofs": [
+    {
+      "url": "https://github.com/rain-ventures-ai/keeptrack-relay/pull/132",
+      "merge_commit": "30bab5e0ab16cb20f218f556da3226612d776a6c",
+      "merged_at": "2026-10-24T13:00:01+00:00"
+    },
+    {
+      "url": "https://github.com/rain-ventures-ai/keeptrack/pull/168",
+      "merge_commit": "2e8cb1766df38ffb5bded7fd125f49e6a909f74d",
+      "merged_at": "2026-10-22T07:55:05+00:00"
+    },
+    {
+      "url": "https://github.com/rain-ventures-ai/keeptrack/pull/174",
+      "merge_commit": "d7188842c7dfc092739edf494b0b25b165e2ecb1",
+      "merged_at": "2026-10-24T13:00:44+00:00"
+    },
+    {
+      "url": "https://github.com/rain-ventures-ai/keeptrack/pull/176",
+      "merge_commit": "bed3e9bad62c0f33ee6fae831f12907ffa50d03d",
+      "merged_at": "2026-10-24T13:00:24+00:00"
+    }
+  ]
+}

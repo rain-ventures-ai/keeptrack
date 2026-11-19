@@ -1,0 +1,43 @@
+{
+  "version": 4,
+  "layout": "split",
+  "settings": {
+    "min_kit": 145,
+    "wait_enders": [
+      "codex"
+    ],
+    "reconcile_quiet_claims": false,
+    "reconcile_close_proven": false
+  },
+  "columns": [
+    {
+      "id": "backlog",
+      "name": "Backlog"
+    },
+    {
+      "id": "todo",
+      "name": "To do"
+    },
+    {
+      "id": "in-progress",
+      "name": "In progress"
+    },
+    {
+      "id": "done",
+      "name": "Done"
+    }
+  ],
+  "people": [
+    {
+      "github": "alex",
+      "name": "Alex"
+    }
+  ],
+  "agents": [
+    "codex"
+  ],
+  "clients": [
+    "Acme"
+  ],
+  "next_num": 5
+}

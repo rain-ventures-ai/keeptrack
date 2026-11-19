@@ -25,6 +25,16 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v145 (schema 4)
+
+- Copies only: manifest installs `board/close_proven.py`; no migration, timer or automatic activation.
+- Strict `reconcile --close-proven --dry-run --json` is separate from the historical advisory preview. Apply is off by default and requires person-owner enablement after report review, authenticated complete merged-PR proofs and all fresh card/owner gates.
+- The actual person kit owner can record an exact `--review-close CARD --expected-snapshot DIGEST --associate-pr URL` legacy-comment/resolved-question/association review. It grants no permission and overrides no unresolved question/wait/claim gate. Meaningful changes invalidate it; its own receipt/minimum/switch/unrelated commits do not. Agents must not impersonate person mode.
+- Enabling requires `settings-set --reconcile-close-proven on --reconcile-close-report REPORT_DIGEST` from the reviewed strict dry run; CAS rechecks semantic state and preloaded coverage without network under lock. A retained report receipt never proves later card eligibility. Native terminal question dispositions require exact person review of the resolved inventory; answers/dispositions prove no external effect or permission.
+- Explicit review/switch/apply writes adopt minimum kit145. Frozen144 writers refuse these receipts; installing/upgrading on an unopted board leaves its minimum unchanged. No live board needs enabling as part of this upgrade.
+- Closure uses native144 guarded completion and preloaded bounded archive coverage, never a nested `done`. Same delivery evidence cannot immediately reclose a reopened card. Mixed work may create one private-safe owner question; answers never authorise actions.
+- Frozen `v4_kit145` preserves every prior entity plus a synthetic local review receipt and disabled switch. Moving that fixture does not authorise a live close; local board identity changes require a fresh review. See the source help page `docs/help/evidence-closure.md` for the manual review/enablement flow and limits.
+
 ### v144 (schema 4)
 
 - Copies only: install `board/handbacks.py` through the kit manifest. No migration or live activation.

@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v145: explicit defaultoff evidence reconciliation uses strict merged-PR SHA/date proofs, literal completed
+criteria, complete preloaded question/archive coverage and native guarded completion in one CAS save. Person-only
+exact review receipts let legacy comments and existing PR associations be reviewed without inferring permission.
+Enablement binds the exact owner-reviewed strict report; factual terminal question dispositions remain distinct
+from external effects and require exact inventory review before eligibility.
+Changed scope or gates refuse; concurrent/lost-response retries retain one effect and reopened deliveries stay open.
+Mixed work creates at most one safe owner choice. No live activation, timer, wait clear, answer or approval is implied.
+
 Kit v144: explicit stable-ID handbacks use a read-only native snapshot followed by a snapshot-bound atomic
 `todo-move`. Concurrent identical requests and lost-response retries verify and reuse one linked Backlog pair.
 Changed scope, content, claim or inconsistent receipts refuse before creating another card. Optional guarded

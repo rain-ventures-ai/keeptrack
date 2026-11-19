@@ -475,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 144  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 145  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2795,8 +2795,10 @@ def min_kit_needed(data):
     """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
     needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
     what = "Cards carry `waiting`"
+    if isinstance(data.get("settings"), dict) and ("reconcile_close_proven" in data["settings"] or "reconcile_close_report" in data["settings"]) or any(isinstance(t, dict) and ("close_review" in t or "close_evidence" in t) for t in data.get("tasks", []) or []):
+        needed, what = 145, "Cards carry exact closure review or merge-proof receipts"
     if any(isinstance(t, dict) and ("guarded_completion" in t or any(isinstance(d, dict) and "handback" in d for d in t.get("todos", []) or [])) for t in data.get("tasks", []) or []):
-        needed, what = 144, "Cards carry snapshot-bound follow-up receipts"
+        needed, what = max(needed, 144), "Cards carry snapshot-bound follow-up receipts"
     if any(isinstance(t, dict) and "owner_questions" in t for t in data.get("tasks", []) or []):
         needed, what = max(needed, 143), "Cards carry owner-question receipt bindings"
     if any(isinstance(t, dict) and ((waiting_of(t) or {}).get("instance_id") or t.get("wait_reasks")) for t in data.get("tasks", []) or []):
@@ -10488,6 +10490,7 @@ def cmd_settings(a):
     enders = wait_ender_names(st.get("wait_enders", []))
     print("wait_enders: " + ((", ".join(enders) or "none") if enders is not None
                              else "INVALID stored setting; no delegation active"))
+    print("reconcile_close_proven: " + ("on" if st.get("reconcile_close_proven") is True else "off"))
     print("reconcile_quiet_claims: " + ("on" if st.get("reconcile_quiet_claims") is True else "off"))
     print(f"inbox_lapse_days: {inbox_lapse_days(data) or 'off (questions never lapse)'}")
     br = backlog_research(data)
@@ -10513,7 +10516,7 @@ DOCS_HOSTED_READONLY = ("docs_home_confirmation_required: hosted CLI docs-home s
 
 DOCS_LEGACY_FLAGS = ("setting", "value", "title", "stale_minutes", "stages", "max_agent_claims",
                      "rename_stage", "backlog_research", "research_per_run", "waiting_days", "inbox_lapse_days", "min_kit",
-                     "card_contact_details", "github_app_signin", "wait_enders", "clear_wait_enders", "reconcile_quiet_claims")
+                     "card_contact_details", "github_app_signin", "wait_enders", "clear_wait_enders", "reconcile_quiet_claims", "reconcile_close_proven", "reconcile_close_report")
 
 SIGNIN_CLIENT_ID_RE = re.compile(r"[A-Za-z0-9._-]{8,64}")   # used with fullmatch (a "$" would accept a trailing newline the page rejects); the same shape board.js parseSigninConfig accepts
 
@@ -10672,6 +10675,23 @@ def quiet_claim_setting_owner(data):
 
 def cmd_settings_set(a):
     """Change board settings."""
+    closure = getattr(a, "reconcile_close_proven", None)
+    closure_report = getattr(a, "reconcile_close_report", None)
+    if closure_report is not None and closure != "on":
+        sys.exit("a reviewed closure report belongs only to enabling --reconcile-close-proven on")
+    if closure is not None:
+        if agent_run():
+            sys.exit("refused: only a person kit owner may change reconcile_close_proven")
+        if closure not in ("on", "off"):
+            sys.exit("--reconcile-close-proven needs on or off")
+        if getattr(a, "min_kit", None) is not None:
+            sys.exit("closure opt-in and minimum-kit repair require separate commands")
+        if closure == "on" and (not isinstance(closure_report, str) or not re.fullmatch(r"[a-f0-9]{64}", closure_report)):
+            sys.exit("enabling closure needs --reconcile-close-report from the exact reviewed strict dry run")
+        if closure == "on":
+            other_flags = tuple(k for k in DOCS_LEGACY_FLAGS if k not in ("reconcile_close_proven", "reconcile_close_report")) + ("docs_provider", "docs_root", "clear_docs_home", "clear_github_app_signin")
+            if any(getattr(a, k, None) is not None and getattr(a, k) is not False for k in other_flags):
+                sys.exit("closure enablement requires a standalone reviewed-report command")
     quiet_claims = getattr(a, "reconcile_quiet_claims", None)
     if quiet_claims is not None:
         if agent_run():
@@ -10721,15 +10741,26 @@ def cmd_settings_set(a):
         data, _ = load()
         consent = docs_home_confirmation(data, home, clear)
     quiet_owner = None
-    if quiet_claims is not None:
+    if quiet_claims is not None or closure is not None:
         data, _ = load()
         quiet_owner = quiet_claim_setting_owner(data)
+    closure_context = None
+    if closure == "on":
+        from types import SimpleNamespace
+        closure_context = close_proven_module().setting_context(SimpleNamespace(**globals()), data, closure_report)
     def fn(data):
-        if quiet_claims is not None:
+        if quiet_claims is not None or closure is not None:
             _MUT["recheck"] = True  # ownership must still hold on the exact board snapshot we save
             if quiet_claim_setting_owner(data) != quiet_owner:
                 sys.exit("quiet-claim opt-in: board owner changed; nothing changed")
         st = data.setdefault("settings", {})
+        if closure is not None:
+            if closure_context is not None:
+                from types import SimpleNamespace
+                close_proven_module().enable_reviewed(SimpleNamespace(**globals()), data, closure_context, closure_report)
+            st["reconcile_close_proven"] = closure == "on"
+            st["min_kit"] = max(board_min_kit(data), 145)
+            print("reconcile_close_proven: " + closure)
         if quiet_claims is not None:
             st["reconcile_quiet_claims"] = quiet_claims == "on"
             print("reconcile_quiet_claims: " + quiet_claims)
@@ -10784,7 +10815,7 @@ def cmd_settings_set(a):
                 needed = min_kit_needed(data)[0]
                 if any(getattr(a, k, None) is not None for k in ("setting", "title", "stale_minutes", "waiting_days", "inbox_lapse_days", "max_agent_claims",
                                                                   "rename_stage", "stages", "backlog_research", "research_per_run", "docs_provider", "docs_root",
-                                                                  "card_contact_details", "github_app_signin", "reconcile_quiet_claims")) or clear or clear_signin or enders is not None:
+                                                                  "card_contact_details", "github_app_signin", "reconcile_quiet_claims", "reconcile_close_proven", "reconcile_close_report")) or clear or clear_signin or enders is not None:
                     sys.exit(f"this board needs kit v{cur} (settings.min_kit); lower --min-kit on its own first")
                 if not needed <= a.min_kit <= KIT_VERSION:
                     sys.exit(f"min kit must be between what the board needs ({needed or 'none'}) and this kit's version ({KIT_VERSION})")
@@ -11705,9 +11736,11 @@ def _all_proposals(data):
     return out
 
 
-def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False):
+def _prepare_proposals(data, values, recipients_confirmed=False, dry_run=False, *, _existing=None):
     require_review_storage(data)   # from kit v44 the Inbox is always on: settings.review_inbox is no longer read
-    every = _all_proposals(data)
+    every = _all_proposals(data) if _existing is None else _existing
+    if not isinstance(every, list) or any(not isinstance(p, dict) for p in every):
+        proposal_error("validated Inbox inventory needs repair")
     existing_ids = {p.get("id") for p in every}
     action = {p.get("action_key"): p for p in every}
     added, lines = [], []
@@ -14539,8 +14572,20 @@ def reconcile_reask_expired(a):
 
 def cmd_reconcile(a):
     """The default reconciliation preview never writes. Quiet-claim release is a separate, opt-in action."""
-    if getattr(a, "release_quiet", False) and getattr(a, "reask_expired", False):
-        sys.exit("choose one reconcile action: --release-quiet or --reask-expired")
+    from types import SimpleNamespace
+    modes = sum(bool(getattr(a, key, False)) for key in ("release_quiet", "reask_expired", "close_proven", "review_close"))
+    if modes > 1:
+        sys.exit("choose one reconcile action")
+    if getattr(a, "review_close", None):
+        if getattr(a, "dry_run", False):
+            sys.exit("closure review records an exact person attestation; use --close-proven --dry-run to preview")
+        return close_proven_module().review(SimpleNamespace(**globals()), a)
+    if getattr(a, "close_proven", False):
+        if getattr(a, "expected_snapshot", None) or getattr(a, "associate_pr", None):
+            sys.exit("snapshot and association arguments belong only to --review-close")
+        return close_proven_module().run(SimpleNamespace(**globals()), a)
+    if getattr(a, "expected_snapshot", None) or getattr(a, "associate_pr", None):
+        sys.exit("snapshot and association arguments need --review-close")
     if getattr(a, "reask_expired", False):
         return reconcile_reask_expired(a)
     if getattr(a, "release_quiet", False):
@@ -16053,7 +16098,7 @@ def _proposals_only(a):
     # Fail closed: new commands must be deliberately classified before loader use.
     reads = {"list", "show", "reconcile", "work-status", "work-research-policy-snapshot", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
              "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
-    if a.cmd == "reconcile" and (getattr(a, "release_quiet", False) or getattr(a, "reask_expired", False)) and not getattr(a, "dry_run", False):
+    if a.cmd == "reconcile" and (getattr(a, "review_close", None) or ((getattr(a, "release_quiet", False) or getattr(a, "reask_expired", False) or getattr(a, "close_proven", False)) and not getattr(a, "dry_run", False))):
         sys.exit("KEEPTRACK_PROPOSALS_ONLY: reconcile apply is refused; use --dry-run")
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
@@ -16062,6 +16107,21 @@ def _proposals_only(a):
 _WORK_MODULE = None
 _OWNER_QUESTION_MODULE = None
 _HANDBACK_MODULE = None
+
+
+_CLOSE_PROVEN_MODULE = None
+
+
+def close_proven_module():
+    global _CLOSE_PROVEN_MODULE
+    if _CLOSE_PROVEN_MODULE is None:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "close_proven.py")
+        spec = importlib.util.spec_from_file_location("keeptrack_close_proven", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CLOSE_PROVEN_MODULE = module
+    return _CLOSE_PROVEN_MODULE
 
 
 def handback_module():
@@ -16374,6 +16434,11 @@ def main():
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--release-quiet", action="store_true", help="release eligible unattended claims after 24 hours; requires board opt-in; --dry-run previews only")
     s.add_argument("--reask-expired", action="store_true", help="record one owner Inbox question per due no-condition wait; waits remain blocking; --dry-run previews only")
+    s.add_argument("--close-proven", action="store_true", help="strict proof closure; defaultoff owner opt-in; dry-run writes nothing")
+    s.add_argument("--review-close", metavar="CARD", help="person kit owner: attest exact reviewed legacy comments and linked association; does not close")
+    s.add_argument("--expected-snapshot", help="exact snapshot from the strict reviewed report")
+    s.add_argument("--associate-pr", action="append", help="person-reviewed existing linked PR association")
+    s.add_argument("--json", action="store_true", help="strict proof report/review JSON")
     s.set_defaults(f=cmd_reconcile)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
@@ -16481,6 +16546,8 @@ def main():
     ender_flags = s.add_mutually_exclusive_group()
     ender_flags.add_argument("--wait-enders", metavar="NAMES", help="person only: comma-separated agents that may end any wait")
     ender_flags.add_argument("--clear-wait-enders", action="store_true", default=None, help="person only: clear wait delegation")
+    s.add_argument("--reconcile-close-proven", choices=("on", "off"), help="person kit owner: defaultoff strict proof closure after reviewed dry run")
+    s.add_argument("--reconcile-close-report", help="exact strict dry-run report digest required when the person owner enables closure")
     s.add_argument("--reconcile-quiet-claims", choices=("on", "off"), help="board kit owner only: opt this board into quiet-claim release after its dry-run period")
     s.add_argument("--stale-minutes", dest="stale_minutes", type=int); s.add_argument("--stages", help="comma-separated, in order")
     s.add_argument("--max-agent-claims", dest="max_agent_claims", type=int,

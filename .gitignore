@@ -1,2 +1,3 @@
 __pycache__/
 /.board/cache/
+/tests/fixtures/**/tasks.json.lock

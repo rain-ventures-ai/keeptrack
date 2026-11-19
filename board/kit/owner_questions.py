@@ -216,12 +216,12 @@ def md(value):
 
 
 def render(value, owner, inbox_url):
-    lines = ["@" + owner + " " + md(value["waiting"]), "", "**Question:** " + md(value["question"]), "", "**Who it affects:** " + "; ".join(md(v["who"]) + " wants " + md(v["wants"]) for v in value["viewpoints"]), "", "**Options**"]
+    lines = ["@" + owner + " " + md(value["waiting"]), "", "## Now", "", "**Question:** " + md(value["question"]), "", "## Why", "", "**Who it affects:** " + "; ".join(md(v["who"]) + " wants " + md(v["wants"]) for v in value["viewpoints"]), "", "**Options**"]
     for index, option in enumerate(value["options"], 1):
         basis = "judgement" if option["basis"] == "judgement" else "[" + md(option["basis"]["title"]) + "](" + option["basis"]["url"].replace("(", "%28").replace(")", "%29") + ")"
         lines.append(str(index) + ". **" + md(option["label"]) + "** (" + str(option["score"]) + "/10): " + md(option["reason"]) + " (" + basis + ")")
     recommended = next(o for o in value["options"] if o["key"] == value["recommended"])
-    lines.extend(["", "**Recommendation:** " + md(recommended["label"]) + ". " + md(value["recommendation_reason"]), "", "**Next step:** " + md(value["next_step"]), "", "This question records a preference. It grants no approval or permission and starts no work."])
+    lines.extend(["", "**Recommendation:** " + md(recommended["label"]) + ". " + md(value["recommendation_reason"]), "", "## Plan", "", "**Next step:** " + md(value["next_step"]), "", "## Done when", "", "The owner records a preference in the linked Inbox item. That preference grants no approval or permission and starts no work."])
     if inbox_url:
         lines.extend(["", "[Answer this question in the Review Inbox](" + inbox_url + ")"])
     else:
@@ -242,14 +242,9 @@ def projected_options(value):
     return options
 
 
-def submit(kt, a):
-    if kt.BACKEND == "hosted" and not kt.FILE:
-        refuse("capability_unavailable: structured questions are unavailable in hosted phase 0")
-    if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") == "1":
-        refuse("KEEPTRACK_PROPOSALS_ONLY: structured comments also mutate cards")
-    if getattr(a, "text", None) is not None or getattr(a, "reply_to", None):
-        refuse("structured mode cannot be combined with text or replies")
-    value, question, reason = payload(kt, read_input(a.owner_question))
+def prepare_transaction(kt, a, raw, *, existing_index=None):
+    """Build a same-CAS callback and result; caller owns the one outer mutation."""
+    value, question, reason = payload(kt, raw)
     semantic = dict(value); semantic.pop("request_id")
     original = digest(semantic)
     request_hash = digest(value["request_id"])
@@ -283,7 +278,7 @@ def submit(kt, a):
             refuse("question receipts need repair or archival before new intake")
         key = "owner-question:" + task["id"] + ":" + request_hash[:32]
         try:
-            proposals = kt._all_proposals(data)
+            proposals = existing_index(data) if existing_index is not None else kt._all_proposals(data)
             if not all(isinstance(p, dict) and (p.get("id") is None or isinstance(p["id"], str)) and (p.get("action_key") is None or isinstance(p["action_key"], str)) for p in proposals):
                 refuse("Inbox identity needs repair")
         except (AttributeError, TypeError, ValueError):
@@ -325,7 +320,7 @@ def submit(kt, a):
                "source": {"kind": "other", "id": key, "revision": original, "title": "Owner choice from a card comment"},
                "action_key": key, "work_key": key, "reason": reason,
                "change": {"task": task["id"], "question": question, "options": options, "recommended": value["recommended"], "links": [{"url": comment_url, "title": "Original question on the card"}] if comment_url else []}}
-        added, _ = kt._prepare_proposals(data, [raw])
+        added, _ = kt._prepare_proposals(data, [raw], _existing=existing_index(data)) if existing_index is not None else kt._prepare_proposals(data, [raw])
         if len(added) != 1:
             refuse("question identity was not unique; nothing posted")
         row = kt.append_comment(task, body, kt.who_am_i(task)); row["id"] = comment_id
@@ -334,5 +329,16 @@ def submit(kt, a):
         data["settings"]["min_kit"] = max(kt.board_min_kit(data), KIT)
         task["updated"] = kt.now()
         answer.clear(); answer.update(card_id=task["id"], comment_id=comment_id, proposal_id=proposal_id, created=True, comment_url=comment_url, inbox_url=inbox_url)
+    return change, answer
+
+
+def submit(kt, a):
+    if kt.BACKEND == "hosted" and not kt.FILE:
+        refuse("capability_unavailable: structured questions are unavailable in hosted phase 0")
+    if os.environ.get("KEEPTRACK_PROPOSALS_ONLY") == "1":
+        refuse("KEEPTRACK_PROPOSALS_ONLY: structured comments also mutate cards")
+    if getattr(a, "text", None) is not None or getattr(a, "reply_to", None):
+        refuse("structured mode cannot be combined with text or replies")
+    change, answer = prepare_transaction(kt, a, read_input(a.owner_question))
     kt.mutate(change, "Post an owner-choice comment and linked Inbox question")
     print(json.dumps(answer) if getattr(a, "json", False) else "owner question " + answer["proposal_id"] + " linked to comment " + answer["comment_id"])

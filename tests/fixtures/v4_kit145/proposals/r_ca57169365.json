@@ -1,0 +1,49 @@
+{
+  "id": "r_ca57169365",
+  "version": 1,
+  "kind": "ask.choose",
+  "status": "pending",
+  "title": "Which approach?",
+  "source": {
+    "kind": "other",
+    "id": "owner-question:t_followup:9fd38091aa24ddea83dbd408a421fcd3",
+    "revision": "193123875af1a96fc64d9be8e2905f1717dcb677507843d224ef3ceff40fce20",
+    "title": "Owner choice from a card comment",
+    "date": "",
+    "url": ""
+  },
+  "action_key": "owner-question:t_followup:9fd38091aa24ddea83dbd408a421fcd3",
+  "work_key": "owner-question:t_followup:9fd38091aa24ddea83dbd408a421fcd3",
+  "reason": "Implementation waits on a choice. Recommend: Support cost decides it. Next: Prepare the chosen change for review.",
+  "target": null,
+  "change": {
+    "task": "t_followup",
+    "question": "Which approach? Viewpoints: User wants Predictability; Maintainer wants Simple support",
+    "options": [
+      {
+        "key": "focused",
+        "label": "Focused change",
+        "note": "9/10 — Small reversible change (judgement)"
+      },
+      {
+        "key": "wait",
+        "label": "Wait",
+        "note": "5/10 — Delays the improvement (judgement)"
+      }
+    ],
+    "recommended": "focused",
+    "links": []
+  },
+  "likely_duplicates": [],
+  "decision": null,
+  "history": [
+    {
+      "at": "2026-11-18T23:57:16.000Z",
+      "by": "codex@alex",
+      "text": "proposed"
+    }
+  ],
+  "created": "2026-11-18T23:57:16.000Z",
+  "createdBy": "codex@alex",
+  "decider": "alex"
+}

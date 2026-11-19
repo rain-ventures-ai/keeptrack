@@ -88,6 +88,17 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_v145_closure_review_disabled_switch_and_prior_entities_survive_upgrade(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit145", "fixture.json"))
+        self.use_fixture("v4_kit145", meta)
+        before = kt.load_board()
+        self.assertIs(False, before["settings"]["reconcile_close_proven"])
+        self.assertTrue(any("close_review" in t for t in before["tasks"]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v144_handback_receipt_and_every_entity_survive_upgrade(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit144", "fixture.json"))
         self.use_fixture("v4_kit144", meta)

@@ -1,0 +1,58 @@
+{
+  "id": "t_m8v785u9et",
+  "title": "Check the synthetic device rollout",
+  "column": "backlog",
+  "client": "Acme",
+  "project": "pr_pilot",
+  "priority": "medium",
+  "due": "",
+  "labels": [],
+  "assignees": [
+    "alex"
+  ],
+  "details": "Split from #3 (t_safemove) Synthetic built feature.",
+  "links": [
+    {
+      "title": "Split from #3",
+      "url": "https://rain-ventures-ai.github.io/keeptrack/board/?repo=example%2Fboard&branch=main&path=board%2Ftasks.json&card=t_safemove#3"
+    }
+  ],
+  "contacts": [],
+  "todos": [
+    {
+      "id": "d_206ac0",
+      "text": "Check the synthetic device rollout",
+      "done": false
+    }
+  ],
+  "history": [
+    {
+      "at": "2026-11-19T00:35:47.000Z",
+      "by": "codex@alex",
+      "text": "created: split from t_safemove, its to-do 1"
+    }
+  ],
+  "comments": [
+    {
+      "id": "c_f6413a",
+      "at": "2026-11-19T00:35:47.000Z",
+      "by": "codex@alex",
+      "text": "Split from #3 (t_safemove), its to-do 1: https://rain-ventures-ai.github.io/keeptrack/board/?repo=example%2Fboard&branch=main&path=board%2Ftasks.json&card=t_safemove#3"
+    }
+  ],
+  "claim": null,
+  "created": "2026-11-19T00:35:47.000Z",
+  "updated": "2026-11-19T00:35:47.000Z",
+  "rank": "a0dx",
+  "num": 4,
+  "related": [
+    {
+      "id": "t_safemove",
+      "kind": "related",
+      "status": "confirmed",
+      "by": "codex@alex",
+      "at": "2026-11-19T00:35:47.000Z",
+      "from": "t_safemove"
+    }
+  ]
+}

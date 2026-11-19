@@ -1,5 +1,8 @@
 """Snapshot-bound follow-up moves and guarded completion. Receipts are data, never authority."""
 import copy
+import contextlib
+import datetime as dt
+import io
 import hashlib
 import json
 import os
@@ -15,6 +18,50 @@ KINDS = ("rollout", "device", "owner-decision")
 MAX_BYTES = 16384
 MAX_RECEIPTS = 64
 MAX_RECEIPT_BYTES = 65536
+
+
+def question_settled(kt,proposal,owner):
+    """Factual native question lifecycle only. This never authorises the answer's external effects."""
+    try:
+        if not isinstance(proposal,dict) or proposal.get("kind") not in kt.ASK_KINDS or proposal.get("status")!="answered":return False
+        decision=proposal.get("decision");change=proposal.get("change")
+        if not isinstance(owner,str) or not owner or not isinstance(decision,dict) or not isinstance(change,dict) \
+                or decision.get("action")!="answer" or not isinstance(decision.get("id"),str) or not re.fullmatch(r"a_[a-f0-9]{10}",decision["id"]):return False
+        decider=proposal.get("decider") or owner
+        if not isinstance(decider,str) or decider.casefold()!=owner.casefold():return False
+        creator=proposal.get("createdBy");answered_by=decision.get("by");done=decision.get("done")
+        if not isinstance(creator,str) or not isinstance(answered_by,str) or not answered_by or not isinstance(done,dict) \
+                or not {"at","by"}<=set(done) or set(done)-{"at","by","acted","note"} \
+                or "acted" in done and done["acted"] is not False or not isinstance(done.get("by"),str):return False
+        agent_creator="@" in creator and creator.rsplit("@",1)[1].casefold()==owner.casefold()
+        if answered_by.casefold()==owner.casefold():
+            if "relayed" in decision:return False
+        else:
+            relayed=decision.get("relayed")
+            if not agent_creator or answered_by!=creator or not isinstance(relayed,dict) or set(relayed)!={"for","via"} \
+                    or not isinstance(relayed.get("for"),str) or relayed["for"].casefold()!=owner.casefold() \
+                    or not isinstance(relayed.get("via"),str) or not relayed["via"] or len(relayed["via"])>kt.RELAY_VIA_LIMIT \
+                    or not kt.RELAY_VIA_RE.fullmatch(relayed["via"]) or proposal["kind"]=="ask.approve":return False
+        if done["by"].casefold()!=owner.casefold() and not (agent_creator and done["by"]==creator):return False
+        def stamp(value):
+            if not isinstance(value,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)",value):raise ValueError()
+            return dt.datetime.fromisoformat(value.replace("Z","+00:00"))
+        if not stamp(decision.get("at"))<=stamp(done["at"])<=stamp(kt.now()):return False
+        if "note" in done:text(done["note"],300)
+        with contextlib.redirect_stderr(io.StringIO()),contextlib.redirect_stdout(io.StringIO()):kt.check_stored_change(proposal)
+        answer=decision.get("answer")
+        if not isinstance(answer,dict) or not answer or set(answer)-{"choice","other","approved","text","note"}:return False
+        if "approved" in answer and type(answer["approved"]) is not bool:return False
+        for key in ("choice","other","text","note"):
+            if key in answer:text(answer[key],300)
+        with contextlib.redirect_stderr(io.StringIO()),contextlib.redirect_stdout(io.StringIO()):
+            canonical=kt.ask_answer(proposal,choose=answer.get("choice"),other=answer.get("other"),approve=answer.get("approved"),text=answer.get("text"),note=answer.get("note"))
+        if canonical!=answer:return False
+        if proposal["kind"]=="ask.approve" and answer.get("approved") is not True and done.get("acted") is not False:return False
+        return True
+    except (SystemExit,TypeError,ValueError,KeyError,AttributeError,OverflowError,RecursionError):
+        return False
+
 
 
 def refuse(message):
@@ -59,11 +106,15 @@ def screen(kt, value):
             strings.append(unicodedata.normalize("NFKC", item))
             if "://" in item:strings.append(unicodedata.normalize("NFKC",urllib.parse.unquote(item)))
     policy = kt.owner_question_module()
-    whole = " ".join(strings)
+    # A URL's scheme punctuation is not an assignment to an unrelated preceding field (e.g. "Token handling").
+    # Keep per-field checks and explicit/split assignment checks; hard URL boundaries prevent only that false join.
+    bounded=lambda value:"\n"+value+"\n" if re.match(r"https?://",value,re.I) else value
+    joined=[" ".join(bounded(value) for value in order) for order in (strings,reversed(strings))]
     blob=any(any(c.isdigit() for c in match.group()) and not (re.fullmatch(r"[0-9a-f]{40}",match.group()) and re.search(r"\b(?:commit|sha|sha-?1)[:\s]\s{0,2}$",line[max(0,match.start()-12):match.start()],re.I))
              for line in strings for match in re.finditer(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{40,}",line))
-    if kt.work_module().private_text(strings) or policy.BOARD_PRIVATE.search(whole) or policy.PRIVATE_NEIGHBOURS.search(whole) or blob:
+    if kt.work_module().private_text(strings) or any(policy.BOARD_PRIVATE.search(value) or policy.PRIVATE_NEIGHBOURS.search(value) for value in strings+joined) or blob:
         refuse("copied content failed the board privacy screen")
+
 
 
 def preflight(kt):
@@ -123,14 +174,16 @@ def questions(kt, data, tid):
         if not isinstance(proposal, dict):refuse("Inbox identity needs repair")
         if proposal.get("id") is not None and not isinstance(proposal.get("id"),str):refuse("Inbox identity needs repair")
         change = proposal.get("change")
-        if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in ("ask.choose", "ask.question"):
+        if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in kt.ASK_KINDS:
             if proposal.get("id") in found_ids:refuse("owner-question identity is ambiguous")
             found_ids.add(proposal.get("id"))
-            if proposal.get("kind") not in ("ask.choose","ask.question"):refuse("owner-question kind changed")
-            result.append({**{k: proposal.get(k) for k in ("id", "kind", "status", "decider")},"change_digest":digest(change)})
+            if proposal.get("kind") not in kt.ASK_KINDS:refuse("owner-question kind changed")
+            result.append({**{k: proposal.get(k) for k in ("id", "kind", "status", "decider")},"change_digest":digest(change),
+                           "decision_digest":digest(proposal.get("decision")),"settled":question_settled(kt,proposal,kt.quiet_claim_setting_owner(data))})
     if not bound_ids<=found_ids:refuse("a recorded owner question is missing")
     result.sort(key=lambda p: str(p.get("id")))
     return result
+
 
 
 def source_projection(kt, data, t):
@@ -292,10 +345,12 @@ def move(kt,a):
     emit(answer)
 
 
-def completion_projection(kt,data,t,note):
+def completion_projection(kt,data,t,note,*,reviewed_empty=False):
+    if type(reviewed_empty) is not bool:refuse("reviewed-empty context must be a strict internal boolean")
     value=source_projection(kt,data,t)
     todos=t.get("todos")
-    if not isinstance(todos,list) or not todos or len(todos)>200:refuse("completion needs a bounded nonempty checklist")
+    if not isinstance(todos,list) or (not todos and not reviewed_empty) or len(todos)>200:refuse("completion needs a bounded checklist and explicit review for empty criteria")
+    if reviewed_empty:value["reviewed_empty"]=True
     value["todos"]=[]
     for d in todos:
         if not isinstance(d,dict):refuse("completion checklist needs repair")
@@ -306,17 +361,17 @@ def completion_projection(kt,data,t,note):
     return value
 
 
-def guard_completion(kt,data,t,expected,a):
+def guard_completion(kt,data,t,expected,a,*,reviewed_empty=False):
     """Reusable same-CAS precondition. No mutation, claim cleanup or nested save occurs here."""
     if task(kt,data,t.get("id")) is not t:refuse("completion task is not the current source")
     if not isinstance(expected,str) or not DIGEST.fullmatch(expected):refuse("expected completion snapshot must be a digest")
-    projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",1000,multiline=True))
+    projection=completion_projection(kt,data,t,text(getattr(a,"note",None) or "",1000,multiline=True),reviewed_empty=reviewed_empty)
     if digest(projection)!=expected:refuse("completion snapshot changed; nothing closed")
     kt.claim_owner_check(data,t,a,"done")
     if t.get("column")=="pending-review":refuse("Pending review still requires the owner's decision")
     if t.get("waiting") is not None:refuse("a wait is still open; nothing closed")
     if "needs-human" in t.get("labels",[]):refuse("needs-human remains open; nothing closed")
-    if any(p.get("status") not in ("accepted","ignored") for p in projection["questions"]):refuse("an owner question remains open; nothing closed")
+    if any(p.get("settled") is not True for p in projection["questions"]):refuse("an owner question remains open; nothing closed")
     for d in t["todos"]:
         if not isinstance(d,dict) or d.get("done") is not True:refuse("completion has an unfinished acceptance criterion")
         if "handback" in d:

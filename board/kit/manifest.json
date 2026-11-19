@@ -1,5 +1,5 @@
 {
-  "version": 144,
+  "version": 145,
   "schema": 4,
   "remove": [
     ".claude/skills/keeptrack-onboard"
@@ -88,7 +88,8 @@
     ".claude/skills/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json",
     "board/keeptrack-docs-home/evals/cases.json": "skills/keeptrack-docs-home/evals/cases.json",
     "board/owner_questions.py": "owner_questions.py",
-    "board/handbacks.py": "handbacks.py"
+    "board/handbacks.py": "handbacks.py",
+    "board/close_proven.py": "close_proven.py"
   },
   "optional": {
     "visibility-alarm": {
