@@ -1,0 +1,12 @@
+{
+  "id": "t_handoff",
+  "num": 2,
+  "title": "Write the handoff",
+  "column": "done",
+  "outcome": "completed",
+  "client": "Acme",
+  "project": "pr_pilot",
+  "assignees": ["alex"],
+  "rank": "a1",
+  "history": []
+}

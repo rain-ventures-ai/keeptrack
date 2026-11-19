@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Kit v142: manual `reconcile --reask-expired` records one owner Inbox question and a durable receipt for each due
+no-condition wait. Seven UTC calendar days mark a wait stale for review; an explicit later nudge delays the question.
+Every wait stays blocking, including named-person and owner-authority gates. After a board adopts expiry receipts,
+new semantic waits carry a stable instance ID and start timestamp in CLI and web writers; nudge-only edits keep them. Legacy identity is assigned
+only in the same atomic save as its first question. Archived questions and save-conflict rechecks prevent duplicates.
+No timer, board setting or live routine is activated. Plain reconcile remains read-only; `--dry-run` writes nothing.
+
 Kit v141: explicit `reconcile --release-quiet` can release this member's unchanged unattended claims after at least
 24 hours without a heartbeat. It requires the board kit owner's `settings-set --reconcile-quiet-claims on` opt-in;
 `--dry-run` previews without enabling or changing anything. Normal reconcile remains read-only. Missing generations,

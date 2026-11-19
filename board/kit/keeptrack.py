@@ -475,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 141  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 142  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2791,6 +2791,8 @@ def min_kit_needed(data):
     """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
     needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
     what = "Cards carry `waiting`"
+    if any(isinstance(t, dict) and ((waiting_of(t) or {}).get("instance_id") or t.get("wait_reasks")) for t in data.get("tasks", []) or []):
+        needed, what = WAIT_INSTANCE_KIT, "Cards carry wait-instance identities or expiry re-ask receipts"
     if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
         needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
     files = data.get("archive", {}).get("files") if isinstance(data.get("archive"), dict) else None
@@ -3345,6 +3347,7 @@ def claim_owner_check(data, t, a, action):
 # `waiting` belongs to the card, not to a claim: it outlives any session. A waiting card is not claimable (`--force` does
 # not change that); only `unwait` ends a wait, or closing the card (`done`, `move ID done`), which history keeps.
 WAITING_KIT = 43           # the kit that understands `waiting`: the first `wait` raises settings.min_kit to at least this
+WAIT_INSTANCE_KIT = 142    # writers preserve wait-instance identity and durable expiry re-ask receipts
 WAITING_DAYS = 7           # settings.waiting_days default: a wait with no nudge date is due for a chase this many days after it began
 AGENT_CLEARED_DAYS = 30    # doctor warns on agent_cleared entries this young; older ones stay on the card as a record
 AGENT_CLEARED_KEEP = 20    # agent_cleared keeps the newest entries only (the bulk archive keeps 20 history lines, too)
@@ -3385,6 +3388,28 @@ def waiting_of(t):
     """The card's wait, or None (absent, null or not an object)."""
     w = (t or {}).get("waiting")
     return w if isinstance(w, dict) and w else None
+
+
+def identify_wait(old, new, clock, adopted=True):
+    """A semantic replacement starts a new instance; changing only the chase date does not.
+
+    Legacy waits keep their absent identity until the first expiry apply. Unknown fields, including authority,
+    remain on the wait; they never become an implicit permission to clear it.
+    """
+    semantic = ("on", "who", "note", "until", "authority")
+    unchanged = bool(old) and all(old.get(k) == new.get(k) for k in semantic)
+    if unchanged:
+        for key in ("instance_id", "instance_started_at", "instance_legacy"):
+            if key in old:
+                new[key] = old[key]
+    else:
+        new.pop("instance_id", None)
+        new.pop("instance_started_at", None)
+        new.pop("instance_legacy", None)
+        if adopted:
+            new["instance_id"] = uuid.uuid4().hex
+            new["instance_started_at"] = clock
+    return unchanged
 
 
 def open_waiting(t):
@@ -4578,10 +4603,14 @@ def cmd_wait(a):
             if other["id"] == t["id"]:
                 sys.exit("refused: a card cannot wait on itself")
             until = wait_condition_text(("card", other["id"]))
-        who = check_who(data, a.who)
-        nudge = check_date(a.nudge, data) or "" if a.nudge else ""
-        sid = session_for(a); mine = session_hash(sid)
         old = waiting_of(t)
+        requested_who = a.who if a.who is not None else (old or {}).get("who", "")
+        if not isinstance(requested_who, str):
+            sys.exit("refused: malformed existing wait person; explicitly supply --who")
+        who = check_who(data, requested_who)
+        nudge = (check_date(a.nudge, data) or "") if a.nudge is not None else (old or {}).get("nudge", "")
+        wait_note = note if a.note is not None else (old or {}).get("note", "")
+        sid = session_for(a); mine = session_hash(sid)
         if old and agent_run() and old.get("by_session") != mine:
             sys.exit(f"refused: {t['id']} already waits on {waiting_text(old)} (set by {clean(old.get('by') or '?', 60)}); an agent "
                      "changes only a wait it set in this session. Comment with @the assignee and stop")
@@ -4589,16 +4618,25 @@ def cmd_wait(a):
             sys.exit(f"refused: {t['id']} waits on {clean(old.get('who'), 60)}, another party; an agent can't change who a wait "
                      "is on (only a person can). Comment with @the assignee and stop")
         _MUT["rerun"] = True   # the claim rules read this card's claim: a lost race re-runs on the newer board, never a merge
-        w = {"on": on, "who": who, "since": (old or {}).get("since") or board_today(data).isoformat(), "nudge": nudge,
-             "note": note, "by": who_am_i(None), "by_session": mine}
+        w = copy.deepcopy(old or {})
+        w.update({"on": on, "who": who, "since": (old or {}).get("since") or board_today(data).isoformat(), "nudge": nudge,
+                  "note": wait_note, "by": who_am_i(None), "by_session": mine})
         if agent_run():
             w["by_agent"] = True   # kit v138: an agent set this wait, so `unwait --owner-said` may end it (never a person's)
+        else:
+            w.pop("by_agent", None)
         if until:
             w["until"] = until   # a checkable condition; not owner-authority and not an approval
+        elif old and old.get("on") != on:
+            w.pop("until", None)   # explicit semantic replacement retains the CLI's existing condition-reset rule
+        adopted = board_min_kit(data) >= WAIT_INSTANCE_KIT or "instance_id" in (old or {}) or bool(t.get("wait_reasks"))
+        if not identify_wait(old, w, now(), adopted):
+            w["since"] = board_today(data).isoformat()
         t["waiting"] = w
         st = data.setdefault("settings", {})
-        if not (isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) and st["min_kit"] >= WAITING_KIT):
-            st["min_kit"] = WAITING_KIT   # older kits don't refuse a waiting card: doctor and relay check this from v43
+        required = WAIT_INSTANCE_KIT if w.get("instance_id") else WAITING_KIT
+        if not (isinstance(st.get("min_kit"), int) and not isinstance(st.get("min_kit"), bool) and st["min_kit"] >= required):
+            st["min_kit"] = required
         c = t.get("claim")
         hist(t, f"waiting on {on}" + (f" ({who})" if who else "") + (f", chase {nudge}" if nudge else "")
              + (f", until {until}" if until else "") + (f": {note}" if note else ""))
@@ -14407,8 +14445,168 @@ def reconcile_release_quiet(a):
     mutate(apply, "Reconcile quiet unattended claims")
 
 
+def expired_wait_evidence(task, owner, clock):
+    """A due, condition-free wait to re-ask about. Age never ends a wait or grants approval.
+
+    New instances age from their complete UTC start timestamp; legacy waits retain their stored calendar since.
+    An explicit nudge delays the question. Invalid present fields never turn into an absent condition or date.
+    """
+    w = open_waiting(task)
+    assignees = task.get("assignees", [])
+    if not w or not isinstance(assignees, list) or not all(isinstance(x, str) for x in assignees):
+        return None
+    if assignees and owner.casefold() not in {x.casefold() for x in assignees}:
+        return None
+    if "until" in w and w["until"] != "":
+        return None
+    for key in ("on", "who", "note", "by", "by_session", "authority"):
+        if key in w and not isinstance(w[key], str):
+            return None
+    if not isinstance(w.get("on"), str) or not w["on"].strip():
+        return None
+    ident = w.get("instance_id")
+    if "instance_id" in w and (not isinstance(ident, str) or not re.fullmatch(r"[0-9a-f]{32}", ident)):
+        return None
+    receipts = task.get("wait_reasks", [])
+    if not isinstance(receipts, list) or not all(isinstance(r, dict) and r.get("version") == 1
+            and isinstance(r.get("instance_id"), str) and re.fullmatch(r"[0-9a-f]{32}", r["instance_id"])
+            and isinstance(r.get("proposal"), str) and re.fullmatch(r"r_[0-9a-z]{10}", r["proposal"])
+            and isinstance(r.get("action_key"), str) for r in receipts):
+        return None
+    if ident and any(r["instance_id"] == ident for r in receipts):
+        return None
+    if "instance_started_at" in w:
+        raw = w["instance_started_at"]
+        if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", raw):
+            return None
+        try:
+            since = dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(dt.timezone.utc).date()
+        except (ValueError, OverflowError):
+            return None
+        if not ident or "instance_legacy" in w:
+            return None
+    else:
+        if ident and w.get("instance_legacy") is not True:
+            return None
+        raw = w.get("since")
+        if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            return None
+        try:
+            since = dt.date.fromisoformat(raw)
+        except ValueError:
+            return None
+    try:
+        due = since + dt.timedelta(days=7)
+    except OverflowError:
+        return None
+    if "nudge" in w and w["nudge"] != "":
+        raw = w["nudge"]
+        if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+            return None
+        try:
+            due = max(due, dt.date.fromisoformat(raw))
+        except ValueError:
+            return None
+    if clock.astimezone(dt.timezone.utc).date() < due:
+        return None
+    return {"since": since.isoformat(), "expired_on": (since + dt.timedelta(days=7)).isoformat(), "due_on": due.isoformat()}
+
+
+def reconcile_reask_expired(a):
+    """One private-safe owner question and durable receipt per wait instance, in one CAS transaction."""
+    dry = bool(getattr(a, "dry_run", False))
+    if BACKEND == "hosted" and not FILE:
+        sys.exit("capability_unavailable: expired-wait re-asks are unavailable in hosted phase 0")
+    if not dry and os.environ.get("KEEPTRACK_PROPOSALS_ONLY") == "1":
+        sys.exit("KEEPTRACK_PROPOSALS_ONLY: expired-wait apply is refused; use --dry-run")
+    data, _ = load()
+    owner = quiet_claim_setting_owner(data)
+    clock = reconcile_clock()
+    pinned = {t["id"]: (copy.deepcopy(t["waiting"]), uuid.uuid4().hex)
+              for t in data.get("tasks", []) if isinstance(t, dict) and isinstance(t.get("id"), str)
+              and re.fullmatch(r"t_[0-9a-z]{4,20}", t["id"]) and type(t.get("num")) is int and t["num"] > 0
+              and expired_wait_evidence(t, owner, clock)}
+    if dry:
+        for ident in sorted(pinned):
+            print(f"re-ask {ident}: no-condition wait due; wait remains blocking; not an approval")
+        print(f"dry run: {len(pinned)} candidate(s); nothing changed")
+        return
+    if not pinned:
+        print("no due no-condition waits; nothing changed")
+        return
+    require_review_storage(data)
+    def apply(current):
+        _MUT["recheck"] = True
+        if quiet_claim_setting_owner(current) != owner:
+            sys.exit("board owner changed; no expired waits re-asked")
+        require_review_storage(current)
+        try:
+            proposals = _all_proposals(current)
+        except (TypeError, ValueError, AttributeError):
+            sys.exit("malformed Inbox index; no expired waits re-asked")
+        if not all(isinstance(p, dict) and isinstance(p.get("action_key"), str) and p["action_key"]
+                   and isinstance(p.get("id"), str) and p.get("status") in PROPOSAL_STATUSES for p in proposals):
+            sys.exit("malformed Inbox index; no expired waits re-asked")
+        if len({p["action_key"] for p in proposals}) != len(proposals) or len({p["id"] for p in proposals}) != len(proposals):
+            sys.exit("ambiguous Inbox identity; no expired waits re-asked")
+        by_key = {p.get("action_key"): p for p in proposals if isinstance(p.get("action_key"), str)}
+        count = 0
+        for task in current.get("tasks", []):
+            if not isinstance(task, dict) or task.get("id") not in pinned:
+                continue
+            original, planned_id = pinned[task["id"]]
+            if task.get("waiting") != original:
+                continue
+            evidence = expired_wait_evidence(task, owner, reconcile_clock())
+            if not evidence:
+                continue
+            receipts = task.get("wait_reasks", [])
+            if not isinstance(receipts, list) or not all(isinstance(r, dict) for r in receipts):
+                continue
+            w = task["waiting"]
+            instance = w.get("instance_id") or planned_id
+            key = "wait-expiry:" + task["id"] + ":" + instance
+            old = [r for r in receipts if r.get("instance_id") == instance]
+            if old:
+                # An inconsistent durable receipt needs explicit repair, never a second question.
+                continue
+            existing = by_key.get(key)
+            if existing and (existing.get("kind") != "ask.choose" or not isinstance(existing.get("change"), dict) or existing["change"].get("task") != task["id"]):
+                continue
+            link = card_url(task.get("num"), task["id"])
+            payload = {"kind": "ask.choose", "title": "Review an expired wait", "decider": owner,
+                       "source": {"kind": "other", "id": key, "revision": instance},
+                       "action_key": key, "work_key": key, "reason": "A no-condition wait is due for one owner review. Age grants no approval.",
+                       "change": {"task": task["id"], "question": "This card's no-condition wait is due for review. Keep waiting or review ending it? Neither choice approves the work.",
+                                  "options": [{"key": "keep", "label": "Keep waiting", "note": "9/10 — Retains the gate until its dependency is resolved."},
+                                              {"key": "review", "label": "Review ending the wait", "note": "6/10 — Inspect the card and explicitly end the wait if appropriate."}],
+                                  "recommended": "keep", "links": [{"url": link, "title": "Open the card"}] if link else []}}
+            added, _ = _prepare_proposals(current, [payload])
+            proposal = added[0] if added else existing
+            if not proposal or not isinstance(proposal.get("id"), str):
+                sys.exit("could not identify the wait question; nothing saved")
+            if not w.get("instance_id"):
+                w["instance_id"] = instance
+                w["instance_legacy"] = True  # original exact start is unknown; keep the original since date
+            receipt = dict(evidence, instance_id=instance, action_key=key, proposal=proposal["id"], recorded_at=now(), version=1)
+            task.setdefault("wait_reasks", []).append(receipt)
+            hist(task, "expired wait re-asked once; wait remains blocking; not an approval")
+            task["history"][-1]["wait_reask"] = copy.deepcopy(receipt)
+            task["updated"] = now()
+            st = current.setdefault("settings", {})
+            st["min_kit"] = max(board_min_kit(current), WAIT_INSTANCE_KIT)
+            by_key[key] = proposal
+            count += 1
+        print(f"recorded {count} expired-wait re-ask(s); waits remain blocking; no approval granted")
+    mutate(apply, "Re-ask expired no-condition waits")
+
+
 def cmd_reconcile(a):
     """The default reconciliation preview never writes. Quiet-claim release is a separate, opt-in action."""
+    if getattr(a, "release_quiet", False) and getattr(a, "reask_expired", False):
+        sys.exit("choose one reconcile action: --release-quiet or --reask-expired")
+    if getattr(a, "reask_expired", False):
+        return reconcile_reask_expired(a)
     if getattr(a, "release_quiet", False):
         return reconcile_release_quiet(a)
     if not getattr(a, "dry_run", False):
@@ -15985,8 +16183,8 @@ def _proposals_only(a):
     # Fail closed: new commands must be deliberately classified before loader use.
     reads = {"list", "show", "reconcile", "work-status", "work-research-policy-snapshot", "watch-poll", "work-research-candidates", "work-research-snapshot", "work-research-draft",
              "people", "person", "projects", "project", "project-comments", "comments", "history", "archived-history", "where", "here", "help", "card-link", "labels", "clients", "columns", "members", "agents", "settings", "proposal-result", "proposals"}
-    if a.cmd == "reconcile" and getattr(a, "release_quiet", False) and not getattr(a, "dry_run", False):
-        sys.exit("KEEPTRACK_PROPOSALS_ONLY: quiet-claim release is refused; use --dry-run")
+    if a.cmd == "reconcile" and (getattr(a, "release_quiet", False) or getattr(a, "reask_expired", False)) and not getattr(a, "dry_run", False):
+        sys.exit("KEEPTRACK_PROPOSALS_ONLY: reconcile apply is refused; use --dry-run")
     allowed = a.cmd in reads or a.cmd == "propose" or (a.cmd == "automation" and a.action in ("mark", "list", "show", "validate", "check", "dry-run", "test", "due", "needs")) or (a.cmd == "checkpoint" and a.action == "show") or (a.cmd == "routine" and a.action in ("show", "finish"))
     if not allowed: sys.exit("KEEPTRACK_PROPOSALS_ONLY: command refused; automations may write proposals only")
 
@@ -16271,6 +16469,7 @@ def main():
     s = sub.add_parser("reconcile", help="one row per open card older than a day (close, ask, leave or park), plus a wait audit or a quiet-claim row; --dry-run writes nothing")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--release-quiet", action="store_true", help="release eligible unattended claims after 24 hours; requires board opt-in; --dry-run previews only")
+    s.add_argument("--reask-expired", action="store_true", help="record one owner Inbox question per due no-condition wait; waits remain blocking; --dry-run previews only")
     s.set_defaults(f=cmd_reconcile)
     s = sub.add_parser("archive", help="move old done tasks, old Lost people and long histories to archive/<year>.json")
     s.add_argument("ref", nargs="?", help="archive just this task, regardless of status or age; nothing deleted (restore with unarchive)")
