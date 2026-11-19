@@ -121,6 +121,7 @@ def questions(kt, data, tid):
     result = []
     for proposal in proposals:
         if not isinstance(proposal, dict):refuse("Inbox identity needs repair")
+        if proposal.get("id") is not None and not isinstance(proposal.get("id"),str):refuse("Inbox identity needs repair")
         change = proposal.get("change")
         if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in ("ask.choose", "ask.question"):
             if proposal.get("id") in found_ids:refuse("owner-question identity is ambiguous")
@@ -261,7 +262,7 @@ def move(kt,a):
         data,_=kt.load();t,n,d=locate(data)
         record=d.get("handback")
         if record is not None:
-            o=verify_pair(kt,data,t,d,record,a)
+            o=verify_pair(kt,data,t,d,record,a,check_source=False)
             emit({"version":1,"snapshot":record["snapshot"],"projection":record["projection"],"existing":result(kt,t,d,o,False)});return
         projection=move_projection(kt,data,t,d,a)
         emit({"version":1,"snapshot":digest(projection),"projection":projection,"existing":None});return
@@ -321,7 +322,9 @@ def guard_completion(kt,data,t,expected,a):
         if "handback" in d:
             req=d["handback"].get("projection",{}).get("request",{}) if isinstance(d["handback"],dict) else {}
             args=type("MoveArgs",(),{"title":req.get("title"),"details":req.get("details"),"handback_kind":req.get("kind")})()
-            verify_pair(kt,data,t,d,d["handback"],args)
+            # The historical pair proves where this completed criterion went, not current permission. Current
+            # source/claim/blockers were independently bound and checked above by the fresh completion snapshot.
+            verify_pair(kt,data,t,d,d["handback"],args,check_source=False)
         elif kt.MOVED_TODO.match(str(d.get("text",""))):refuse("moved acceptance criterion lacks a verified receipt")
     return projection
 

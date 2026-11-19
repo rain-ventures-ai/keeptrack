@@ -306,5 +306,32 @@ class Handbacks(unittest.TestCase):
         note='## Done\nDevice work moved to its linked card.'
         self.assertTrue(self.done(self.read_done(note=note)['snapshot'],note=note)['closed'])
 
+    def test_verified_pair_survives_its_original_claim_release_but_not_takeover(self):
+        self.task['claim']={'agent':'codex','on_behalf_of':'osouthgate','session_id':'handback-test','generation':'a'*24,'status':'running','claimed_at':'2026-11-19T00:00:00Z'}
+        self.write();token=self.read_move()['snapshot'];self.move(token)
+        source=self.current();source['claim']=None;(self.root/'cards/t_task1.json').write_text(json.dumps(source))
+        before=self.snapshot()
+        with patch.object(kt,'save') as save:
+            self.assertFalse(self.read_move()['existing']['created']);save.assert_not_called()
+        self.assertEqual(before,self.snapshot())
+        with self.assertRaises(SystemExit):self.move(token)
+        self.assertTrue(self.done(self.read_done()['snapshot'])['closed'])
+        self.setUp_reset();self.task['claim']={'agent':'codex','on_behalf_of':'osouthgate','session_id':'handback-test','generation':'a'*24,'status':'running','claimed_at':'2026-11-19T00:00:00Z'}
+        self.write();token=self.read_move()['snapshot'];self.move(token)
+        source=self.current();source['claim'].update(session_id='new-session',generation='b'*24)
+        (self.root/'cards/t_task1.json').write_text(json.dumps(source));before=self.snapshot()
+        with patch.object(kt,'save') as save:
+            self.assertFalse(self.read_move()['existing']['created']);save.assert_not_called()
+        with self.assertRaises(SystemExit):self.move(token)
+        with self.assertRaises(SystemExit):self.done(self.read_done()['snapshot'])
+        self.assertEqual(before,self.snapshot())
+
+    def test_malformed_inbox_identity_refuses_without_mutation(self):
+        for value in ([],{},123):
+            proposal=self.root/'proposals/r_1234567890.json'
+            proposal.write_text(json.dumps({'id':value,'kind':'task.create','status':'pending','change':{}}));before=self.snapshot()
+            with self.assertRaises(SystemExit):self.read_move()
+            self.assertEqual(before,self.snapshot());proposal.unlink()
+
 
 if __name__=='__main__':unittest.main()

@@ -37,6 +37,10 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
   Missing/archived/changed targets or forged markers fail closed. Source metadata and links are bound; no numeric
   or multiwrite fallback exists in the safe mode. Receipts are capped at64 per source and64KiB combined; each
   projection/receipt is at most16KiB UTF8. Local fixtures return null remote URLs. Plain legacy calls are unchanged.
+- Read-only existing-pair recovery can report verified historical facts after the original claim is released or
+  replaced, with no save or claim change. Its projection/token is historical data, never new permission. A stale
+  write token still refuses. Any later completion needs a separate fresh current-state snapshot and actual claim
+  ownership; a new claimant, wait, question or changed scope cannot be bypassed by the old receipt.
 - `done t_SOURCE --note NOTE --snapshot --json` then `--expected-snapshot DIGEST --json` is optional guarded
   completion. It binds the note, source metadata, exact links, current checklist/receipts, claim identity and opaque
   wait/question state. Same-CAS checks reject open criteria, pending/unknown owner-question states, any wait,
