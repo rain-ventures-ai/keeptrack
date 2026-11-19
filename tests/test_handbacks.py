@@ -359,6 +359,11 @@ class Handbacks(unittest.TestCase):
             proposal.write_text(json.dumps({'id':value,'kind':'task.create','status':'pending','change':{}}));before=self.snapshot()
             with self.assertRaises(SystemExit):self.read_move()
             self.assertEqual(before,self.snapshot());proposal.unlink()
+        for kind in (None,[],{}):
+            proposal=self.root/'proposals/r_1234567890.json'
+            proposal.write_text(json.dumps({'id':'r_1234567890','kind':kind,'status':'pending','change':{'task':'t_task1'}}));before=self.snapshot()
+            with self.assertRaises(SystemExit):self.read_move()
+            self.assertEqual(before,self.snapshot());proposal.unlink()
 
     def test_pr_open_release_preserves_all_owner_blockers_without_done(self):
         self.owned();self.task['waiting']={'on':'Owner choice','who':'osouthgate','since':'2026-11-19'}
@@ -470,10 +475,11 @@ class Handbacks(unittest.TestCase):
         original=self.proposal(pid);module=kt.handback_module()
         self.assertTrue(module.question_settled(kt,original,'osouthgate'))
         changes=[('status','pending'),('status','accepted'),('status','ignored'),('done',None),('done',{}),('done',{'at':'2026-11-19junk','by':'codex@osouthgate'}),
-                 ('done',{'at':original['decision']['done']['at'],'by':'another'}),('answer',{'choice':'missing'}),('answer',[]),('id','wrong-answer-id')]
+                 ('done',{'at':original['decision']['done']['at'],'by':'another'}),('answer',{'choice':'missing'}),('answer',[]),('id','wrong-answer-id'),('proposal-id',None)]
         for key,value in changes:
             item=copy.deepcopy(original)
-            if key=='status':item[key]=value
+            if key=='proposal-id':item['id']=value
+            elif key=='status':item[key]=value
             else:item['decision'][key]=value
             self.assertFalse(module.question_settled(kt,item,'osouthgate'),(key,value))
         for offset in ('+00:99','-00:99','+24:00'):

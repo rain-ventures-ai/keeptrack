@@ -12,6 +12,10 @@ Changed scope, content, claim or inconsistent receipts refuse before creating an
 `done` checks the same fresh snapshot inside CAS and refuses unresolved waits, owner questions, needs-human,
 Pending review and coordinated tasks. Ordinary move/done calls retain their behaviour; new receipt adoption raises
 minimum kit144. These are front-door building blocks, not an automatic classifier, permission or live activation.
+The additive `done --pr-open` guarded phase releases only the exact current owned claim while preserving owner
+blockers and In progress. Native question resolution binds the decision/answer/done lifecycle as bookkeeping,
+without granting external-effect authority. Guarded notes support all ten follow-up links within the existing
+16KiB snapshot budget; ordinary legacy done input is unchanged.
 
 Kit v143: `comment CARD --owner-question FILE_OR_- --json` writes one structured choice comment, linked owner Inbox
 item and durable request receipt in one CAS transaction. Stable retries return the same identities; changed content,

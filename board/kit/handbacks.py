@@ -24,7 +24,8 @@ GUARDED_NOTE = 8192
 def question_settled(kt,proposal,owner):
     """Factual native question lifecycle only. This never authorises the answer's external effects."""
     try:
-        if not isinstance(proposal,dict) or proposal.get("kind") not in kt.ASK_KINDS or proposal.get("status")!="answered":return False
+        if not isinstance(proposal,dict) or not isinstance(proposal.get("id"),str) or not re.fullmatch(r"r_[a-z0-9]{1,32}",proposal["id"]) \
+                or proposal.get("kind") not in kt.ASK_KINDS or proposal.get("status")!="answered":return False
         decision=proposal.get("decision");change=proposal.get("change")
         if not isinstance(owner,str) or not owner or not isinstance(decision,dict) or not isinstance(change,dict) \
                 or decision.get("action")!="answer" or not isinstance(decision.get("id"),str) or not re.fullmatch(r"a_[a-f0-9]{10}",decision["id"]):return False
@@ -202,6 +203,8 @@ def questions(kt, data, tid):
         if not isinstance(proposal, dict):refuse("Inbox identity needs repair")
         if proposal.get("id") is not None and not isinstance(proposal.get("id"),str):refuse("Inbox identity needs repair")
         change = proposal.get("change")
+        if isinstance(change,dict) and change.get("task")==tid and not isinstance(proposal.get("kind"),str):
+            refuse("related Inbox kind needs repair")
         if proposal.get("id") in bound_ids or isinstance(change, dict) and change.get("task") == tid and proposal.get("kind") in kt.ASK_KINDS:
             if proposal.get("id") in found_ids:refuse("owner-question identity is ambiguous")
             found_ids.add(proposal.get("id"))

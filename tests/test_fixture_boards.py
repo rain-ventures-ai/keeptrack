@@ -94,6 +94,10 @@ class FixtureBoards(unittest.TestCase):
         before = kt.load_board()
         source = next(t for t in before["tasks"] if t["id"] == "t_safemove")
         self.assertIn("handback", source["todos"][0])
+        self.assertEqual(1, len(source["guarded_releases"]))
+        self.assertIsNotNone(source["waiting"])
+        self.assertIsNone(source["claim"])
+        self.assertEqual("in-progress", source["column"])
         with contextlib.redirect_stdout(io.StringIO()):
             kt.cmd_kit_update(Args(source=KIT, quiet=True))
         self.assertEqual(before, kt.load_board())

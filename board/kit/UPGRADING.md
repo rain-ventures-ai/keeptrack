@@ -48,6 +48,23 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
   verifies its stored outcome without adding history. Raw claim proofs are never exported. Local cleanup removes
   only the matching recorded session and claim generation, preserving a newer claim record. Newly written local
   records include that existing generation; legacy records without it are retained conservatively.
+- Guarded notes allow8192characters so ten linked follow-ups and the original note can fit; the complete UTF8 JSON
+  snapshot still has a16KiB budget and refuses over-budget input without truncation. Legacy ordinary `done` input
+  is unchanged. Read-only moved-pair verification on a Done source is permitted only with an actual matching
+  handback receipt; it never reopens the source or enables a mutation.
+- Add `--pr-open` to both guarded `done` calls for the separate release-only phase. Its projection explicitly says
+  `phase: pr-open-release`; its token cannot be used for Done. A new release requires the exact current explicit
+  session and claim generation inside CAS, schema4, no coordination and an In progress source. Existing waits,
+  questions, needs-human and other metadata are preserved. Nothing is marked Done/finished and no wait is cleared.
+  The JSON result is `{card_id, released: true, column: in-progress, created: boolean}`. Versioned `guarded_releases`
+  receipts are bounded to64records/64KiB combined. Exact retries/historical recovery verify the event digest and
+  source snapshot with zero saves; a replacement claim is never released or treated as fresh permission.
+- Related choose/question/approve Inbox items bind both current change and decision digests. A well-typed real
+  `proposal-answer` followed by native `proposal-done` (including explicit not-acted) can count as settled workflow
+  bookkeeping. Pending, answered-unacted, malformed/mismatched/future records and bare status strings remain
+  blocking. Current claim/wait/gates and actual PR proofs remain independent; no answer/done grants authority.
+  Privacy screening preserves individual fields and explicit split-secret assignments without treating incidental
+  URL/repository/column punctuation as an assignment across unrelated fields.
 - These native guards do not query GitHub or turn Inbox preferences into permission. A front-door caller must
   still establish actual merged/no-PR status and its own authority before guarded completion; unread/unverified or
   closed-unmerged PRs must remain open. Workers report candidate existing todo IDs to the front door, never create
