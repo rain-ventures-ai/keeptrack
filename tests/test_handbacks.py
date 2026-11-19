@@ -294,5 +294,17 @@ class Handbacks(unittest.TestCase):
                 self.assertEqual(before,self.snapshot())
                 self.task[field]=[]
 
+    def test_exact_utf8_wire_budget_and_markdown_details_are_preserved(self):
+        details='## Next\n'+'é'*600
+        stream=io.StringIO();before=self.snapshot()
+        with contextlib.redirect_stdout(stream):kt.cmd_todo_move(self.args(snapshot=True,details=details))
+        self.assertIn('é',stream.getvalue());self.assertNotIn('\\u00e9',stream.getvalue())
+        self.assertLessEqual(len(stream.getvalue().encode('utf-8')),16385)
+        value=json.loads(stream.getvalue());self.assertEqual(details,value['projection']['request']['details'])
+        self.assertEqual(before,self.snapshot())
+        self.move(value['snapshot'],details=details)
+        note='## Done\nDevice work moved to its linked card.'
+        self.assertTrue(self.done(self.read_done(note=note)['snapshot'],note=note)['closed'])
+
 
 if __name__=='__main__':unittest.main()

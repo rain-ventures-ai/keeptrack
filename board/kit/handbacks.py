@@ -35,6 +35,10 @@ def digest(value):
     return hashlib.sha256(b"keeptrack-handback-v1\0" + encoded(value)).hexdigest()
 
 
+def emit(value):
+    print(encoded(value).decode("utf-8"))
+
+
 def text(value, cap, optional=False, multiline=False):
     if not isinstance(value, str) or len(value) > cap or (not optional and not value.strip()):
         refuse("text is missing or exceeds its limit")
@@ -148,7 +152,7 @@ def source_projection(kt, data, t):
     link_values=[]
     for link in links:
         link_values.append({"url":text(link.get("url"),2000),"title":text(link.get("title",""),160,True)})
-    value={"version":1,"board":{"repo":kt.REPO,"branch":kt.BRANCH,"path":kt.PATH,"local":bool(kt.FILE)},
+    value={"version":1,"board":{"repo":text(kt.REPO,200,True),"branch":text(kt.BRANCH,255),"path":text(kt.PATH,1024),"local":bool(kt.FILE)},
            "owner":kt.quiet_claim_setting_owner(data),"source":metadata,"claim":public_claim,
            "waiting":digest(t["waiting"]) if t.get("waiting") is not None else None,"questions":questions(kt,data,t["id"]),"links":link_values}
     screen(kt,{"source":metadata,"claim":public_claim,"links":link_values,"board":value["board"],"owner":value["owner"]})
@@ -238,8 +242,10 @@ def verify_pair(kt,data,t,d,record,a,check_source=True):
 
 def result(kt,t,d,o,created):
     source_url,destination_url=links(kt,t,o)
-    return {"source_id":t["id"],"todo_id":d["id"],"destination_id":o["id"],"created":created,
+    value={"source_id":t["id"],"todo_id":d["id"],"destination_id":o["id"],"created":created,
             "source_url":source_url,"destination_url":destination_url}
+    encoded(value)  # Validate the exact receipt before a mutation callback may commit it.
+    return value
 
 
 def move(kt,a):
@@ -256,9 +262,9 @@ def move(kt,a):
         record=d.get("handback")
         if record is not None:
             o=verify_pair(kt,data,t,d,record,a)
-            print(json.dumps({"version":1,"snapshot":record["snapshot"],"projection":record["projection"],"existing":result(kt,t,d,o,False)}));return
+            emit({"version":1,"snapshot":record["snapshot"],"projection":record["projection"],"existing":result(kt,t,d,o,False)});return
         projection=move_projection(kt,data,t,d,a)
-        print(json.dumps({"version":1,"snapshot":digest(projection),"projection":projection,"existing":None}));return
+        emit({"version":1,"snapshot":digest(projection),"projection":projection,"existing":None});return
     answer={}
     def change(data):
         kt._MUT["recheck"]=True
@@ -282,7 +288,7 @@ def move(kt,a):
         data.setdefault("settings",{})["min_kit"]=max(kt.board_min_kit(data),KIT)
         answer.clear();answer.update(result(kt,t,d,o,True))
     kt.mutate(change,"Move a snapshot-bound follow-up to Backlog")
-    print(json.dumps(answer))
+    emit(answer)
 
 
 def completion_projection(kt,data,t,note):
@@ -349,10 +355,10 @@ def done(kt,a):
         if t.get("column")=="done":
             record=t.get("guarded_completion")
             projection=completed_retry(kt,data,t,record.get("snapshot") if isinstance(record,dict) else None,note)
-            print(json.dumps({"version":1,"snapshot":record["snapshot"],"projection":projection,"existing":{"card_id":t["id"],"closed":True}}));return
+            emit({"version":1,"snapshot":record["snapshot"],"projection":projection,"existing":{"card_id":t["id"],"closed":True}});return
         projection=completion_projection(kt,data,t,note)
         screen(kt,{"source":projection["source"],"links":projection["links"],"note":note})
-        print(json.dumps({"version":1,"snapshot":digest(projection),"projection":projection,"existing":None}));return
+        emit({"version":1,"snapshot":digest(projection),"projection":projection,"existing":None});return
     kt._claim_sure()
     answer={}
     def change(data):
@@ -367,4 +373,4 @@ def done(kt,a):
         data.setdefault("settings",{})["min_kit"]=max(kt.board_min_kit(data),KIT)
         answer.clear();answer.update(card_id=t["id"],closed=True)
     kt.mutate(change,"Complete a snapshot-guarded card")
-    print(json.dumps(answer))
+    emit(answer)
