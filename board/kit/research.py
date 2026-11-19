@@ -137,6 +137,13 @@ def scope(data, task):
             "executor": EXECUTOR, "profile": p["profile"], "policy_digest": p["policy_digest"]}
 
 
+def _stored_admission(task):
+    co = task.get("coordination") if isinstance(task, dict) else None
+    research = co.get("research") if isinstance(co, dict) else None
+    admission = research.get("admission") if isinstance(research, dict) else None
+    return admission if isinstance(admission, dict) else None
+
+
 def revoke_changed_inputs(before, after):
     """Native edits cannot restore a consumed grant by restoring its old input.
 
@@ -155,9 +162,11 @@ def revoke_changed_inputs(before, after):
         compared_before = dict(before, settings=dict(before["settings"], rook_research=enabled))
         compared = dict(after, settings=dict(after["settings"], rook_research=enabled))
     for task in after.get("tasks", []):
-        grant = ((task.get("coordination") or {}).get("research") or {}).get("admission")
+        if not isinstance(task, dict):
+            continue
+        grant = _stored_admission(task)
         previous = old.get(task.get("id"))
-        was = (((previous or {}).get("coordination") or {}).get("research") or {}).get("admission")
+        was = _stored_admission(previous)
         if not isinstance(grant, dict) or not isinstance(was, dict) or grant.get("id") != was.get("id"):
             continue
         if was.get("active") is not True or task.get("column") not in {"todo", "in-progress"}:
