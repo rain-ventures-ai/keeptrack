@@ -476,6 +476,9 @@ async function decide(page, id, act, re = /Accepted|Ignored|Merged|Already|Not s
       await page.goto(route.href); await page.waitForSelector('article.prop[data-id="r_askpick001"]');
       const coldApi = new Github({ ...files }), cold = await openBoard(browser, coldApi, { slow: true, route: '?filters=1&inbox_status=ignored&card=t_first#proposal=r_askpick001' });
       await cold.waitForFunction(() => document.activeElement?.dataset.id === 'r_askpick001');
+      const focusedRoute = await propCard(cold, 'r_askpick001').evaluate(article => { const r = article.getBoundingClientRect(); return { tabIndex: article.tabIndex, top: r.top, bottom: r.bottom, height: innerHeight }; });
+      assert.equal(focusedRoute.tabIndex, 0, 'exact question article participates in keyboard focus');
+      assert(focusedRoute.bottom > 0 && focusedRoute.top < focusedRoute.height, 'focused exact question has scrolled into the viewport');
       assert.equal(coldApi.writes().length, 0, 'cold slow-load exact route remains read-only');
       const forged = new URL(cold.url()); forged.hash = '#proposal=r_askpick001&choice=b'; await cold.goto(forged.href);
       assert.equal(coldApi.writes().length, 0, 'extra answer-like route fields never execute');

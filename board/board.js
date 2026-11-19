@@ -5475,11 +5475,15 @@ if (typeof window !== 'undefined') (() => {
       else if (proposalRoute(q)) {
         const key = routeBoardKey() + '|' + proposalRoute(q);
         if (appliedProposalRoute !== key || view !== 'inbox' || BACK_DIALOGS.some(id => $(id)?.open)) {
-          appliedProposalRoute = key;
           backClosing++; BACK_DIALOGS.forEach(id => { if ($(id)?.open) $(id).close(); }); backStack.length = 0; backClosing--;
           inboxF = { status: 'all', kind: '', source: '', reviewer: '' }; inboxFocus = proposalRoute(q);
           setView('inbox', true);
-          document.querySelector(`article.prop[data-id="${inboxFocus}"]`)?.focus({ preventScroll: false });
+          const target = document.querySelector(`article.prop[data-id="${inboxFocus}"]`);
+          target?.focus({ preventScroll: true });
+          target?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+          // Initial filter restoration may run after an early route attempt. Keep the route pending until
+          // live data/filters are ready and its article (or the confirmed-missing fallback) was rendered.
+          if (lastSyncOk && filterRouteReady && (target || !inboxAll().some(p => p.id === inboxFocus))) appliedProposalRoute = key;
         } // a poll on the same route must not rebuild the form or discard an in-progress answer
       }
       else if (h === 'filters') { if ($('filterPop').hidden) $('btnFilter').click(); }
