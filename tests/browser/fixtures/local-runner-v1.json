@@ -1,0 +1,45 @@
+{
+  "active": {
+    "schema": "keeptrack-local-runner/1",
+    "host": "fixture-host",
+    "state": "active",
+    "paused": null,
+    "last_tick": "2026-11-19T07:00:00Z",
+    "last_run": null,
+    "engines": {
+      "claude": {
+        "out_of_usage": false,
+        "until": null,
+        "sign_in": false
+      },
+      "codex": {
+        "out_of_usage": false,
+        "until": null,
+        "sign_in": false
+      }
+    }
+  },
+  "paused": {
+    "schema": "keeptrack-local-runner/1",
+    "host": "fixture-host",
+    "state": "paused",
+    "paused": {
+      "by": "guard",
+      "why": "the board guard: the board changed outside its data"
+    },
+    "last_tick": "2026-11-19T07:00:00Z",
+    "last_run": null,
+    "engines": {
+      "claude": {
+        "out_of_usage": false,
+        "until": null,
+        "sign_in": false
+      },
+      "codex": {
+        "out_of_usage": true,
+        "until": null,
+        "sign_in": false
+      }
+    }
+  }
+}

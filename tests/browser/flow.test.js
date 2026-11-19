@@ -183,6 +183,64 @@ let primaryReset = 0;
     assert.match(await page.locator('[data-card="t_1"]').innerText(), /BLOCKED/);
     assert.match(await page.locator('.flow-status').innerText(), /codex sign-in: fails/);
     assert.ok(!(await page.locator('.flow-status').innerText()).includes('DO NOT RENDER'));
+    // Actual local_status.py build/validate fixtures, generated with empty fictional state/auth folders.
+    const publisher = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/local-runner-v1.json')));
+    const reportedTick = async (hours = 0) => page.evaluate(h => new Date(Date.now() - h * 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z'), hours);
+    const setRunner = async value => {
+      runner = value; runnerVersion++;
+      const reply = page.waitForResponse(r => r.url().includes('local-runner.json') && r.status() === 200);
+      await page.clock.fastForward(31000); await (await reply).finished(); await page.clock.runFor(100);
+      return page.locator('.flow-status').innerText();
+    };
+    const writesBeforeStatus = counts.writes;
+    let status = await setRunner({ ...publisher.active, last_tick: await reportedTick() });
+    assert.match(status, /Repository runner reported active/);
+    assert.match(status, /Last reported tick/); assert.match(status, /not a live heartbeat/);
+    status = await setRunner({ status: 'active', paused: false, paused_by: 'owner', pause_reason: 'Old pause reason', last_tick: await page.evaluate(() => new Date().toISOString()) });
+    assert.match(status, /Repository runner reported active/); assert.ok(!status.includes('Old pause reason'));
+    assert.ok(!status.includes('Last reported tick unknown'), 'legacy canonical millisecond timestamps remain supported');
+    for (const legacyState of ['active', 'paused']) {
+      for (const invalidTick of [null, '', false, 0, [], {}, 'not a timestamp', '2026-02-30T00:00:00Z', '0000-01-01T00:00:00Z']) {
+        status = await setRunner({ status: legacyState, last_tick: invalidTick });
+        assert.match(status, /status unknown · invalid report/, `supplied invalid legacy tick for ${legacyState}`);
+        assert.ok(!status.includes(`Repository runner reported ${legacyState}`));
+      }
+      status = await setRunner({ status: legacyState });
+      assert.match(status, new RegExp(`Repository runner reported ${legacyState}`));
+      assert.match(status, /Last reported tick unknown · freshness unknown/);
+      status = await setRunner({ status: legacyState, last_tick: await page.evaluate(() => new Date().toISOString()) });
+      assert.match(status, new RegExp(`Repository runner reported ${legacyState}`));
+      assert.ok(!status.includes('Last reported tick unknown'));
+      status = await setRunner({ status: legacyState, last_tick: await reportedTick(7) });
+      assert.match(status, /status unknown · stale report/);
+      status = await setRunner({ status: legacyState, last_tick: await reportedTick(-1) });
+      assert.match(status, /status unknown · report time is ahead/);
+    }
+    status = await setRunner({ ...publisher.paused, last_tick: await reportedTick() });
+    assert.match(status, /Repository runner reported paused/); assert.match(status, /Reported pause by guard/);
+    assert.match(status, /the board guard: the board changed outside its data/); assert.match(status, /codex reported out of usage/);
+    status = await setRunner({ ...publisher.active, last_tick: await reportedTick(7) });
+    assert.match(status, /status unknown · stale report/); assert.match(status, /Last reported state: active/);
+    status = await setRunner({ ...publisher.active, last_tick: await reportedTick(-1) });
+    assert.match(status, /status unknown · report time is ahead/);
+    for (const malformed of [
+      { ...publisher.active, paused: { by: 'owner', why: 'paused by hand' } },
+      { ...publisher.paused, paused: null },
+      { ...publisher.active, schema: 'keeptrack-local-runner/2', status: 'active' },
+      { ...publisher.active, last_tick: '2026-02-30T00:00:00Z' },
+      { ...publisher.active, engines: { ...publisher.active.engines, codex: { out_of_usage: 'false', sign_in: true, until: null } } },
+      { ...publisher.paused, paused: { by: 'owner', why: '<img src=x onerror=window.runnerXss=1>' } },
+      { status: 'paused', paused: false }, []
+    ]) {
+      status = await setRunner(malformed); assert.match(status, /status unknown · invalid report/);
+      assert.ok(!status.includes('onerror'));
+    }
+    status = await setRunner({ status: 'paused', paused: true, paused_by: 'owner', pause_reason: '<img src=x onerror=window.runnerXss=1>', last_tick: await reportedTick(), sign_in: { codex: false, evil: true } });
+    assert.match(status, /Repository runner reported paused/); assert.ok(status.includes('<img'));
+    assert.equal(await page.locator('.flow-status img, .flow-status script').count(), 0);
+    assert.equal(await page.evaluate(() => window.runnerXss), undefined); assert.ok(!status.includes('evil sign-in'));
+    await setRunner({ status: 'paused', paused_by: 'owner', pause_reason: 'Maintenance', last_tick: await reportedTick(), sign_in: { codex: false } });
+    assert.equal(counts.writes, writesBeforeStatus, 'runner status display never writes the board');
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
     const oldAge = await page.locator('.flow-event .hint').first().textContent();
     const hidden = { ...counts }; await page.clock.fastForward(61000);

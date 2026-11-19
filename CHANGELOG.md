@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+Flow reads the runner publisher's `keeptrack-local-runner/1` status format, including pause reasons and engine
+facts. It labels the last reported tick honestly, marks stale/malformed reports unknown and retains explicit legacy
+status support. Status publication cadence and runner services are unchanged. No board-data schema change.
+
 Kit v141: explicit `reconcile --release-quiet` can release this member's unchanged unattended claims after at least
 24 hours without a heartbeat. It requires the board kit owner's `settings-set --reconcile-quiet-claims on` opt-in;
 `--dry-run` previews without enabling or changing anything. Normal reconcile remains read-only. Missing generations,
