@@ -88,6 +88,16 @@ def seed_board_repo(temp_root, fixture_name, meta):
 
 
 class FixtureBoards(unittest.TestCase):
+    def test_v143_owner_question_binding_survives_upgrade_without_new_question(self):
+        meta = read_json(os.path.join(FIXTURES, "v4_kit143", "fixture.json"))
+        self.use_fixture("v4_kit143", meta)
+        before = kt.load_board()
+        self.assertEqual(1, len(before["proposals"]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            kt.cmd_kit_update(Args(source=KIT, quiet=True))
+        self.assertEqual(before, kt.load_board())
+        self.assertEqual(0, kt.doctor_board(False)[2])
+
     def test_v142_wait_identity_survives_upgrade_without_reasking(self):
         meta = read_json(os.path.join(FIXTURES, "v4_kit142", "fixture.json"))
         self.use_fixture("v4_kit142", meta)

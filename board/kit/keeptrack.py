@@ -475,7 +475,7 @@ def _mismatch_advice():
 
 DEFAULT_PROJECT = os.environ.get("BOARD_PROJECT", "")   # this repo's board project (`use --project`), the default scope
 SCHEMA = 4  # the tasks.json version this keeptrack.py understands; newer files are read-only here (run kit-update)
-KIT_VERSION = 142  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
+KIT_VERSION = 143  # the board kit release this keeptrack.py belongs to (manifest.json "version"); doctor compares it with settings.min_kit
 KIT_URL = os.environ.get("BOARD_KIT_URL", "")   # a custom kit (raw base URL), used alone; empty: the official kit at one commit of main
 KIT_GIT = "https://github.com/rain-ventures-ai/keeptrack"
 KIT_RAW = "https://raw.githubusercontent.com/rain-ventures-ai/keeptrack"
@@ -2108,6 +2108,8 @@ _HOSTED_STORAGE = None
 
 def hosted_dispatch(a):
     """Route only phase-0 CLI commands. There is deliberately no GitHub fallback."""
+    if a.cmd == "comment" and getattr(a, "owner_question", None) is not None:
+        sys.exit("capability_unavailable: structured owner questions are unavailable in hosted phase 0")
     allowed = {"list", "show", "watch", "add", "claim", "heartbeat", "release", "done", "move", "assign", "comment", "link",
                "todo-add", "todo-done", "todo-edit", "todo-undo", "todo-rm", "archive", "unarchive", "review", "task-set", "approve", "settings", "settings-set"}
     if a.cmd not in allowed:
@@ -2791,8 +2793,10 @@ def min_kit_needed(data):
     """(the oldest kit the board's own content needs, what needs it): settings.min_kit must never go below it."""
     needed = WAITING_KIT if any(waiting_of(t) for t in data.get("tasks", []) or [] if isinstance(t, dict)) else 0
     what = "Cards carry `waiting`"
+    if any(isinstance(t, dict) and "owner_questions" in t for t in data.get("tasks", []) or []):
+        needed, what = 143, "Cards carry owner-question receipt bindings"
     if any(isinstance(t, dict) and ((waiting_of(t) or {}).get("instance_id") or t.get("wait_reasks")) for t in data.get("tasks", []) or []):
-        needed, what = WAIT_INSTANCE_KIT, "Cards carry wait-instance identities or expiry re-ask receipts"
+        needed, what = max(needed, WAIT_INSTANCE_KIT), "Cards carry wait-instance identities or expiry re-ask receipts"
     if any(isinstance(x, dict) and x.get("kind") in ASK_KINDS for x in data.get("proposals", []) or []):
         needed, what = max(needed, ASK_KIT), ("Cards carry `waiting` and the" if needed else "The") + " Review Inbox holds questions (ask.*)"
     files = data.get("archive", {}).get("files") if isinstance(data.get("archive"), dict) else None
@@ -5168,6 +5172,10 @@ def cmd_todo_move(a):
 def read_stdin_args(a):
     """`-` as a comment's text, --details or --add-details reads the text from stdin (kit v62), so an agent can write
     multi-line Markdown (a heading, a list of options, a table) without shell quoting: `comment '#N' - <<'EOF'`."""
+    if a.f is cmd_comment and getattr(a, "owner_question", None) is not None:
+        if getattr(a, "text", None) is not None or getattr(a, "reply_to", None):
+            sys.exit("owner question: structured mode cannot be combined with text or replies")
+        return  # its bounded binary reader owns stdin; never enter the unbounded plain-text reader
     if a.f not in (cmd_comment, cmd_project_comment, cmd_add, cmd_task_set, cmd_review, cmd_goal_add, cmd_goal_set, cmd_client_set):
         return
     keys = [k for k in ("text", "details", "add_details", "note", "notes") if getattr(a, k, None) == "-"]
@@ -5236,6 +5244,13 @@ def print_comments(comments):
 
 
 def cmd_comment(a):
+    if getattr(a, "require_owner_question_migration", False) and getattr(a, "owner_question", None) is None:
+        sys.exit("--require-owner-question-migration needs --owner-question")
+    if getattr(a, "owner_question", None) is not None:
+        from types import SimpleNamespace
+        return owner_question_module().submit(SimpleNamespace(**globals()), a)
+    if a.text is None:
+        sys.exit("comment needs text or --owner-question")
     def fn(data):
         t = find(data, a.id)
         append_comment(t, a.text, who_am_i(t), getattr(a, "reply_to", "") or "")
@@ -16005,6 +16020,19 @@ def _proposals_only(a):
 
 
 _WORK_MODULE = None
+_OWNER_QUESTION_MODULE = None
+
+
+def owner_question_module():
+    global _OWNER_QUESTION_MODULE
+    if _OWNER_QUESTION_MODULE is None:
+        import importlib.util
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "owner_questions.py")
+        spec = importlib.util.spec_from_file_location("keeptrack_owner_questions", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _OWNER_QUESTION_MODULE = module
+    return _OWNER_QUESTION_MODULE
 
 
 def work_module():
@@ -16187,7 +16215,10 @@ def main():
     s = sub.add_parser("link", help="add a link to a card; - reads one per line from stdin (URL, tab, title) in one save")
     s.add_argument("id"); s.add_argument("url"); s.add_argument("--title"); s.set_defaults(f=cmd_link)
     s = sub.add_parser("history"); s.add_argument("id"); s.set_defaults(f=cmd_history)
-    s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", help="the comment (Markdown); - reads it from stdin")
+    s = sub.add_parser("comment"); s.add_argument("id"); s.add_argument("text", nargs="?", help="the comment (Markdown); - reads it from stdin")
+    s.add_argument("--owner-question", metavar="FILE_OR_-", help="atomically post one structured owner question comment and linked Inbox item")
+    s.add_argument("--require-owner-question-migration", action="store_true", help="refuse structured intake unless this board already requires kit143 (checked on every save attempt)")
+    s.add_argument("--json", action="store_true", help="structured question: return stable comment/proposal IDs and links")
     s.add_argument("--reply-to", dest="reply_to", help="reply one level under this comment id (not under a reply or an activity line)"); s.set_defaults(f=cmd_comment)
     s = sub.add_parser("comments"); s.add_argument("id"); s.set_defaults(f=cmd_comments)
     s = sub.add_parser("attach", help="add an image (PNG, JPEG, GIF, WebP, at most 2 MB) to a card: a new comment, the description with --details, or Links with --link",
