@@ -2873,6 +2873,7 @@ if (typeof window !== 'undefined') (() => {
     const status = ['active', 'paused'].includes(r.status) ? r.status : null;
     const paused = typeof r.paused === 'boolean' ? (r.paused ? 'paused' : 'active') : null;
     if ((!status && !paused) || (status && paused && status !== paused) || (r.status != null && !status) || (r.paused != null && !paused)) return null;
+    if (Object.hasOwn(r, 'last_tick') && !legacyStamp(r.last_tick)) return null;
     const facts = {};
     for (const name of engines) {
       const out = Array.isArray(r.engines_out) ? r.engines_out.slice(0, 8).find(e => object(e) && e.engine === name) : null;
@@ -2896,7 +2897,7 @@ if (typeof window !== 'undefined') (() => {
         future ? 'Repository runner status unknown · report time is ahead' : `Repository runner reported ${r.state}`));
       if (r) {
         if (stale || future) strip.append(el('span', '', `Last reported state: ${r.state}`));
-        [r.by && `Reported pause by ${r.by}`, r.why, r.tick ? `Last reported tick ${future ? 'unknown (clock ahead)' : ago(r.tick) || 'unknown'}` : 'Last reported tick unknown'].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
+        [r.by && `Reported pause by ${r.by}`, r.why, r.tick ? `Last reported tick ${future ? 'unknown (clock ahead)' : ago(r.tick) || 'unknown'}` : 'Last reported tick unknown · freshness unknown'].filter(Boolean).forEach(s => strip.append(el('span', '', s)));
         for (const [name, e] of Object.entries(r.engines)) {
           if (e.out_of_usage) strip.append(el('span', '', `${name} reported out of usage${e.until ? ' until ' + e.until : ''}`));
           if (typeof e.sign_in === 'boolean') strip.append(el('span', '', `${name} sign-in: ${e.sign_in ? 'passes' : 'fails'} (reported local file check)`));

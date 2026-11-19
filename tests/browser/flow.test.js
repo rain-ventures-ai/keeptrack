@@ -199,6 +199,23 @@ let primaryReset = 0;
     status = await setRunner({ status: 'active', paused: false, paused_by: 'owner', pause_reason: 'Old pause reason', last_tick: await page.evaluate(() => new Date().toISOString()) });
     assert.match(status, /Repository runner reported active/); assert.ok(!status.includes('Old pause reason'));
     assert.ok(!status.includes('Last reported tick unknown'), 'legacy canonical millisecond timestamps remain supported');
+    for (const legacyState of ['active', 'paused']) {
+      for (const invalidTick of [null, '', false, 0, [], {}, 'not a timestamp', '2026-02-30T00:00:00Z', '0000-01-01T00:00:00Z']) {
+        status = await setRunner({ status: legacyState, last_tick: invalidTick });
+        assert.match(status, /status unknown · invalid report/, `supplied invalid legacy tick for ${legacyState}`);
+        assert.ok(!status.includes(`Repository runner reported ${legacyState}`));
+      }
+      status = await setRunner({ status: legacyState });
+      assert.match(status, new RegExp(`Repository runner reported ${legacyState}`));
+      assert.match(status, /Last reported tick unknown · freshness unknown/);
+      status = await setRunner({ status: legacyState, last_tick: await page.evaluate(() => new Date().toISOString()) });
+      assert.match(status, new RegExp(`Repository runner reported ${legacyState}`));
+      assert.ok(!status.includes('Last reported tick unknown'));
+      status = await setRunner({ status: legacyState, last_tick: await reportedTick(7) });
+      assert.match(status, /status unknown · stale report/);
+      status = await setRunner({ status: legacyState, last_tick: await reportedTick(-1) });
+      assert.match(status, /status unknown · report time is ahead/);
+    }
     status = await setRunner({ ...publisher.paused, last_tick: await reportedTick() });
     assert.match(status, /Repository runner reported paused/); assert.match(status, /Reported pause by guard/);
     assert.match(status, /the board guard: the board changed outside its data/); assert.match(status, /codex reported out of usage/);
