@@ -23,6 +23,15 @@ cannot apply the sweep. No live board is opted in by this release; first run the
 UTC offsets are range-checked before parsing, and unrelated malformed coordination metadata cannot interrupt the sweep
 or suppress revocation checks for valid research admissions. Owner enablement/disablement is rechecked after conflicts.
 
+Archive compaction (card #557): `archive` now stores compact cards. A card keeps its core fields, details, to-dos,
+links, related cards, dates and last 3 comments (`settings.archive.keep_comments`, or `archive --keep-comments N`). Its
+`history` and `last_run` go, and so do its older comments and the archive file's separate history lines for it. The new
+`compacted` key counts what went and names, in `full_at`, the board commit and path where git keeps the full card.
+`settings.archive.compact: false` keeps full cards. The new `archive-compact` command compacts cards already archived:
+a dry run shows each file's size before and after, and `--apply` writes. A second run changes nothing. `archived-history`
+and `unarchive` show the pointer. The 900 KB part limit, the year-part split and doctor's board budget do not change.
+Backward compatible: older readers ignore `compacted` and treat a missing history as empty. No schema change.
+
 Kit v140: a GitHub-board agent can end another agent's event wait when its structured PR condition verifies a merge or
 its card condition verifies a completed card. `claim`, `next` and `wait-check` clear eligible waits after checking the
 evidence. The card's history identifies the evidence and the actor. A person can configure `settings.wait_enders` to

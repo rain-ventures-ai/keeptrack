@@ -98,7 +98,7 @@ Exit code 0 means healthy. Exit code 1 means the report found a problem. Exit co
   "settings": { "stale_after_minutes": 30 },     // a "running" claim with no heartbeat for this long shows as STALE
   // optional "max_agent_claims": 2 — claim refuses an agent claim when this many others are running (attended and stale ones don't count)
                                                  // v3 optional "stages": ["New", "Contacted", "Talking", "Proposal", "Won", "Lost"] = pipeline stages for people (this is the default)
-                                                 // optional "archive": { "done_days": 90, "lost_days": 180, "keep_history": 20 } = archive rules
+                                                 // optional "archive": { "done_days": 90, "lost_days": 180, "keep_history": 20, "keep_comments": 3, "compact": true } = archive rules
                                                  // optional "kit_owner": "github-user" = whose Claude upgrades the board kit (default: first person)
                                                  // v43 optional "waiting_days": 7 = chase a wait with no nudge date this many days after it began (0 = off)
                                                  // v71 optional "inbox_lapse_days": 14 = a Review Inbox question unanswered this many days shows as lapsed (0 = never)
@@ -303,12 +303,22 @@ holds a local path. If it cannot access one, it must say so and ask the user rat
 Old items move out of the active card and person files so that the current board stays small. Legacy v3 boards keep their active items in `tasks.json` (the GitHub contents API sends no content above 1 MB; the web board and `keeptrack.py` can read it raw up to 100 MB, but legacy boards are fastest below about 600 KB).
 - `keeptrack.py archive` (or the web board: Settings → Board → Archive) moves tasks in the done column with no change for `settings.archive.done_days` (default 90), people at stage Lost with no change for `lost_days` (180) and no future next step, and all but the last `keep_history` (20) history lines of each card.
 - `keeptrack.py archive <id>` (or the task's **⋯ → Archive task** menu) archives one task immediately, regardless
-  of its status or age, retaining all details, checklist, comments and history. An unfinished agent claim must be
+  of its status or age, retaining its details, checklist, links and recent comments. An unfinished agent claim must be
   released or finished first. Prefer this to deleting a task when you want to keep its record.
+- Compact cards (card #557): `keeptrack.py archive` stores each card without its `history` and `last_run`, and with only
+  its last `settings.archive.keep_comments` (default 3) comments. All other fields stay. The card gets
+  `"compacted": {"v": 1, "at", "comments_dropped", "history_dropped", "last_run_dropped", "full_at": {"commit", "path"}}`.
+  `full_at` is the board commit the run loaded and the card file (or the board file) in it, so
+  `git show <commit>:<path>` prints the full card. Set `settings.archive.compact` to `false` to keep full cards;
+  `archive --keep-comments N` overrides N for one run. The web board still archives full cards.
+- `keeptrack.py archive-compact` compacts cards that are already archived in the same way. It is a dry run that prints
+  each archive file's size before and after; `--apply` writes. Its `full_at` names the archive file at the loaded
+  commit. A compact card is not compacted again, so a second run changes nothing. Compaction only removes data, so
+  every file stays inside the 900 KB part limit and the year parts keep their names.
 - They go to `archive/<year>.json` next to `tasks.json`: `{ "version": 3, "archive": true, "year": "2025", "tasks": [...], "contacts": [...], "history": { "<card id>": [...] } }`. The year is the year of the item's last change (four digits; an item whose date has no valid year stays on the board, and any other archive key is refused); trimmed history goes to the current year.
 - `tasks.json` keeps an index: `"archive": { "files": { "2025": { "tasks": 120, "contacts": 8 } }, "last_run": "<ISO time>" }`.
 - Archive files are written first and merged by id, so a run that stops half way is safe to repeat. An item on the board and in an archive file at the same time counts as on the board.
-- `archived -q` searches them; `unarchive <#N|id>` puts one back (in git mode the board and the archive file change in one commit); `archived-history <#N|id>` prints the history lines that were trimmed off a card. The web board does not show trimmed history yet. The web board's search (press `/`) can include them.
+- `archived -q` searches them; `unarchive <#N|id>` puts one back (in git mode the board and the archive file change in one commit); `archived-history <#N|id>` prints the history lines that were trimmed off a card, and for a compact card where git keeps the full card. `unarchive` of a compact card adds that pointer to the restored card's history. The web board does not show trimmed history yet. The web board's search (press `/`) can include them.
 
 ## Review Inbox (kit v42, split storage; always on from kit v44)
 - From kit v44 it is always on for schema 4 boards; `settings.review_inbox` is no longer read. It does not create or start any routine.
