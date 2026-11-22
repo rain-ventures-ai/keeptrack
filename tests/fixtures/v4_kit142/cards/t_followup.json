@@ -1,0 +1,25 @@
+{
+  "id": "t_followup",
+  "num": 1,
+  "title": "Confirm handoff",
+  "column": "todo",
+  "client": "Acme",
+  "project": "pr_pilot",
+  "assignees": [
+    "alex"
+  ],
+  "rank": "a0",
+  "history": [],
+  "waiting": {
+    "on": "A synthetic owner decision",
+    "who": "alex",
+    "since": "2026-11-01",
+    "nudge": "",
+    "note": "",
+    "by": "alex",
+    "by_session": "",
+    "authority": "owner",
+    "instance_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "instance_started_at": "2026-11-01T12:00:00Z"
+  }
+}

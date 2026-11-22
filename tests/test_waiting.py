@@ -295,7 +295,9 @@ class Waiting(unittest.TestCase):
     def test_an_agent_cant_move_its_own_wait_off_another_party(self):
         with self.agent():
             self.wait(1, session="s1", who="JezHub")
-            self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1"))           # who dropped
+            self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1", who=""))   # explicit removal
+            self.wait(1, session="s1", nudge="2026-12-01")
+            self.assertEqual("JezHub", self.card(1)["waiting"]["who"])  # omitted who preserves the gate
             self.assertIn("can't change who", self.refusal(self.wait, 1, session="s1", who="claude"))
             self.wait(1, on="Jez, again", session="s1", who="jezhub")                            # same party: allowed
             self.assertIn("another party", self.refusal(self.unwait, 1, session="s1"))

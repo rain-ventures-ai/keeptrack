@@ -521,7 +521,7 @@ if (typeof window !== 'undefined') (() => {
   const KNOWN_SCHEMA = 4;   // tasks.json version this page understands; a newer file is shown read-only (see board/UPGRADING.md)
   // The kit release this page belongs to (kit/manifest.json "version", as keeptrack.py KIT_VERSION). Same rule as the CLI: a board
   // whose settings.min_kit is a whole number above it is read-only here; reads still work. A missing or odd min_kit never blocks.
-  const PAGE_KIT = 141;
+  const PAGE_KIT = 142;
   let needKit = 0;
   const minKitOf = d => { const m = d && d.settings && d.settings.min_kit; return Number.isInteger(m) && m > PAGE_KIT ? m : 0; };
   function setKitRo(raw) {   // after every read of the board file: switch the 'kit' read-only mode on or off
@@ -5118,9 +5118,25 @@ if (typeof window !== 'undefined') (() => {
     on = String(on || '').replace(/\s+/g, ' ').trim().slice(0, 200); if (!on) return false;
     return edit(id, (t, n) => {
       const old = waitingOf(t), until = keptWaitUntil(old && old.until);
-      t.waiting = { on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
+      t.waiting = { ...(old || {}), on, who: who || '', since: (old && old.since) || todayIso(), nudge: DAY_RE.test(nudge || '') ? nudge : '', note: (old && old.note) || '', by: cfg().me || 'someone', by_session: '' };
+      delete t.waiting.by_agent;
       if (until) t.waiting.until = until;   // editing the chase date keeps a checkable condition; it is not an approval
-      if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= WAITING_KIT)) n.settings.min_kit = WAITING_KIT;   // tells v43+ tools (doctor, relay) a card relies on it
+      if (old && Object.hasOwn(old, 'authority')) t.waiting.authority = old.authority;
+      const unchanged = old && ['on', 'who', 'note', 'until', 'authority'].every(k => old[k] === t.waiting[k]);
+      if (unchanged) {
+        for (const k of ['instance_id', 'instance_started_at', 'instance_legacy']) if (Object.hasOwn(old, k)) t.waiting[k] = old[k];
+      } else {
+        delete t.waiting.instance_id; delete t.waiting.instance_started_at;
+        delete t.waiting.instance_legacy;
+        const adopted = Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= 142 || old && Object.hasOwn(old, 'instance_id') || t.wait_reasks;
+        if (adopted) {
+          t.waiting.instance_id = crypto.randomUUID().replaceAll('-', '');
+          t.waiting.instance_started_at = new Date().toISOString();
+        }
+        t.waiting.since = todayIso();
+      }
+      const required = t.waiting.instance_id ? 142 : WAITING_KIT;
+      if (!(Number.isInteger(n.settings.min_kit) && n.settings.min_kit >= required)) n.settings.min_kit = required;
       const c = t.claim; if (c && (c.status === 'running' || c.status === 'blocked' || c.status === 'stuck')) { if (c.status === 'stuck') c.before_wait = 'stuck'; c.status = 'blocked'; c.blocked_by_wait = true; c.note = 'waiting on ' + on; }   // a person's wait blocks the claim, as `wait` does
     }, `Waiting: ${titleOf(id)}`);
   }
