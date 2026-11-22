@@ -4627,8 +4627,8 @@ def cmd_wait(a):
             w.pop("by_agent", None)
         if until:
             w["until"] = until   # a checkable condition; not owner-authority and not an approval
-        elif old and old.get("on") != on:
-            w.pop("until", None)   # explicit semantic replacement retains the CLI's existing condition-reset rule
+        elif old and (raw_until is not None or any(w[key] != old.get(key, "") for key in ("on", "who", "note"))):
+            w.pop("until", None)   # A new wait replaces the previous condition unless the caller supplies one.
         adopted = board_min_kit(data) >= WAIT_INSTANCE_KIT or "instance_id" in (old or {}) or bool(t.get("wait_reasks"))
         if not identify_wait(old, w, now(), adopted):
             w["since"] = board_today(data).isoformat()
@@ -14597,8 +14597,9 @@ def reconcile_reask_expired(a):
             st["min_kit"] = max(board_min_kit(current), WAIT_INSTANCE_KIT)
             by_key[key] = proposal
             count += 1
-        print(f"recorded {count} expired-wait re-ask(s); waits remain blocking; no approval granted")
-    mutate(apply, "Re-ask expired no-condition waits")
+        return count
+    count = mutate(apply, "Re-ask expired no-condition waits")
+    print(f"recorded {count} expired-wait re-ask(s); waits remain blocking; no approval granted")
 
 
 def cmd_reconcile(a):

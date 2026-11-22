@@ -129,9 +129,11 @@ class ExpiredWaitReasks(unittest.TestCase):
             root["settings"]["kit_owner"] = "replacement"
             (self.root / "tasks.json").write_text(json.dumps(root))
             return False
-        with patch.object(kt, "save", side_effect=race), patch.object(kt.time, "sleep"):
+        out = io.StringIO()
+        with patch.object(kt, "save", side_effect=race), patch.object(kt.time, "sleep"), contextlib.redirect_stdout(out):
             with self.assertRaisesRegex(SystemExit, "kit owner"):
-                self.run_reask()
+                kt.cmd_reconcile(SimpleNamespace(dry_run=False, reask_expired=True))
+        self.assertEqual(out.getvalue(), "")
         self.assertEqual([], self.proposals())
         self.assertNotIn("instance_id", self.card()["waiting"])
 
@@ -146,7 +148,9 @@ class ExpiredWaitReasks(unittest.TestCase):
             (self.root / "cards/t_task1.json").write_text(json.dumps(task))
             return False
         with patch.object(kt, "save", side_effect=race), patch.object(kt.time, "sleep"):
-            self.run_reask()
+            out = self.run_reask()
+        self.assertIn("recorded 0 expired-wait re-ask(s)", out)
+        self.assertNotIn("recorded 1", out)
         self.assertEqual([], self.proposals())
         self.assertNotIn("wait_reasks", self.card())
 
@@ -279,6 +283,22 @@ class ExpiredWaitReasks(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(instance, self.card()["waiting"]["instance_id"])
         self.assertEqual(start, self.card()["waiting"]["instance_started_at"])
+
+    def test_cli_preserves_condition_for_nudge_and_removes_it_for_replacement(self):
+        command = [sys.executable, str(Path(tr.HERE).parent / "board/kit/keeptrack.py"),
+                   "--file", kt.FILE, "wait", "t_task1", "--on", "PRIVATE dependency"]
+        env = dict(os.environ, BOARD_AGENT="")
+        self.write(waiting(until="date:2026-12-01"))
+
+        def edit(*flags):
+            result = subprocess.run(command + list(flags), env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return self.card()["waiting"]
+
+        self.assertEqual(edit("--nudge", "2026-12-01")["until"], "date:2026-12-01")
+        self.assertNotIn("until", edit("--note", "Replacement details"))
+        self.assertEqual(edit("--who", "", "--until", "date:2026-12-03")["until"], "date:2026-12-03")
+        self.assertNotIn("until", edit("--who", "osouthgate"))
 
     def test_malformed_bystander_card_cannot_leak_or_stop_independent_question(self):
         bad = tr.card(2, id="t_other1", waiting=waiting(since=False))
