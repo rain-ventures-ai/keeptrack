@@ -277,8 +277,12 @@ class ExpiredWaitReasks(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         current = self.card()["waiting"]
         self.assertRegex(current["instance_id"], "^[0-9a-f]{32}$")
-        self.assertIsNone(kt.expired_wait_evidence(self.card(), "osouthgate", kt.parse(CLOCK)))
         instance = current["instance_id"]; start = current["instance_started_at"]
+        self.assertEqual(current["nudge"], "")
+        start_day = kt.parse(start).astimezone(kt.dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        due = start_day + kt.dt.timedelta(days=7)
+        self.assertIsNone(kt.expired_wait_evidence(self.card(), "osouthgate", due - kt.dt.timedelta(seconds=1)))
+        self.assertIsNotNone(kt.expired_wait_evidence(self.card(), "osouthgate", due))
         result = subprocess.run(command + ["--on", "New dependency", "--nudge", "2026-12-02"], env=env, capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(instance, self.card()["waiting"]["instance_id"])

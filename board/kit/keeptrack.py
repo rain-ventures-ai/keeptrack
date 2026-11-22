@@ -4632,6 +4632,8 @@ def cmd_wait(a):
         adopted = board_min_kit(data) >= WAIT_INSTANCE_KIT or "instance_id" in (old or {}) or bool(t.get("wait_reasks"))
         if not identify_wait(old, w, now(), adopted):
             w["since"] = board_today(data).isoformat()
+            if a.nudge is None:
+                w["nudge"] = nudge = ""
         t["waiting"] = w
         st = data.setdefault("settings", {})
         required = WAIT_INSTANCE_KIT if w.get("instance_id") else WAITING_KIT
