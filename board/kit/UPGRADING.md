@@ -25,6 +25,28 @@ Each board has one **upgrade owner**: `settings.kit_owner` in `tasks.json`. If i
 4. A layout change removes the old layout only in the migration commit, after the field-by-field check. The backup keeps the old layout.
 
 ## Versions
+### v143 (schema 4)
+
+- Copies only; install the new `board/owner_questions.py` module from the manifest. No migration, timer or live
+  activation. Ordinary comments keep their existing version floor. Explicit structured owner-question creation
+  writes durable `owner_questions` receipts and raises `settings.min_kit` to143 so older writers cannot erase them.
+- `comment CARD --owner-question FILE_OR_- --json` requires an existing split-storage board. It validates a version1
+  choice payload, writes its canonical comment/Inbox item/receipt atomically, and returns stable IDs and links.
+  Retry uncertain outcomes with the same request ID and payload. Changed payload/owner/recorded content refuses;
+  retired archived payloads retain identity and refuse recreation. Never fall back to separate comment/proposal calls.
+- Connector intake adds `--require-owner-question-migration`, requiring an existing well-typed floor143 in every
+  CAS attempt. First the owner upgrades all writers, then explicitly runs `settings-set --min-kit 143`.
+  The connector cannot initiate migration by posting a routine question. Previous v143 CLI copies without this
+  constraint refuse the new option before writing. Direct native CLI use without the constraint remains unchanged.
+- Inputs are at most16KiB UTF8, depth8,96 containers and512 structural tokens before JSON decoding. Blank paths,
+  directories, FIFOs and leaf symlinks refuse. File input uses pinned Linux descriptors; use stdin if safe file
+  input is unavailable. Errors do not echo input or filenames. Hosted phase0 and proposal-only structured mode refuse.
+- `#proposal=r_id` reveals the exact active Inbox item across filters and focuses it. It never answers or reopens
+  anything. If absent from active Inbox, the link offers its original card. Local file fixtures return null remote
+  URLs rather than pretending local data exists on a live board.
+- Generic Inbox answers remain data. Signed owner-input bridge, merge, admission, claims and waits retain their
+  existing separate authority checks. No runtime setting or daily routine is enabled by an upgrade.
+
 ### v142 (schema 4)
 
 - Copies only; no migration or live activation. Ordinary waits retain their prior kit floor until the board first

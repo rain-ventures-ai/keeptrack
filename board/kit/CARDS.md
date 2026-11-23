@@ -191,6 +191,12 @@ replies to a person in a thread or a chat.
 
 ### Review Inbox questions: recommended and lapsed
 
+When an agent asks the owner to choose on a card, use `comment CARD --owner-question FILE_OR_- --json` with the
+structured version1 payload described in [Owner questions](https://github.com/rain-ventures-ai/keeptrack/blob/main/docs/help/owner-questions.md). It atomically posts
+one canonical comment and one linked Inbox choice. Reuse the original request ID on retries; changed content needs
+an explicit new question identity. Do not post a plain question then a separate proposal, or infer questions from
+prose. Generic answers are data and never replace the separate proof required for a protected action.
+
 - An `ask.choose` question names the option you recommend: `change.recommended` holds that option's key, or add the
   question with `proposal-add <file> --recommend <key, number or label>`. The board shows it first, marked
   "Recommended", and the person can accept it in one press. Say why in `reason`, as above. Leave it out only when you
